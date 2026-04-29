@@ -70,13 +70,13 @@ class PylontechCoordinator(DataUpdateCoordinator):
                 self.serial.reset_read_buffer()
                 self.serial.write(b"\n")
                 time.sleep(0.1)
-                self.serial.read_all()
+                self.serial.readall()
 
                 _LOGGER.debug("Sending 'info' command")
                 self.serial.write(b"info\n")
                 time.sleep(1.0)
                 
-                raw_data = self.serial.read_all().decode('ascii', errors='ignore')
+                raw_data = self.serial.readall().decode('ascii', errors='ignore')
                 
                 # Initialize system if needed, or use a temp one
                 # We store persistent data in self.data later, but here we can just parse into a temp object 
@@ -109,18 +109,18 @@ class PylontechCoordinator(DataUpdateCoordinator):
                 self.serial.reset_read_buffer()
                 self.serial.write(b"\n")
                 time.sleep(0.1)
-                self.serial.read_all()
+                self.serial.readall()
 
                 # 1. PWR
                 _LOGGER.debug("Sending 'pwr' command")
                 self.serial.write(b"pwr\n")
                 time.sleep(1.0)
-                raw_data_pwr = self.serial.read_all().decode('ascii', errors='ignore')
+                raw_data_pwr = self.serial.readall().decode('ascii', errors='ignore')
                 
                 if "Power Volt" not in raw_data_pwr:
                     # Retry once
                     time.sleep(1.0)
-                    raw_data_pwr = self.serial.read_all().decode('ascii', errors='ignore')
+                    raw_data_pwr = self.serial.readall().decode('ascii', errors='ignore')
 
                 if "Power Volt" not in raw_data_pwr:
                      raise UpdateFailed("Did not receive valid 'pwr' response.")
@@ -129,13 +129,13 @@ class PylontechCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Sending 'stat' command")
                 self.serial.write(b"stat\n")
                 time.sleep(1.0)
-                raw_data_stat = self.serial.read_all().decode('ascii', errors='ignore')
+                raw_data_stat = self.serial.readall().decode('ascii', errors='ignore')
 
                 # 3. TIME
                 _LOGGER.debug("Sending 'time' command")
                 self.serial.write(b"time\n")
                 time.sleep(0.5)
-                raw_data_time = self.serial.read_all().decode('ascii', errors='ignore')
+                raw_data_time = self.serial.readall().decode('ascii', errors='ignore')
 
                 # Prepare System Object
                 # Reuse existing if possible to keep energy counters? 
@@ -222,7 +222,7 @@ class PylontechCoordinator(DataUpdateCoordinator):
                 cmd_bytes = command.encode("ascii") + b"\n"
                 self.serial.write(cmd_bytes)
                 time.sleep(0.5)
-                return self.serial.read_all().decode('ascii', errors='ignore')
+                return self.serial.readall().decode('ascii', errors='ignore')
             except Exception as e:
                 _LOGGER.error(f"Error sending raw command: {e}")
                 raise e
