@@ -47,22 +47,37 @@ class PylontechCoordinator(DataUpdateCoordinator):
              self.serial.open()
 
     def _get_ready_serial(self):
-        """Return a ready serial handle, reopening if the underlying fd is invalid."""
+        """Return an open serial handle, reopening once if needed."""
         self._open_serial()
         ser = self.serial
         if ser is None:
             raise UpdateFailed("Could not open serial port")
 
-        # serialx may keep an object around with a missing POSIX fd after disconnects.
-        if not ser.is_open or getattr(ser, "_fileno", 1) is None:
+        if not ser.is_open:
             _LOGGER.debug("Serial handle not ready, reopening %s", self.port)
             self._close_serial()
             self._open_serial()
             ser = self.serial
 
-        if ser is None or not ser.is_open or getattr(ser, "_fileno", 1) is None:
+        if ser is None or not ser.is_open:
             raise serialx.SerialException(f"Serial port {self.port} not ready")
 
+        return ser
+
+    def _prime_serial_channel(self):
+        """Clear pending input with one recovery attempt for transient serialx state."""
+        ser = self._get_ready_serial()
+        try:
+            ser.reset_read_buffer()
+        except AssertionError:
+            _LOGGER.debug("reset_read_buffer assertion, reopening serial %s", self.port)
+            self._close_serial()
+            ser = self._get_ready_serial()
+            ser.reset_read_buffer()
+
+        ser.write(b"\n")
+        time.sleep(0.1)
+        ser.readall()
         return ser
 
     def _close_serial(self):
@@ -89,12 +104,7 @@ class PylontechCoordinator(DataUpdateCoordinator):
         """Read device info once."""
         with self._lock:
             try:
-                ser = self._get_ready_serial()
-
-                ser.reset_read_buffer()
-                ser.write(b"\n")
-                time.sleep(0.1)
-                ser.readall()
+                ser = self._prime_serial_channel()
 
                 _LOGGER.debug("Sending 'info' command")
                 ser.write(b"info\n")
@@ -133,12 +143,7 @@ class PylontechCoordinator(DataUpdateCoordinator):
         """Read data from serial synchronously."""
         with self._lock:
             try:
-                ser = self._get_ready_serial()
-                
-                ser.reset_read_buffer()
-                ser.write(b"\n")
-                time.sleep(0.1)
-                ser.readall()
+                ser = self._prime_serial_channel()
 
                 # 1. PWR
                 _LOGGER.debug("Sending 'pwr' command")
@@ -251,10 +256,7 @@ class PylontechCoordinator(DataUpdateCoordinator):
     def send_raw_command(self, command: str):
         with self._lock:
             try:
-                ser = self._get_ready_serial()
-
-                ser.reset_read_buffer()
-                ser.write(b"\n")
+                ser = self._prime_serial_channel()
                 
                 cmd_bytes = command.encode("ascii") + b"\n"
                 ser.write(cmd_bytes)
