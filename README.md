@@ -2,7 +2,7 @@
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
-Connect your Pylontech US2000/US3000 battery stack directly to Home Assistant using a USB-to-RS232/RS485 cable.
+Connect your Pylontech US2000/US3000/US5000 battery stack directly to Home Assistant using a USB-to-RS232/RS485 cable.
 
 ## Features
 - **Direct Serial Connection**: Reads battery data directly from the Console port.
@@ -63,7 +63,7 @@ Connect your Pylontech US2000/US3000 battery stack directly to Home Assistant us
 Instead of a global configuration, this integration provides a **Number Entity** for *each* detected battery module. Once the integration is added, navigate to the device page for each module to adjust its capacity (in kWh). This ensures that the integration accurately calculates the total stored energy across batteries of different sizes.
 
 ### Hardware Configuration
-Ensure your battery DIP switches are configured correctly for communication. For US2000/US3000, **all DIP switches OFF** selects the default baud rate of **115200**.
+Ensure your battery DIP switches are configured correctly for communication. For US2000/US3000/US5000, **all DIP switches OFF** selects the default baud rate of **115200**.
 
 ![DIP Switches](img/dip-switches.jpg)
 *Pylontech US2000 with all DIP switches OFF*

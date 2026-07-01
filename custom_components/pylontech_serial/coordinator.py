@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from .const import DOMAIN
+from .const import DOMAIN, CONNECTION_TYPE_TCP
 from .structs import PylontechSystem
 from .parser import PylontechParser
 
@@ -16,10 +16,15 @@ _LOGGER = logging.getLogger(__name__)
 class PylontechCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the Pylontech battery."""
 
-    def __init__(self, hass: HomeAssistant, port, baud_rate, poll_interval, default_capacity):
+    def __init__(self, hass: HomeAssistant, port, baud_rate, poll_interval, default_capacity,
+                 connection_type=None, tcp_host=None, tcp_port=None):
         """Initialize."""
-        self.port = port
-        self.baud_rate = baud_rate
+        if connection_type == CONNECTION_TYPE_TCP:
+            self.port = f"socket://{tcp_host}:{tcp_port}"
+            self.baud_rate = None
+        else:
+            self.port = port
+            self.baud_rate = baud_rate
         self.default_capacity = default_capacity
         self.battery_capacities = {}
         self.serial = None
@@ -41,10 +46,13 @@ class PylontechCoordinator(DataUpdateCoordinator):
 
     def _open_serial(self):
         if self.serial is None:
-            _LOGGER.debug(f"Opening serial port {self.port} at {self.baud_rate}")
-            self.serial = serialx.serial_for_url(self.port, baudrate=self.baud_rate, read_timeout=2)
+            _LOGGER.debug(f"Opening connection {self.port} (baud={self.baud_rate})")
+            kwargs = {"read_timeout": 2}
+            if self.baud_rate is not None:
+                kwargs["baudrate"] = self.baud_rate
+            self.serial = serialx.serial_for_url(self.port, **kwargs)
         elif not self.serial.is_open:
-             self.serial.open()
+            self.serial.open()
 
     def _get_ready_serial(self):
         """Return an open serial handle, reopening once if needed."""

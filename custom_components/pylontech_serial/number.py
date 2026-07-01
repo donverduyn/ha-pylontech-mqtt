@@ -18,12 +18,23 @@ async def async_setup_entry(
     unique_id_prefix = entry.entry_id
     entities = []
 
-    if coordinator.data and coordinator.data.batteries:
-        for bat in coordinator.data.batteries:
-            bat_id = bat.sys_id
-            entities.append(PylontechBatteryCapacityNumber(coordinator, unique_id_prefix, bat_id))
-
     async_add_entities(entities)
+
+    seen_bat_ids: set[int] = set()
+
+    def _add_new_batteries() -> None:
+        if not coordinator.data:
+            return
+        new_entities = []
+        for bat in coordinator.data.batteries:
+            if bat.sys_id not in seen_bat_ids:
+                seen_bat_ids.add(bat.sys_id)
+                new_entities.append(PylontechBatteryCapacityNumber(coordinator, unique_id_prefix, bat.sys_id))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    _add_new_batteries()
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_batteries))
 
 
 class PylontechBatteryCapacityNumber(PylontechBatteryEntity, RestoreNumber):

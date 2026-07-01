@@ -7,7 +7,11 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
-from .const import DOMAIN, CONF_SERIAL_PORT, CONF_BAUD_RATE, CONF_POLL_INTERVAL, CONF_BATTERY_CAPACITY
+from .const import (
+    DOMAIN,
+    CONF_SERIAL_PORT, CONF_BAUD_RATE, CONF_POLL_INTERVAL, CONF_BATTERY_CAPACITY,
+    CONF_CONNECTION_TYPE, CONF_TCP_HOST, CONF_TCP_PORT,
+)
 from .coordinator import PylontechCoordinator
 
 PLATFORMS = ["sensor", "button", "switch", "number"]
@@ -21,10 +25,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port = entry.options.get(CONF_SERIAL_PORT, entry.data.get(CONF_SERIAL_PORT))
     baud = entry.options.get(CONF_BAUD_RATE, entry.data.get(CONF_BAUD_RATE))
     interval = entry.options.get(CONF_POLL_INTERVAL, entry.data.get(CONF_POLL_INTERVAL))
-    # Battery capacity might be in data (old) or options (new)
     capacity = entry.options.get(CONF_BATTERY_CAPACITY, entry.data.get(CONF_BATTERY_CAPACITY, 2.4))
+    connection_type = entry.options.get(CONF_CONNECTION_TYPE, entry.data.get(CONF_CONNECTION_TYPE))
+    tcp_host = entry.options.get(CONF_TCP_HOST, entry.data.get(CONF_TCP_HOST))
+    tcp_port = entry.options.get(CONF_TCP_PORT, entry.data.get(CONF_TCP_PORT))
 
-    coordinator = PylontechCoordinator(hass, port, baud, interval, capacity)
+    coordinator = PylontechCoordinator(
+        hass, port, baud, interval, capacity,
+        connection_type=connection_type,
+        tcp_host=tcp_host,
+        tcp_port=tcp_port,
+    )
 
     # Fetch initial data so we have data when entities subscribe
     await coordinator.async_config_entry_first_refresh()

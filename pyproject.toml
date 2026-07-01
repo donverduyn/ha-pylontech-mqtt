@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+pythonpath  = ["tests"]          # makes `from conftest import ...` work in test files
+addopts     = "-v --tb=short"
