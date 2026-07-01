@@ -7,6 +7,7 @@ which is not available outside HA.  We bypass __init__.py by registering a
 namespace package manually in sys.modules, then loading parser.py / structs.py
 directly via importlib.  Both files have zero HA dependencies.
 """
+
 import importlib.util
 import socket
 import subprocess
@@ -35,6 +36,7 @@ def _load_module(name: str, path: Path):
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None, f"Could not load module spec for {path}"
     mod = importlib.util.module_from_spec(spec)
     mod.__package__ = "pylontech_serial"
     sys.modules[name] = mod
@@ -43,16 +45,16 @@ def _load_module(name: str, path: Path):
 
 
 _load_module("pylontech_serial.structs", _COMP / "structs.py")
-_load_module("pylontech_serial.parser",  _COMP / "parser.py")
+_load_module("pylontech_serial.parser", _COMP / "parser.py")
 
 
 # ---------------------------------------------------------------------------
 # Stub server lifecycle
 # ---------------------------------------------------------------------------
 STUB_HOST = "127.0.0.1"
-STUB_PORT = 12399          # dedicated port, unlikely to clash
+STUB_PORT = 12399  # dedicated port, unlikely to clash
 STUB_BATTERIES = 2
-STUB_MODEL = "US5000"      # most capable model → most field coverage
+STUB_MODEL = "US5000"  # most capable model → most field coverage
 STUB_SOC_START = 75
 
 
@@ -72,12 +74,18 @@ def stub_server():
     """Start pylon_stub.py once for the whole test session; yield the port."""
     proc = subprocess.Popen(
         [
-            sys.executable, str(_ROOT / "stub" / "pylon_stub.py"),
-            "--host", STUB_HOST,
-            "--port", str(STUB_PORT),
-            "--batteries", str(STUB_BATTERIES),
-            "--model", STUB_MODEL,
-            "--soc", str(STUB_SOC_START),
+            sys.executable,
+            str(_ROOT / "stub" / "pylon_stub.py"),
+            "--host",
+            STUB_HOST,
+            "--port",
+            str(STUB_PORT),
+            "--batteries",
+            str(STUB_BATTERIES),
+            "--model",
+            STUB_MODEL,
+            "--soc",
+            str(STUB_SOC_START),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -105,7 +113,7 @@ def _raw_command(sock: socket.socket, cmd: str, read_pause: float = 0.4) -> str:
             if not chunk:
                 break
             data += chunk
-    except socket.timeout:
+    except TimeoutError:
         pass
     return data.decode("ascii", errors="replace")
 
@@ -117,8 +125,8 @@ def stub_conn(stub_server):
     s.settimeout(2)
     time.sleep(0.15)
     try:
-        s.recv(4096)          # discard initial "pylon>" prompt
-    except socket.timeout:
+        s.recv(4096)  # discard initial "pylon>" prompt
+    except TimeoutError:
         pass
     yield s
     s.close()
@@ -130,6 +138,7 @@ def stub_conn(stub_server):
 @pytest.fixture
 def pwr_system(stub_conn):
     from pylontech_serial.parser import PylontechParser
+
     raw = _raw_command(stub_conn, "pwr")
     return PylontechParser.parse_pwr(raw)
 
@@ -138,6 +147,7 @@ def pwr_system(stub_conn):
 def info_system(stub_conn):
     from pylontech_serial.parser import PylontechParser
     from pylontech_serial.structs import PylontechSystem
+
     raw = _raw_command(stub_conn, "info")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
     return PylontechParser.parse_info(raw, sys)
@@ -147,6 +157,7 @@ def info_system(stub_conn):
 def stat_system(stub_conn):
     from pylontech_serial.parser import PylontechParser
     from pylontech_serial.structs import PylontechSystem
+
     raw = _raw_command(stub_conn, "stat")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
     return PylontechParser.parse_stat(raw, sys)
@@ -156,6 +167,7 @@ def stat_system(stub_conn):
 def time_system(stub_conn):
     from pylontech_serial.parser import PylontechParser
     from pylontech_serial.structs import PylontechSystem
+
     raw = _raw_command(stub_conn, "time")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
     return PylontechParser.parse_time(raw, sys)

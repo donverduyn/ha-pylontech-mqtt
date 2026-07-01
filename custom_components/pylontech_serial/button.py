@@ -2,10 +2,11 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .entity import PylontechSystemEntity
 
 from .const import DOMAIN
 from .coordinator import PylontechCoordinator
+from .entity import PylontechSystemEntity
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -14,7 +15,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Pylontech button platform."""
     coordinator: PylontechCoordinator = hass.data[DOMAIN][entry.entry_id]
-    
+
     async_add_entities([PylontechSyncTimeButton(coordinator, entry.entry_id)])
 
 class PylontechSyncTimeButton(PylontechSystemEntity, ButtonEntity):

@@ -1,18 +1,24 @@
 """Config flow for Pylontech Serial integration."""
 import serialx
 import voluptuous as vol
-from homeassistant.helpers.selector import selector
-
 from homeassistant import config_entries
-from homeassistant.helpers.service_info.usb import UsbServiceInfo
 from homeassistant.core import callback
+from homeassistant.helpers.selector import selector
+from homeassistant.helpers.service_info.usb import UsbServiceInfo
 
 from .const import (
+    CONF_BAUD_RATE,
+    CONF_CONNECTION_TYPE,
+    CONF_POLL_INTERVAL,
+    CONF_SERIAL_PORT,
+    CONF_TCP_HOST,
+    CONF_TCP_PORT,
+    CONNECTION_TYPE_SERIAL,
+    CONNECTION_TYPE_TCP,
+    DEFAULT_BAUD_RATE,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_TCP_PORT,
     DOMAIN,
-    CONF_SERIAL_PORT, CONF_BAUD_RATE, CONF_POLL_INTERVAL,
-    CONF_CONNECTION_TYPE, CONF_TCP_HOST, CONF_TCP_PORT,
-    CONNECTION_TYPE_SERIAL, CONNECTION_TYPE_TCP,
-    DEFAULT_BAUD_RATE, DEFAULT_POLL_INTERVAL, DEFAULT_TCP_PORT,
 )
 
 

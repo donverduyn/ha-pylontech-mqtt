@@ -3,10 +3,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
-from .entity import PylontechSystemEntity
 
 from .const import DOMAIN
 from .coordinator import PylontechCoordinator
+from .entity import PylontechSystemEntity
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -15,27 +16,29 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Pylontech switch platform."""
     coordinator: PylontechCoordinator = hass.data[DOMAIN][entry.entry_id]
-    
+
     async_add_entities([PylontechAutoSyncSwitch(coordinator, entry.entry_id)])
+
 
 class PylontechAutoSyncSwitch(PylontechSystemEntity, SwitchEntity, RestoreEntity):
     """Switch to enable auto time sync on boot."""
+
     _attr_translation_key = "auto_sync_time"
 
     def __init__(self, coordinator, unique_id_prefix):
         super().__init__(coordinator)
         self._attr_unique_id = f"{unique_id_prefix}_auto_sync"
-        self._attr_is_on = False # Default off
+        self._attr_is_on = False  # Default off
 
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
         if last_state:
-            self._attr_is_on = (last_state.state == "on")
-        
+            self._attr_is_on = last_state.state == "on"
+
         # Apply restoration to coordinator
-        self.coordinator.set_auto_sync(self._attr_is_on)
+        self.coordinator.set_auto_sync(bool(self._attr_is_on))
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the entity on."""

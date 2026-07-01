@@ -1,8 +1,11 @@
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .const import DOMAIN
 
-class PylontechSystemEntity(CoordinatorEntity):
+from .const import DOMAIN
+from .coordinator import PylontechCoordinator
+
+
+class PylontechSystemEntity(CoordinatorEntity[PylontechCoordinator]):
     """Base class for Pylontech System entities."""
 
     _attr_has_entity_name = True
@@ -17,13 +20,13 @@ class PylontechSystemEntity(CoordinatorEntity):
             identifiers={(DOMAIN, "system")},
             name="Pylontech Stack",
             manufacturer=(data.manufacturer or "Pylontech") if data else "Pylontech",
-            model=data.model        if data else None,
-            sw_version=data.fw_version  if data else None,
-            serial_number=data.barcode  if data else None,
+            model=data.model if data else None,
+            sw_version=data.fw_version if data else None,
+            serial_number=data.barcode if data else None,
         )
 
 
-class PylontechBatteryEntity(CoordinatorEntity):
+class PylontechBatteryEntity(CoordinatorEntity[PylontechCoordinator]):
     """Base class for Pylontech per-battery entities."""
 
     _attr_has_entity_name = True
@@ -39,7 +42,7 @@ class PylontechBatteryEntity(CoordinatorEntity):
             identifiers={(DOMAIN, f"battery_{self._bat_id}")},
             name=f"Pylontech Module {self._bat_id}",
             manufacturer=(data.manufacturer or "Pylontech") if data else "Pylontech",
-            model=data.model        if data else None,
-            sw_version=data.fw_version  if data else None,
+            model=data.model if data else None,
+            sw_version=data.fw_version if data else None,
             via_device=(DOMAIN, "system"),
         )

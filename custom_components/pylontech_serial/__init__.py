@@ -1,22 +1,28 @@
 """The Pylontech Serial integration."""
-import asyncio
+
 import logging
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
-import voluptuous as vol
 
 from .const import (
+    CONF_BATTERY_CAPACITY,
+    CONF_BAUD_RATE,
+    CONF_CONNECTION_TYPE,
+    CONF_POLL_INTERVAL,
+    CONF_SERIAL_PORT,
+    CONF_TCP_HOST,
+    CONF_TCP_PORT,
     DOMAIN,
-    CONF_SERIAL_PORT, CONF_BAUD_RATE, CONF_POLL_INTERVAL, CONF_BATTERY_CAPACITY,
-    CONF_CONNECTION_TYPE, CONF_TCP_HOST, CONF_TCP_PORT,
 )
 from .coordinator import PylontechCoordinator
 
 PLATFORMS = ["sensor", "button", "switch", "number"]
 
 _LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Pylontech Serial from a config entry."""
@@ -31,7 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     tcp_port = entry.options.get(CONF_TCP_PORT, entry.data.get(CONF_TCP_PORT))
 
     coordinator = PylontechCoordinator(
-        hass, port, baud, interval, capacity,
+        hass,
+        port,
+        baud,
+        interval,
+        capacity,
         connection_type=connection_type,
         tcp_host=tcp_host,
         tcp_port=tcp_port,
@@ -43,41 +53,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     async def async_send_command(call: ServiceCall) -> dict:
         """Handle the service call."""
-        command = call.data.get("command")
-        
+        command: str = call.data["command"]
+
         # Get the coordinator (assuming one entry for now, or use entry_id if passed)
         # Service is registered globally for the integration, so we need to pick a target or default to the first
         # Ideally services are registered per device, but simple global service is common for single-instance per integration
         # If multiple instances, we might pick the first one from hass.data[DOMAIN]
-        
+
         if not hass.data.get(DOMAIN):
             raise ValueError("No Pylontech integration found")
-        
+
         # Pick the first coordinator
         entry_id = next(iter(hass.data[DOMAIN]))
         coordinator: PylontechCoordinator = hass.data[DOMAIN][entry_id]
-        
+
         response = await hass.async_add_executor_job(coordinator.send_raw_command, command)
         return {"response": response}
 
     hass.services.async_register(
-        DOMAIN, 
-        "send_command", 
+        DOMAIN,
+        "send_command",
         async_send_command,
         schema=vol.Schema({vol.Required("command"): cv.string}, extra=vol.ALLOW_EXTRA),
-        supports_response=SupportsResponse.OPTIONAL
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     return True
 
+
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await hass.config_entries.async_reload(entry.entry_id)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
