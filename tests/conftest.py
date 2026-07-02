@@ -18,11 +18,42 @@ from pathlib import Path
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import bootstrap — must run before any test imports the integration code
-# ---------------------------------------------------------------------------
 _ROOT = Path(__file__).parent.parent
 _COMP = _ROOT / "custom_components" / "pylontech_mqtt"
+
+
+# ---------------------------------------------------------------------------
+# Socket access helpers
+#
+# pytest-homeassistant-custom-component blocks all TCP sockets in its
+# pytest_runtest_setup() hook.  The stub-based tests need real TCP connections
+# to 127.0.0.1; HA integration tests mock their connections and are unaffected.
+# ---------------------------------------------------------------------------
+def _enable_sockets() -> None:
+    """Re-enable real TCP sockets (no-op when pytest-socket is not installed)."""
+    try:
+        import pytest_socket as _ps  # installed by pytest-homeassistant-custom-component
+        _ps.enable_socket()
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_sockets_per_test() -> None:
+    """Re-enable sockets for each test after the HA plugin's per-test blocking."""
+    _enable_sockets()
+    yield
+
+
+# ---------------------------------------------------------------------------
+# HA test infrastructure: point the config dir at the project root so that
+# homeassistant's integration loader finds custom_components/pylontech_mqtt.
+# This fixture only takes effect for tests that use the ``hass`` fixture.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def hass_config_dir() -> str:
+    """Return the project root as HA's config directory."""
+    return str(_ROOT)
 
 # Register a namespace package so relative imports inside the module files work
 _pkg = types.ModuleType("pylontech_mqtt")
@@ -79,6 +110,7 @@ def _wait_for_port(host: str, port: int, timeout: float = 5.0) -> None:
 @pytest.fixture(scope="session")
 def stub_server():
     """Start pylon_stub.py once for the whole test session; yield the port."""
+    _enable_sockets()  # session fixture runs after pytest_runtest_setup() blocks sockets
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -153,6 +185,7 @@ def _raw_command(sock: socket.socket, cmd: str, timeout: float = 3.0) -> str:
 @pytest.fixture(scope="session")
 def _session_conn(stub_server):
     """Single persistent connection used by session-scoped parsed fixtures."""
+    _enable_sockets()
     s = socket.create_connection((STUB_HOST, stub_server), timeout=3)
     _drain_prompt(s)
     yield s
@@ -162,6 +195,7 @@ def _session_conn(stub_server):
 @pytest.fixture(scope="class")
 def stub_conn_class(stub_server):
     """Class-scoped TCP connection shared across all tests in one class."""
+    _enable_sockets()
     s = socket.create_connection((STUB_HOST, stub_server), timeout=3)
     _drain_prompt(s)
     yield s

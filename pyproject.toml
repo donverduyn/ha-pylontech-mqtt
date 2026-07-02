@@ -1,4 +1,5 @@
 [tool.pytest.ini_options]
 testpaths   = ["tests"]
-pythonpath  = ["tests"]          # makes `from conftest import ...` work in test files
-addopts     = "-v --tb=short"
+pythonpath  = ["tests", "."]     # "." makes custom_components importable for HA tests
+addopts     = "-v --tb=short --allow-hosts=127.0.0.1,localhost"
+asyncio_mode = "auto"

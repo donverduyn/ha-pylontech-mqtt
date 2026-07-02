@@ -1,13 +1,8 @@
 # Runtime requirements (mirrors manifest.json)
 serialx>=1.5.0
 
-# Home Assistant core — provides all HA types for IDE autocomplete & type checking
-homeassistant
-
-# Testing
-pytest>=7.0.0
-pytest-cov
-pytest-asyncio
+# Testing — bundles homeassistant core, pytest, pytest-asyncio, and all HA test fixtures
+pytest-homeassistant-custom-component
 
 # Code quality
 ruff

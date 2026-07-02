@@ -59,23 +59,37 @@ logging.basicConfig(
 )
 _LOGGER = logging.getLogger("pylon2mqtt")
 
+
+def _int_env(name: str, default: int) -> int:
+    """Parse an integer environment variable; log and fall back to default on error."""
+    raw = os.getenv(name, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        _LOGGER.error(
+            "Invalid value for %s=%r (expected integer) — using default %d",
+            name, raw, default,
+        )
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Configuration from environment variables
 # ---------------------------------------------------------------------------
 
 CONNECTION_TYPE = os.getenv("CONNECTION_TYPE", "serial").lower()
 SERIAL_PORT = os.getenv("SERIAL_PORT", "/dev/ttyUSB0")
-BAUD_RATE = int(os.getenv("BAUD_RATE", "115200"))
+BAUD_RATE = _int_env("BAUD_RATE", 115200)
 TCP_HOST = os.getenv("TCP_HOST", "")
-TCP_PORT = int(os.getenv("TCP_PORT", "23"))
+TCP_PORT = _int_env("TCP_PORT", 23)
 
 MQTT_BROKER = os.getenv("MQTT_BROKER", "")
-MQTT_PORT_ENV = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_PORT_ENV = _int_env("MQTT_PORT", 1883)
 MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASS = os.getenv("MQTT_PASS", "")
 MQTT_TOPIC_PREFIX = os.getenv("MQTT_TOPIC_PREFIX", "pylontech/stack")
 
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "15"))
+POLL_INTERVAL = _int_env("POLL_INTERVAL", 15)
 AUTO_SYNC_TIME = os.getenv("AUTO_SYNC_TIME", "false").lower() == "true"
 
 STATE_TOPIC = f"{MQTT_TOPIC_PREFIX}/state"
@@ -118,7 +132,8 @@ class BmsConnection:
         """Send a command and return the ASCII response."""
         self._ensure_open()
         if CONNECTION_TYPE == "tcp":
-            assert self._tcp is not None
+            if self._tcp is None:
+                raise RuntimeError("TCP socket is None after _ensure_open()")
             self._tcp.sendall((cmd + "\n").encode("ascii"))
             time.sleep(1.0)
             data = b""
@@ -133,7 +148,8 @@ class BmsConnection:
                 pass
             return data.decode("ascii", errors="ignore")
         else:
-            assert self._serial is not None
+            if self._serial is None:
+                raise RuntimeError("Serial port is None after _ensure_open()")
             self._serial.reset_input_buffer()
             self._serial.write(b"\n")
             time.sleep(0.1)
