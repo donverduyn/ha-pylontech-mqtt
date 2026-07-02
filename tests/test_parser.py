@@ -10,7 +10,13 @@ import re
 from datetime import datetime
 
 import pytest
-from conftest import STUB_BATTERIES, STUB_MODEL, STUB_SOC_START, _raw_command
+from conftest import (
+    STUB_BATTERIES,
+    STUB_CELLS,
+    STUB_MODEL,
+    STUB_SOC_START,
+    _raw_command,
+)
 from pylontech_mqtt.parser import PylontechParser
 from pylontech_mqtt.structs import PylontechBattery, PylontechSystem
 
@@ -812,3 +818,117 @@ class TestStructs:
         assert bat.temp_status is None
         assert bat.batt_volt_status is None
         assert bat.batt_temp_status is None
+
+    def test_battery_cells_default_to_empty_list(self):
+        bat = PylontechBattery(1, 50.0, 3.0, 25.0, 85, "Charge", 150.0, "", 0.0)
+        assert bat.cells == []
+
+
+# ===========================================================================
+# parse_bat — per-cell data
+# ===========================================================================
+class TestParseBat:
+    def test_cells_populated(self, bat_battery):
+        assert len(bat_battery.cells) > 0
+
+    def test_cell_count_matches_model(self, bat_battery):
+        assert len(bat_battery.cells) == STUB_CELLS
+
+    def test_cell_ids_sequential(self, bat_battery):
+        ids = [c.cell_id for c in bat_battery.cells]
+        assert ids == list(range(STUB_CELLS))
+
+    def test_cell_voltage_plausible(self, bat_battery):
+        """LiFePO4 cells: 2.5 V (deep discharge) – 3.8 V (max)."""
+        for cell in bat_battery.cells:
+            assert 2.5 <= cell.voltage <= 3.8, (
+                f"cell {cell.cell_id}: voltage {cell.voltage} outside 2.5-3.8 V"
+            )
+
+    def test_cell_temperature_plausible(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert 0 < cell.temperature < 80, (
+                f"cell {cell.cell_id}: temperature {cell.temperature} out of range"
+            )
+
+    def test_cell_soc_within_range(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert 0 <= cell.soc <= 100, (
+                f"cell {cell.cell_id}: SOC {cell.soc} out of 0-100 range"
+            )
+
+    def test_cell_soc_matches_stub(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.soc == STUB_SOC_START
+
+    def test_cell_base_state_valid(self, bat_battery):
+        valid = {"Charge", "Dischg", "Idle", "Normal"}
+        for cell in bat_battery.cells:
+            assert cell.base_state in valid, (
+                f"cell {cell.cell_id}: unexpected base_state '{cell.base_state}'"
+            )
+
+    def test_cell_volt_status_present(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.volt_status is not None, (
+                f"cell {cell.cell_id}: volt_status is None"
+            )
+
+    def test_cell_curr_status_present(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.curr_status is not None, (
+                f"cell {cell.cell_id}: curr_status is None"
+            )
+
+    def test_cell_temp_status_present(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.temp_status is not None, (
+                f"cell {cell.cell_id}: temp_status is None"
+            )
+
+    def test_cell_statuses_are_normal(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.volt_status == "Normal"
+            assert cell.curr_status == "Normal"
+            assert cell.temp_status == "Normal"
+
+    def test_cell_capacity_present(self, bat_battery):
+        for cell in bat_battery.cells:
+            assert cell.capacity is not None, f"cell {cell.cell_id}: capacity is None"
+            assert cell.capacity > 0
+
+    def test_absent_battery_has_no_cells(self, stub_conn):
+        """Requesting 'bat N' for an absent/unknown slot must yield an empty cell list."""
+        from pylontech_mqtt.parser import PylontechParser
+        from pylontech_mqtt.structs import PylontechBattery
+
+        # Slot 99 does not exist in the stub → "Battery 99 not found" response
+        raw = _raw_command(stub_conn, "bat 99")
+        bat = PylontechBattery(99, 0, 0, 0, 0, "", 0, "", 0.0)
+        PylontechParser.parse_bat(raw, bat)
+        assert bat.cells == []
+
+    def test_corrupt_cell_row_skipped(self, caplog):
+        """A non-numeric voltage in a cell row must be skipped, not crash."""
+        import logging
+
+        from pylontech_mqtt.parser import PylontechParser
+        from pylontech_mqtt.structs import PylontechBattery
+
+        raw = (
+            "bat 1\r\n@\r\r\n"
+            "Battery  Volt     Curr     Tempr    Base State   "
+            "Volt. State  Curr. State  Temp. State  SOC        Coulomb\r\r\n"
+            "0        XXXX     3806     17000    Charge       "
+            "Normal       Normal       Normal       85%        3333 mAH\r\r\n"
+            "1        3379     3806     17100    Charge       "
+            "Normal       Normal       Normal       85%        3333 mAH\r\r\n"
+            "Command completed successfully\r\npylon>"
+        )
+        bat = PylontechBattery(1, 0, 0, 0, 0, "", 0, "", 0.0)
+        with caplog.at_level(logging.ERROR):
+            PylontechParser.parse_bat(raw, bat)
+
+        assert len(bat.cells) == 1
+        assert bat.cells[0].cell_id == 1
+        assert any("Error parsing bat line" in r.message for r in caplog.records)

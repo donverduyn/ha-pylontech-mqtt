@@ -3,10 +3,14 @@ import re
 from datetime import datetime
 
 try:
-    from .structs import PylontechBattery, PylontechSystem
+    from .structs import PylontechBattery, PylontechCell, PylontechSystem
 except ImportError:
     # Standalone import when used outside the HA package (e.g. sidecar container)
-    from structs import PylontechBattery, PylontechSystem  # type: ignore[no-redef]
+    from structs import (  # type: ignore[no-redef]
+        PylontechBattery,
+        PylontechCell,
+        PylontechSystem,
+    )
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -289,3 +293,53 @@ class PylontechParser:
         # time [year] [month] [day] [hour] [minute] [second]
         # Example: time 25 12 21 13 00 00
         return timestamp.strftime("time %y %m %d %H %M %S")
+
+    @staticmethod
+    def parse_bat(raw_text: str, battery: PylontechBattery) -> PylontechBattery:
+        """Parses 'bat N' command output, populating battery.cells.
+
+        Expected table format (one row per cell):
+          Battery  Volt     Curr     Tempr    Base State   Volt. State  Curr. State  Temp. State  SOC        Coulomb
+          0        3378     3806     17000    Charge       Normal       Normal       Normal       85%        3333 mAH
+
+        Columns (0-indexed after split()):
+          0 cell_id, 1 voltage(mV), 2 current(mA), 3 temperature(mC),
+          4 base_state, 5 volt_status, 6 curr_status, 7 temp_status,
+          8 soc(%), 9 capacity(mAH)
+        """
+        cells: list[PylontechCell] = []
+        for line in raw_text.splitlines():
+            parts = line.split()
+            if not parts or not parts[0].isdigit():
+                continue
+            if len(parts) < 9:
+                continue
+            try:
+                cell_id = int(parts[0])
+                voltage = int(parts[1]) / 1000.0
+                current = int(parts[2]) / 1000.0
+                temperature = int(parts[3]) / 1000.0
+                base_state = parts[4]
+                volt_status = parts[5] if len(parts) > 5 else None
+                curr_status = parts[6] if len(parts) > 6 else None
+                temp_status = parts[7] if len(parts) > 7 else None
+                soc = int(parts[8].replace("%", "")) if len(parts) > 8 else 0
+                capacity = int(parts[9]) if len(parts) > 9 else None
+                cells.append(
+                    PylontechCell(
+                        cell_id=cell_id,
+                        voltage=voltage,
+                        current=current,
+                        temperature=temperature,
+                        base_state=base_state,
+                        volt_status=volt_status,
+                        curr_status=curr_status,
+                        temp_status=temp_status,
+                        soc=soc,
+                        capacity=capacity,
+                    )
+                )
+            except (ValueError, IndexError) as err:
+                _LOGGER.error("Error parsing bat line '%s': %s", line, err)
+        battery.cells = cells
+        return battery

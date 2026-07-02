@@ -264,6 +264,18 @@ def main() -> None:
                 system = PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
 
             PylontechParser.parse_pwr(raw_pwr, system)
+
+            for bat in system.batteries:
+                try:
+                    raw_bat = bms.send_command(f"bat {bat.sys_id}")
+                    PylontechParser.parse_bat(raw_bat, bat)
+                except Exception as bat_err:
+                    _LOGGER.warning(
+                        "Could not fetch cell data for battery %d: %s",
+                        bat.sys_id,
+                        bat_err,
+                    )
+
             PylontechParser.parse_stat(raw_stat, system)
             PylontechParser.parse_time(raw_time, system)
 
@@ -274,12 +286,13 @@ def main() -> None:
             payload = json.dumps(asdict(system), default=str)
             client.publish(STATE_TOPIC, payload, retain=True)
             _LOGGER.info(
-                "Published | V=%.2fV I=%.2fA SOC=%.1f%% P=%.1fW batteries=%d",
+                "Published | V=%.2fV I=%.2fA SOC=%.1f%% P=%.1fW batteries=%d cells=%d",
                 system.voltage,
                 system.current,
                 system.soc,
                 system.power,
                 len(system.batteries),
+                sum(len(b.cells) for b in system.batteries),
             )
 
         except (serial.SerialException, OSError, IOError) as err:

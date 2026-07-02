@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import PylontechBatteryEntity, PylontechSystemEntity
+from .entity import PylontechBatteryEntity, PylontechCellEntity, PylontechSystemEntity
 
 # ---------------------------------------------------------------------------
 # Descriptor tables — one row per sensor, no entity subclass per sensor needed.
@@ -376,6 +376,70 @@ BATTERY_SENSORS: tuple[SensorEntityDescription, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Cell-level sensors — one row per measurement, names set dynamically to
+# include the cell index (e.g. "Cell 0 Voltage").
+# No translation_key; _attr_name is set per-instance in PylontechCellSensor.
+# ---------------------------------------------------------------------------
+
+CELL_SENSORS: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="soc",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="base_state",
+    ),
+    SensorEntityDescription(
+        key="volt_status",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="curr_status",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="temp_status",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="capacity",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+_CELL_SENSOR_LABELS: dict[str, str] = {
+    "voltage": "Voltage",
+    "current": "Current",
+    "temperature": "Temperature",
+    "soc": "SOC",
+    "base_state": "State",
+    "volt_status": "Voltage Status",
+    "curr_status": "Current Status",
+    "temp_status": "Temperature Status",
+    "capacity": "Capacity",
+}
+
+# ---------------------------------------------------------------------------
 # Platform setup
 # ---------------------------------------------------------------------------
 
@@ -406,14 +470,41 @@ async def async_setup_entry(
             if bat.sys_id not in seen_bat_ids:
                 seen_bat_ids.add(bat.sys_id)
                 new_entities.extend(
-                    PylontechBatterySensor(coordinator, entry.entry_id, bat.sys_id, desc)
+                    PylontechBatterySensor(
+                        coordinator, entry.entry_id, bat.sys_id, desc
+                    )
                     for desc in BATTERY_SENSORS
                 )
         if new_entities:
             async_add_entities(new_entities)
 
+    # Per-cell sensors are added dynamically: cell count is not known until the
+    # first MQTT message that includes cell-level data from the sidecar's bat N
+    # commands.
+    seen_cell_ids: dict[int, set[int]] = {}  # bat_id → set of seen cell_ids
+
+    def _add_new_cells() -> None:
+        if not coordinator.data:
+            return
+        new_entities: list[PylontechCellSensor] = []
+        for bat in coordinator.data.batteries:
+            bat_cells = seen_cell_ids.setdefault(bat.sys_id, set())
+            for cell in bat.cells:
+                if cell.cell_id not in bat_cells:
+                    bat_cells.add(cell.cell_id)
+                    new_entities.extend(
+                        PylontechCellSensor(
+                            coordinator, entry.entry_id, bat.sys_id, cell.cell_id, desc
+                        )
+                        for desc in CELL_SENSORS
+                    )
+        if new_entities:
+            async_add_entities(new_entities)
+
     _add_new_batteries()
+    _add_new_cells()
     entry.async_on_unload(coordinator.async_add_listener(_add_new_batteries))
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_cells))
 
 
 # ---------------------------------------------------------------------------
@@ -466,4 +557,34 @@ class PylontechBatterySensor(PylontechBatteryEntity, SensorEntity):
         for bat in self.coordinator.data.batteries:
             if bat.sys_id == self._bat_id:
                 return getattr(bat, self.entity_description.key, None)
+        return None
+
+
+class PylontechCellSensor(PylontechCellEntity, SensorEntity):
+    """Reads a single attribute from a per-cell PylontechCell object."""
+
+    entity_description: SensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator,
+        entry_id: str,
+        bat_id: int,
+        cell_id: int,
+        description: SensorEntityDescription,
+    ) -> None:
+        super().__init__(coordinator, bat_id, cell_id)
+        self.entity_description = description
+        self._attr_unique_id = f"{entry_id}_bat{bat_id}_cell{cell_id}_{description.key}"
+        self._attr_name = f"Cell {cell_id} {_CELL_SENSOR_LABELS[description.key]}"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        for bat in self.coordinator.data.batteries:
+            if bat.sys_id == self._bat_id:
+                for cell in bat.cells:
+                    if cell.cell_id == self._cell_id:
+                        return getattr(cell, self.entity_description.key, None)
         return None

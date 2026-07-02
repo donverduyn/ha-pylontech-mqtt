@@ -58,6 +58,7 @@ STUB_PORT = 12399  # dedicated port, unlikely to clash
 STUB_BATTERIES = 2
 STUB_MODEL = "US5000"  # most capable model → most field coverage
 STUB_SOC_START = 75
+STUB_CELLS = 15  # all current models (US2000/US3000/US5000) have 15 cells
 # Use the old (pre-*.Id) firmware layout so the parser's fallback defaults
 # (which assume the old column positions) match the data rows in tests that
 # intentionally strip the header line.
@@ -215,3 +216,15 @@ def time_system(_session_conn):
     raw = _raw_command(_session_conn, "time")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
     return PylontechParser.parse_time(raw, sys)
+
+
+@pytest.fixture(scope="session")
+def bat_battery(_session_conn, pwr_system):
+    """Return the first battery from pwr_system with its cells populated
+    by parsing the 'bat 1' response from the stub."""
+    from pylontech_mqtt.parser import PylontechParser
+
+    bat = pwr_system.batteries[0]
+    raw = _raw_command(_session_conn, f"bat {bat.sys_id}")
+    PylontechParser.parse_bat(raw, bat)
+    return bat

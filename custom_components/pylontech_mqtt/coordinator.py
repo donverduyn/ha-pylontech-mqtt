@@ -9,7 +9,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from paho.mqtt.enums import CallbackAPIVersion
 
 from .const import DOMAIN
-from .structs import PylontechBattery, PylontechSystem
+from .structs import PylontechBattery, PylontechCell, PylontechSystem
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,6 +133,21 @@ class PylontechCoordinator(DataUpdateCoordinator[PylontechSystem]):
         """Build a PylontechSystem dataclass instance from a JSON payload dict."""
         batteries: list[PylontechBattery] = []
         for b in data.get("batteries", []):
+            cells: list[PylontechCell] = [
+                PylontechCell(
+                    cell_id=c.get("cell_id", 0),
+                    voltage=c.get("voltage", 0.0),
+                    current=c.get("current", 0.0),
+                    temperature=c.get("temperature", 0.0),
+                    base_state=c.get("base_state", ""),
+                    volt_status=c.get("volt_status"),
+                    curr_status=c.get("curr_status"),
+                    temp_status=c.get("temp_status"),
+                    soc=c.get("soc", 0),
+                    capacity=c.get("capacity"),
+                )
+                for c in b.get("cells", [])
+            ]
             batteries.append(
                 PylontechBattery(
                     sys_id=b.get("sys_id", 0),
@@ -153,6 +168,7 @@ class PylontechCoordinator(DataUpdateCoordinator[PylontechSystem]):
                     temp_status=b.get("temp_status"),
                     batt_volt_status=b.get("batt_volt_status"),
                     batt_temp_status=b.get("batt_temp_status"),
+                    cells=cells,
                 )
             )
 
