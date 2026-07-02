@@ -4,6 +4,7 @@
       "already_configured": "Device is already configured"
     },
     "error": {
+      "already_configured": "A Pylontech entry already uses this broker and topic",
       "cannot_connect": "Failed to connect to MQTT broker",
       "invalid_auth": "Invalid username or password",
       "unknown": "Unexpected error"

@@ -93,7 +93,7 @@ class PylontechCoordinator(DataUpdateCoordinator[PylontechSystem]):
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._avail_topic:
-            if msg.payload.decode() != "online" and self.last_update_success:
+            if msg.payload.decode() != "online":
                 self.hass.loop.call_soon_threadsafe(self._mark_unavailable)
             return
 

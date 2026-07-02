@@ -90,18 +90,18 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="cycles",
         translation_key="sys_cycles",
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     # --- Usage counters ---
     SensorEntityDescription(
         key="charge_times",
         translation_key="sys_charge_times",
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     SensorEntityDescription(
         key="discharge_cnt",
         translation_key="sys_discharge_cnt",
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     SensorEntityDescription(
         key="idle_times",

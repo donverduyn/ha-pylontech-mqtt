@@ -46,8 +46,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         topic_prefix=_get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC),
     )
 
-    # Connect to MQTT broker in a thread (paho is blocking).
-    await hass.async_add_executor_job(coordinator.setup)
+    # connect_async + loop_start are non-blocking; no executor needed.
+    coordinator.setup()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 

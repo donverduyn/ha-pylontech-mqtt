@@ -4,6 +4,7 @@
       "already_configured": "El dispositiu ja està configurat"
     },
     "error": {
+      "already_configured": "Ja existeix una entrada de Pylontech que utilitza aquest broker i tòpic",
       "cannot_connect": "No s'ha pogut connectar al broker MQTT",
       "invalid_auth": "Nom d'usuari o contrasenya incorrectes",
       "unknown": "Error inesperat"
