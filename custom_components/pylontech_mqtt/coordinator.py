@@ -6,6 +6,7 @@ import logging
 import paho.mqtt.client as mqtt
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from paho.mqtt.enums import CallbackAPIVersion
 
 from .const import DOMAIN
 from .structs import PylontechBattery, PylontechSystem
@@ -53,7 +54,7 @@ class PylontechCoordinator(DataUpdateCoordinator[PylontechSystem]):
         Uses connect_async so HA startup is not blocked if the broker is
         temporarily unreachable.  paho-mqtt will keep retrying in background.
         """
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client = mqtt.Client(CallbackAPIVersion.VERSION2)
         if self._mqtt_user:
             client.username_pw_set(self._mqtt_user, self._mqtt_pass)
         client.reconnect_delay_set(min_delay=5, max_delay=120)

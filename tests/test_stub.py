@@ -788,16 +788,18 @@ class TestStubFaultPropagation:
 
     def test_absent_fault_reduces_online_count_in_pwrsys(self, stub_conn):
         """pwrsys Online count must decrease when a battery is marked absent."""
-        online_before = int(
-            re.search(r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")).group(1)
+        match_before = re.search(
+            r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")
         )
+        assert match_before is not None
+        online_before = int(match_before.group(1))
         self._inject(stub_conn, 1, "absent")
         try:
-            online_after = int(
-                re.search(
-                    r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")
-                ).group(1)
+            match_after = re.search(
+                r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")
             )
+            assert match_after is not None
+            online_after = int(match_after.group(1))
             assert online_after < online_before
         finally:
             self._clear(stub_conn, 1)
