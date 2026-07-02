@@ -1,4 +1,4 @@
-"""Number platform for Pylontech Serial."""
+"""Number platform for Pylontech MQTT."""
 
 from homeassistant.components.number import NumberDeviceClass, NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry

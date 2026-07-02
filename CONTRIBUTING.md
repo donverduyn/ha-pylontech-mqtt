@@ -1,44 +1,15 @@
-# Contributing to Pylontech Serial Integration
+# Contributing to Pylontech MQTT Integration
 
-Thank you for your interest in contributing! This guide covers adding support for new USB devices and translating the integration into other languages.
+Thank you for your interest in contributing! This guide covers adding translations and general development workflow.
 
-## Adding Support for New USB Devices
+## Architecture Overview
 
-Currently, the integration is configured to automatically discover specific USB adapters (like the Prolific PL2303). If your adapter is not detected automatically, you can help us support it!
+This integration works in two parts:
 
-### 1. Identify your Device's VID and PID
+1. **Docker sidecar** (`docker/pylon2mqtt.py`) — runs alongside Home Assistant, connects to the Pylontech BMS over serial or TCP, and publishes parsed data to an MQTT broker.
+2. **Home Assistant integration** (`custom_components/pylontech_mqtt/`) — subscribes to the MQTT broker and exposes the data as HA entities.
 
-You need to find the **Vendor ID (VID)** and **Product ID (PID)** of your USB adapter.
-
-**On Linux (including Home Assistant OS via SSH):**
-1. Plug in your USB adapter.
-2. Run the `lsusb` command.
-3. Look for a line that corresponds to your serial adapter. It will look something like this:
-   ```
-   Bus 001 Device 004: ID 067b:2303 Prolific Technology, Inc. PL2303 Serial Port
-   ```
-   In this example:
-   - **VID** is `067B`
-   - **PID** is `2303`
-
-### 2. Update `manifest.json`
-
-1. Open `custom_components/pylontech_mqtt/manifest.json`.
-2. Locate the `"usb"` section.
-3. Add a new entry with your VID and PID. Note that the keys are case-sensitive and should usually be uppercase.
-
-```json
-  "usb": [
-    {
-      "vid": "067B",
-      "pid": "2303"
-    },
-    {
-      "vid": "YOUR_NEW_VID",
-      "pid": "YOUR_NEW_PID"
-    }
-  ],
-```
+The parsing logic (`parser.py`, `structs.py`) lives inside the integration and is copied into the Docker image at build time, ensuring both sides always use identical logic.
 
 ## Adding Translations
 
@@ -59,7 +30,7 @@ We welcome translations to make this integration accessible to everyone!
        "step": {
          "user": {
            "data": {
-             "serial_port": "Puerto Serie"
+             "mqtt_host": "Dirección del Broker"
            }
          }
        }
@@ -70,5 +41,4 @@ We welcome translations to make this integration accessible to everyone!
 ## Submitting a Pull Request
 
 1. Create a Pull Request with your changes.
-2. If adding a device, include the `lsusb` output.
-3. If adding a translation, mention the language you are adding.
+2. If adding a translation, mention the language you are adding.
