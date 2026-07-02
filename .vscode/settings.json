@@ -13,5 +13,16 @@
       "source.organizeImports.ruff": "explicit"
     }
   },
-  "ruff.enable": true
+  "ruff.enable": true,
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/.venv": true,
+    "**/.ruff_cache": true,
+    "**/.pytest_cache": true,
+    "**/__pycache__": true
+  }
 }

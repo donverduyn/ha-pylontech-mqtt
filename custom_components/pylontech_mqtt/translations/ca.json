@@ -1,0 +1,216 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "El dispositiu ja està configurat"
+    },
+    "error": {
+      "cannot_connect": "No s'ha pogut connectar al broker MQTT",
+      "unknown": "Error inesperat"
+    },
+    "step": {
+      "user": {
+        "title": "Pylontech — Broker MQTT",
+        "description": "Introdueix les dades de connexió del broker MQTT utilitzat pel contenidor sidecar de Pylontech.",
+        "data": {
+          "mqtt_host": "Adreça / IP del Broker",
+          "mqtt_port": "Port del Broker",
+          "mqtt_user": "Nom d'usuari (opcional)",
+          "mqtt_pass": "Contrasenya (opcional)",
+          "mqtt_topic": "Prefix del Tòpic"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pylontech — Broker MQTT",
+        "description": "Actualitza la configuració del broker MQTT.",
+        "data": {
+          "mqtt_host": "Adreça / IP del Broker",
+          "mqtt_port": "Port del Broker",
+          "mqtt_user": "Nom d'usuari (opcional)",
+          "mqtt_pass": "Contrasenya (opcional)",
+          "mqtt_topic": "Prefix del Tòpic"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "sys_cycles": {
+        "name": "Cicles"
+      },
+      "sys_curr": {
+        "name": "Corrent"
+      },
+      "sys_energy_in": {
+        "name": "Energia Carregada"
+      },
+      "sys_energy_out": {
+        "name": "Energia Descarregada"
+      },
+      "sys_energy_stored": {
+        "name": "Energia Emmagatzemada"
+      },
+      "sys_power": {
+        "name": "Potència"
+      },
+      "sys_cell_count": {
+        "name": "Nombre de Cel·les"
+      },
+      "sys_fw_version": {
+        "name": "Versió del Firmware"
+      },
+      "sys_spec": {
+        "name": "Especificació"
+      },
+      "sys_barcode": {
+        "name": "Codi de Barres"
+      },
+      "sys_bms_time": {
+        "name": "Hora BMS"
+      },
+      "sys_raw": {
+        "name": "Dades en Brut"
+      },
+      "sys_soc": {
+        "name": "SOC"
+      },
+      "sys_soh": {
+        "name": "SOH"
+      },
+      "sys_volt": {
+        "name": "Voltatge"
+      },
+      "bat_cycles": {
+        "name": "Cicles"
+      },
+      "bat_energy_stored": {
+        "name": "Energia Emmagatzemada"
+      },
+      "bat_curr": {
+        "name": "Corrent"
+      },
+      "bat_power": {
+        "name": "Potència"
+      },
+      "bat_raw": {
+        "name": "Dades en Brut"
+      },
+      "bat_soc": {
+        "name": "SOC"
+      },
+      "bat_soh": {
+        "name": "SOH"
+      },
+      "bat_status": {
+        "name": "Estat"
+      },
+      "bat_temp": {
+        "name": "Temperatura"
+      },
+      "bat_volt": {
+        "name": "Voltatge"
+      },
+      "bat_volt_low": {
+        "name": "Voltatge Mínim de Cel·la"
+      },
+      "bat_volt_high": {
+        "name": "Voltatge Màxim de Cel·la"
+      },
+      "bat_temp_low": {
+        "name": "Temperatura Mínima de Cel·la"
+      },
+      "bat_temp_high": {
+        "name": "Temperatura Màxima de Cel·la"
+      },
+      "bat_volt_status": {
+        "name": "Estat del Voltatge"
+      },
+      "bat_curr_status": {
+        "name": "Estat del Corrent"
+      },
+      "bat_temp_status": {
+        "name": "Estat de la Temperatura"
+      },
+      "bat_bvst": {
+        "name": "Estat de Tensió de la Bateria"
+      },
+      "bat_btst": {
+        "name": "Estat de Temperatura de la Bateria"
+      },
+      "sys_board_version": {
+        "name": "Versió de la Placa"
+      },
+      "sys_soft_version": {
+        "name": "Versió del Programari"
+      },
+      "sys_boot_version": {
+        "name": "Versió d'Arrancada"
+      },
+      "sys_comm_version": {
+        "name": "Versió de Comunicació"
+      },
+      "sys_release_date": {
+        "name": "Data de Publicació"
+      },
+      "sys_max_charge_curr": {
+        "name": "Corrent Màxim de Càrrega"
+      },
+      "sys_max_dischg_curr": {
+        "name": "Corrent Màxim de Descàrrega"
+      },
+      "sys_charge_times": {
+        "name": "Recompte de Càrregues"
+      },
+      "sys_discharge_cnt": {
+        "name": "Recompte de Descàrregues"
+      },
+      "sys_sc_times": {
+        "name": "Esdeveniments de Curtcircuit"
+      },
+      "sys_bat_ov_times": {
+        "name": "Esdeveniments de Sobretensió de Bateria"
+      },
+      "sys_bat_hv_times": {
+        "name": "Esdeveniments d'Alta Tensió de Bateria"
+      },
+      "sys_bat_lv_times": {
+        "name": "Esdeveniments de Baixa Tensió de Bateria"
+      },
+      "sys_bat_uv_times": {
+        "name": "Esdeveniments de Subtensió de Bateria"
+      },
+      "sys_pwr_ov_times": {
+        "name": "Esdeveniments de Sobretensió d'Alimentació"
+      },
+      "sys_pwr_hv_times": {
+        "name": "Esdeveniments d'Alta Tensió d'Alimentació"
+      },
+      "sys_shut_times": {
+        "name": "Esdeveniments d'Aturada"
+      },
+      "sys_reset_times": {
+        "name": "Esdeveniments de Reset"
+      },
+      "sys_life_warn_times": {
+        "name": "Alertes de Vida"
+      },
+      "sys_life_alarm_times": {
+        "name": "Alarmes de Vida"
+      },
+      "sys_pwr_coulomb": {
+        "name": "Coulombs Totals"
+      },
+      "sys_dsg_cap": {
+        "name": "Capacitat de Descàrrega"
+      }
+    },
+    "number": {
+      "battery_capacity": {
+        "name": "Capacitat"
+      }
+    }
+  }
+}

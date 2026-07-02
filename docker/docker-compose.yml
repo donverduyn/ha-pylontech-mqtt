@@ -1,0 +1,33 @@
+services:
+  pylon2mqtt:
+    build:
+      context: ..              # repo root — needed to copy parser.py & structs.py
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      # --- Connection type: "serial" or "tcp" ---
+      CONNECTION_TYPE: serial
+
+      # Serial mode (only used when CONNECTION_TYPE=serial)
+      SERIAL_PORT: /dev/ttyUSB0
+      BAUD_RATE: "115200"
+
+      # TCP mode (only used when CONNECTION_TYPE=tcp)
+      # CONNECTION_TYPE: tcp
+      # TCP_HOST: 192.168.1.100
+      # TCP_PORT: "23"
+
+      # --- MQTT broker ---
+      MQTT_BROKER: 192.168.1.10
+      MQTT_PORT: "1883"
+      # MQTT_USER: your_username
+      # MQTT_PASS: your_password
+      MQTT_TOPIC_PREFIX: pylontech/stack
+
+      # --- Polling ---
+      POLL_INTERVAL: "15"        # seconds between polls
+      AUTO_SYNC_TIME: "false"    # set "true" to sync BMS clock on startup
+
+    # Only needed for serial mode — map the USB device into the container
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0

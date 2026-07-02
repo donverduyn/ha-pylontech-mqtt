@@ -1,0 +1,216 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to MQTT broker",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "user": {
+        "title": "Pylontech — MQTT Broker",
+        "description": "Enter the connection details for the MQTT broker used by the Pylontech sidecar container.",
+        "data": {
+          "mqtt_host": "Broker Host / IP",
+          "mqtt_port": "Broker Port",
+          "mqtt_user": "Username (optional)",
+          "mqtt_pass": "Password (optional)",
+          "mqtt_topic": "Topic Prefix"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pylontech — MQTT Broker",
+        "description": "Update the MQTT broker connection settings.",
+        "data": {
+          "mqtt_host": "Broker Host / IP",
+          "mqtt_port": "Broker Port",
+          "mqtt_user": "Username (optional)",
+          "mqtt_pass": "Password (optional)",
+          "mqtt_topic": "Topic Prefix"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "sys_cycles": {
+        "name": "Cycles"
+      },
+      "sys_curr": {
+        "name": "Current"
+      },
+      "sys_energy_in": {
+        "name": "Energy Charged"
+      },
+      "sys_energy_out": {
+        "name": "Energy Discharged"
+      },
+      "sys_energy_stored": {
+        "name": "Stored Energy"
+      },
+      "sys_power": {
+        "name": "Power"
+      },
+      "sys_cell_count": {
+        "name": "Cell Count"
+      },
+      "sys_fw_version": {
+        "name": "Firmware Version"
+      },
+      "sys_spec": {
+        "name": "Specification"
+      },
+      "sys_barcode": {
+        "name": "Barcode"
+      },
+      "sys_bms_time": {
+        "name": "BMS Time"
+      },
+      "sys_raw": {
+        "name": "Raw Data"
+      },
+      "sys_soc": {
+        "name": "SOC"
+      },
+      "sys_soh": {
+        "name": "SOH"
+      },
+      "sys_volt": {
+        "name": "Voltage"
+      },
+      "bat_cycles": {
+        "name": "Cycles"
+      },
+      "bat_energy_stored": {
+        "name": "Stored Energy"
+      },
+      "bat_curr": {
+        "name": "Current"
+      },
+      "bat_power": {
+        "name": "Power"
+      },
+      "bat_raw": {
+        "name": "Raw Data"
+      },
+      "bat_soc": {
+        "name": "SOC"
+      },
+      "bat_soh": {
+        "name": "SOH"
+      },
+      "bat_status": {
+        "name": "Status"
+      },
+      "bat_temp": {
+        "name": "Temperature"
+      },
+      "bat_volt": {
+        "name": "Voltage"
+      },
+      "bat_volt_low": {
+        "name": "Min Cell Voltage"
+      },
+      "bat_volt_high": {
+        "name": "Max Cell Voltage"
+      },
+      "bat_temp_low": {
+        "name": "Min Cell Temperature"
+      },
+      "bat_temp_high": {
+        "name": "Max Cell Temperature"
+      },
+      "bat_volt_status": {
+        "name": "Voltage Status"
+      },
+      "bat_curr_status": {
+        "name": "Current Status"
+      },
+      "bat_temp_status": {
+        "name": "Temperature Status"
+      },
+      "bat_bvst": {
+        "name": "Battery Voltage State"
+      },
+      "bat_btst": {
+        "name": "Battery Temperature State"
+      },
+      "sys_board_version": {
+        "name": "Board Version"
+      },
+      "sys_soft_version": {
+        "name": "Software Version"
+      },
+      "sys_boot_version": {
+        "name": "Boot Version"
+      },
+      "sys_comm_version": {
+        "name": "Communication Version"
+      },
+      "sys_release_date": {
+        "name": "Release Date"
+      },
+      "sys_max_charge_curr": {
+        "name": "Max Charge Current"
+      },
+      "sys_max_dischg_curr": {
+        "name": "Max Discharge Current"
+      },
+      "sys_charge_times": {
+        "name": "Charge Count"
+      },
+      "sys_discharge_cnt": {
+        "name": "Discharge Count"
+      },
+      "sys_sc_times": {
+        "name": "Short Circuit Events"
+      },
+      "sys_bat_ov_times": {
+        "name": "Battery Overvoltage Events"
+      },
+      "sys_bat_hv_times": {
+        "name": "Battery High Voltage Events"
+      },
+      "sys_bat_lv_times": {
+        "name": "Battery Low Voltage Events"
+      },
+      "sys_bat_uv_times": {
+        "name": "Battery Undervoltage Events"
+      },
+      "sys_pwr_ov_times": {
+        "name": "Power Overvoltage Events"
+      },
+      "sys_pwr_hv_times": {
+        "name": "Power High Voltage Events"
+      },
+      "sys_shut_times": {
+        "name": "Shutdown Events"
+      },
+      "sys_reset_times": {
+        "name": "Reset Events"
+      },
+      "sys_life_warn_times": {
+        "name": "Life Warning Events"
+      },
+      "sys_life_alarm_times": {
+        "name": "Life Alarm Events"
+      },
+      "sys_pwr_coulomb": {
+        "name": "Total Coulombs"
+      },
+      "sys_dsg_cap": {
+        "name": "Discharge Capacity"
+      }
+    },
+    "number": {
+      "battery_capacity": {
+        "name": "Capacity"
+      }
+    }
+  }
+}

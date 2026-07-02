@@ -2,7 +2,11 @@ import logging
 import re
 from datetime import datetime
 
-from .structs import PylontechBattery, PylontechSystem
+try:
+    from .structs import PylontechBattery, PylontechSystem
+except ImportError:
+    # Standalone import when used outside the HA package (e.g. sidecar container)
+    from structs import PylontechBattery, PylontechSystem  # type: ignore[no-redef]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -11,7 +15,9 @@ class PylontechParser:
     """Parser for Pylontech BMS serial data."""
 
     @staticmethod
-    def parse_pwr(raw_text: str, current_system: PylontechSystem | None = None) -> PylontechSystem:
+    def parse_pwr(
+        raw_text: str, current_system: PylontechSystem | None = None
+    ) -> PylontechSystem:
         """Parses 'pwr' command output. Returns updated system object."""
         if current_system is None:
             current_system = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -52,16 +58,32 @@ class PylontechParser:
                 curr_idx = parts.index("Curr") if "Curr" in parts else curr_idx
                 temp_idx = parts.index("Tempr") if "Tempr" in parts else temp_idx
                 temp_low_idx = parts.index("Tlow") if "Tlow" in parts else temp_low_idx
-                temp_high_idx = parts.index("Thigh") if "Thigh" in parts else temp_high_idx
+                temp_high_idx = (
+                    parts.index("Thigh") if "Thigh" in parts else temp_high_idx
+                )
                 volt_low_idx = parts.index("Vlow") if "Vlow" in parts else volt_low_idx
-                volt_high_idx = parts.index("Vhigh") if "Vhigh" in parts else volt_high_idx
-                status_idx = parts.index("Base.St") if "Base.St" in parts else status_idx
-                volt_st_idx = parts.index("Volt.St") if "Volt.St" in parts else volt_st_idx
-                curr_st_idx = parts.index("Curr.St") if "Curr.St" in parts else curr_st_idx
-                temp_st_idx = parts.index("Temp.St") if "Temp.St" in parts else temp_st_idx
+                volt_high_idx = (
+                    parts.index("Vhigh") if "Vhigh" in parts else volt_high_idx
+                )
+                status_idx = (
+                    parts.index("Base.St") if "Base.St" in parts else status_idx
+                )
+                volt_st_idx = (
+                    parts.index("Volt.St") if "Volt.St" in parts else volt_st_idx
+                )
+                curr_st_idx = (
+                    parts.index("Curr.St") if "Curr.St" in parts else curr_st_idx
+                )
+                temp_st_idx = (
+                    parts.index("Temp.St") if "Temp.St" in parts else temp_st_idx
+                )
                 soc_idx = parts.index("Coulomb") if "Coulomb" in parts else soc_idx
-                bvst_data_idx = (parts.index("B.V.St") + 1) if "B.V.St" in parts else bvst_data_idx
-                btst_data_idx = (parts.index("B.T.St") + 1) if "B.T.St" in parts else btst_data_idx
+                bvst_data_idx = (
+                    (parts.index("B.V.St") + 1) if "B.V.St" in parts else bvst_data_idx
+                )
+                btst_data_idx = (
+                    (parts.index("B.T.St") + 1) if "B.T.St" in parts else btst_data_idx
+                )
                 _LOGGER.debug(
                     "pwr header detected — volt=%d curr=%d temp=%d "
                     "tlow=%d thigh=%d vlow=%d vhigh=%d "
@@ -164,7 +186,9 @@ class PylontechParser:
             current_system.voltage = round(total_voltage / valid_lines, 2)
             current_system.current = round(total_current, 2)
             current_system.soc = round(total_soc / valid_lines, 1)
-            current_system.power = round(current_system.voltage * current_system.current, 1)
+            current_system.power = round(
+                current_system.voltage * current_system.current, 1
+            )
 
         return current_system
 
@@ -207,7 +231,9 @@ class PylontechParser:
                     pass
             if "max dischg curr" in key:
                 try:
-                    system.max_dischg_curr = abs(int(re.sub(r"[^\d-]", "", val))) / 1000.0
+                    system.max_dischg_curr = (
+                        abs(int(re.sub(r"[^\d-]", "", val))) / 1000.0
+                    )
                 except (ValueError, AttributeError):
                     pass
             if "max charge curr" in key:

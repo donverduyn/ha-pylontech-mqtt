@@ -1,0 +1,1 @@
+# No services — direct BMS communication is handled by the sidecar container.

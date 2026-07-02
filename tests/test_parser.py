@@ -11,8 +11,8 @@ from datetime import datetime
 
 import pytest
 from conftest import STUB_BATTERIES, STUB_MODEL, STUB_SOC_START, _raw_command
-from pylontech_serial.parser import PylontechParser
-from pylontech_serial.structs import PylontechBattery, PylontechSystem
+from pylontech_mqtt.parser import PylontechParser
+from pylontech_mqtt.structs import PylontechBattery, PylontechSystem
 
 
 # ===========================================================================

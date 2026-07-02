@@ -22,32 +22,32 @@ import pytest
 # Import bootstrap — must run before any test imports the integration code
 # ---------------------------------------------------------------------------
 _ROOT = Path(__file__).parent.parent
-_COMP = _ROOT / "custom_components" / "pylontech_serial"
+_COMP = _ROOT / "custom_components" / "pylontech_mqtt"
 
 # Register a namespace package so relative imports inside the module files work
-_pkg = types.ModuleType("pylontech_serial")
+_pkg = types.ModuleType("pylontech_mqtt")
 _pkg.__path__ = [str(_COMP)]
-_pkg.__package__ = "pylontech_serial"
-sys.modules.setdefault("pylontech_serial", _pkg)
+_pkg.__package__ = "pylontech_mqtt"
+sys.modules.setdefault("pylontech_mqtt", _pkg)
 
 
 def _load_module(name: str, path: Path):
-    """Load a single .py file into sys.modules as part of the pylontech_serial pkg."""
+    """Load a single .py file into sys.modules as part of the pylontech_mqtt pkg."""
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None:
         raise ImportError(f"Cannot find module spec for {path}")
     mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "pylontech_serial"
+    mod.__package__ = "pylontech_mqtt"
     sys.modules[name] = mod
     assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
 
-_load_module("pylontech_serial.structs", _COMP / "structs.py")
-_load_module("pylontech_serial.parser", _COMP / "parser.py")
+_load_module("pylontech_mqtt.structs", _COMP / "structs.py")
+_load_module("pylontech_mqtt.parser", _COMP / "parser.py")
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,10 @@ STUB_PORT = 12399  # dedicated port, unlikely to clash
 STUB_BATTERIES = 2
 STUB_MODEL = "US5000"  # most capable model → most field coverage
 STUB_SOC_START = 75
+# Use the old (pre-*.Id) firmware layout so the parser's fallback defaults
+# (which assume the old column positions) match the data rows in tests that
+# intentionally strip the header line.
+STUB_FIRMWARE = "old"
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 5.0) -> None:
@@ -86,6 +90,8 @@ def stub_server():
             str(STUB_BATTERIES),
             "--model",
             STUB_MODEL,
+            "--firmware",
+            STUB_FIRMWARE,
             "--soc",
             str(STUB_SOC_START),
         ],
@@ -175,7 +181,7 @@ def stub_conn(stub_server):
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def pwr_system(_session_conn):
-    from pylontech_serial.parser import PylontechParser
+    from pylontech_mqtt.parser import PylontechParser
 
     raw = _raw_command(_session_conn, "pwr")
     return PylontechParser.parse_pwr(raw)
@@ -183,8 +189,8 @@ def pwr_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def info_system(_session_conn):
-    from pylontech_serial.parser import PylontechParser
-    from pylontech_serial.structs import PylontechSystem
+    from pylontech_mqtt.parser import PylontechParser
+    from pylontech_mqtt.structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "info")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -193,8 +199,8 @@ def info_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def stat_system(_session_conn):
-    from pylontech_serial.parser import PylontechParser
-    from pylontech_serial.structs import PylontechSystem
+    from pylontech_mqtt.parser import PylontechParser
+    from pylontech_mqtt.structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "stat")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -203,8 +209,8 @@ def stat_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def time_system(_session_conn):
-    from pylontech_serial.parser import PylontechParser
-    from pylontech_serial.structs import PylontechSystem
+    from pylontech_mqtt.parser import PylontechParser
+    from pylontech_mqtt.structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "time")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)

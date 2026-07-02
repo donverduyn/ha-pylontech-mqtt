@@ -1,17 +1,16 @@
-# Use a lightweight Python image
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install dependencies
-RUN pip install --no-cache-dir pyserial paho-mqtt
+RUN pip install --no-cache-dir pyserial "paho-mqtt>=2.0.0"
 
-# Copy the script into the container
-COPY pylon2mqtt.py .
+# Copy shared parser & structs from the custom component (single source of truth)
+COPY custom_components/pylontech_mqtt/parser.py .
+COPY custom_components/pylontech_mqtt/structs.py .
 
-# Set Python to unbuffered mode (so logs show up instantly in Docker)
+# Copy the sidecar entry point
+COPY docker/pylon2mqtt.py .
+
 ENV PYTHONUNBUFFERED=1
 
-# Run the script
 CMD ["python", "pylon2mqtt.py"]

@@ -23,7 +23,7 @@ You need to find the **Vendor ID (VID)** and **Product ID (PID)** of your USB ad
 
 ### 2. Update `manifest.json`
 
-1. Open `custom_components/pylontech_serial/manifest.json`.
+1. Open `custom_components/pylontech_mqtt/manifest.json`.
 2. Locate the `"usb"` section.
 3. Add a new entry with your VID and PID. Note that the keys are case-sensitive and should usually be uppercase.
 
@@ -44,7 +44,7 @@ You need to find the **Vendor ID (VID)** and **Product ID (PID)** of your USB ad
 
 We welcome translations to make this integration accessible to everyone!
 
-1. **Locate the Translations**: Go to `custom_components/pylontech_serial/translations/`.
+1. **Locate the Translations**: Go to `custom_components/pylontech_mqtt/translations/`.
 2. **Create your Language File**:
     - Find the English file: `en.json`.
     - Copy it and name the new file with your language's ISO 639-1 code (e.g., `es.json` for Spanish, `fr.json` for French, `de.json` for German).

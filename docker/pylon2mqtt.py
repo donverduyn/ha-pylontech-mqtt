@@ -1,238 +1,304 @@
+#!/usr/bin/env python3
+"""
+pylon2mqtt — Pylontech BMS to MQTT bridge.
+
+All configuration is via environment variables:
+
+  CONNECTION_TYPE   : "serial" (default) or "tcp"
+  SERIAL_PORT       : serial device path (serial mode), default /dev/ttyUSB0
+  BAUD_RATE         : baud rate (serial mode), default 115200
+  TCP_HOST          : hostname or IP (tcp mode)
+  TCP_PORT          : port (tcp mode), default 23
+
+  MQTT_BROKER       : MQTT broker host (required)
+  MQTT_PORT         : MQTT broker port, default 1883
+  MQTT_USER         : MQTT username (optional)
+  MQTT_PASS         : MQTT password (optional)
+  MQTT_TOPIC_PREFIX : base MQTT topic, default "pylontech/stack"
+
+  POLL_INTERVAL     : seconds between polls, default 15
+  AUTO_SYNC_TIME    : "true" to sync BMS clock on startup, default "false"
+"""
+
 import json
+import logging
+import os
+import socket
+import sys
 import time
+from dataclasses import asdict
+from datetime import datetime
+from typing import Optional
 
-import paho.mqtt.client as mqtt  # type: ignore[import-untyped]
-import serial  # type: ignore[import-untyped]
+import paho.mqtt.client as mqtt
+import serial
+from paho.mqtt.enums import CallbackAPIVersion
 
-# --- CONFIGURATION ---
-SERIAL_PORT = "/dev/ttyUSB0"
-BAUD_RATE = 115200
-MQTT_BROKER = "192.168.2.10"  # Or IP address
-MQTT_PORT = 1883
-MQTT_USER = "batteries"
-MQTT_PASS = "F90ewxDsif2vWP06"
+# structs.py defines the shared data model (PylontechSystem / PylontechBattery).
+# parser.py contains the BMS parsing logic that runs here in the sidecar.
+# Both files live in custom_components/pylontech_mqtt/ as the canonical source
+# and are copied into this container at build time (see Dockerfile).
+# The HA integration uses structs.py to deserialise the MQTT JSON into typed
+# objects.  parser.py is not loaded by HA at runtime; it is tested by the
+# shared test suite to verify correctness of the parsing logic.
+try:
+    from pylontech_mqtt.parser import PylontechParser
+    from pylontech_mqtt.structs import PylontechSystem
+except ImportError:  # Docker runtime: files copied flat into /app
+    from parser import PylontechParser  # type: ignore[import]
+    from structs import PylontechSystem  # type: ignore[import]
 
-# Base topic for state updates
-STATE_TOPIC = "pylontech/stack/state"
-# Base topic for HA Discovery (Standard is 'homeassistant')
-DISCOVERY_PREFIX = "homeassistant"
-NODE_ID = "pylontech_stack"
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
-# How many batteries do you physically have?
-BATTERY_COUNT = 2
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    stream=sys.stdout,
+)
+_LOGGER = logging.getLogger("pylon2mqtt")
 
+# ---------------------------------------------------------------------------
+# Configuration from environment variables
+# ---------------------------------------------------------------------------
 
-def publish_discovery_config(client):
-    """
-    Sends the MQTT Discovery payloads so HA creates the entities automatically.
-    """
-    print("Sending Auto-Discovery Config...")
+CONNECTION_TYPE = os.getenv("CONNECTION_TYPE", "serial").lower()
+SERIAL_PORT = os.getenv("SERIAL_PORT", "/dev/ttyUSB0")
+BAUD_RATE = int(os.getenv("BAUD_RATE", "115200"))
+TCP_HOST = os.getenv("TCP_HOST", "")
+TCP_PORT = int(os.getenv("TCP_PORT", "23"))
 
-    # --- 1. DEFINE THE DEVICE ---
-    # This groups all sensors under one "Device" in Home Assistant
-    device_info = {
-        "identifiers": [NODE_ID],
-        "name": "Pylontech Battery Stack",
-        "manufacturer": "Pylontech",
-        "model": "US2000 (Console)",
-        "sw_version": "Console-v1",
-    }
+MQTT_BROKER = os.getenv("MQTT_BROKER", "")
+MQTT_PORT_ENV = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_USER = os.getenv("MQTT_USER", "")
+MQTT_PASS = os.getenv("MQTT_PASS", "")
+MQTT_TOPIC_PREFIX = os.getenv("MQTT_TOPIC_PREFIX", "pylontech/stack")
 
-    # --- 2. DEFINE SENSORS TO CREATE ---
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "15"))
+AUTO_SYNC_TIME = os.getenv("AUTO_SYNC_TIME", "false").lower() == "true"
 
-    # List of System-wide sensors
-    system_sensors = [
-        {"id": "sys_soc", "name": "System SOC", "unit": "%", "class": "battery", "tpl": "{{ value_json.system.soc }}"},
-        {
-            "id": "sys_volt",
-            "name": "System Voltage",
-            "unit": "V",
-            "class": "voltage",
-            "tpl": "{{ value_json.system.voltage }}",
-        },
-        {
-            "id": "sys_curr",
-            "name": "System Current",
-            "unit": "A",
-            "class": "current",
-            "tpl": "{{ value_json.system.current }}",
-        },
-        {
-            "id": "sys_power",
-            "name": "System Power",
-            "unit": "W",
-            "class": "power",
-            "tpl": "{{ value_json.system.power }}",
-        },
-    ]
+STATE_TOPIC = f"{MQTT_TOPIC_PREFIX}/state"
+AVAIL_TOPIC = f"{MQTT_TOPIC_PREFIX}/availability"
 
-    # List of Per-Battery sensors
-    bat_sensors = [
-        {"suffix": "volt", "name": "Voltage", "unit": "V", "class": "voltage", "prop": "voltage"},
-        {"suffix": "curr", "name": "Current", "unit": "A", "class": "current", "prop": "current"},
-        {"suffix": "temp", "name": "Temperature", "unit": "°C", "class": "temperature", "prop": "temp"},
-        {"suffix": "soc", "name": "SOC", "unit": "%", "class": "battery", "prop": "soc"},
-        {"suffix": "status", "name": "Status", "unit": None, "class": None, "prop": "status"},  # Text sensor
-    ]
-
-    # --- 3. PUBLISH SYSTEM CONFIGS ---
-    for s in system_sensors:
-        unique_id = f"{NODE_ID}_{s['id']}"
-        config_topic = f"{DISCOVERY_PREFIX}/sensor/{NODE_ID}/{s['id']}/config"
-
-        payload = {
-            "name": s["name"],
-            "unique_id": unique_id,
-            "state_topic": STATE_TOPIC,
-            "value_template": s["tpl"],
-            "device": device_info,
-            "availability_topic": STATE_TOPIC,
-            "availability_template": "{{ 'online' if value_json.system.count is defined else 'offline' }}",
-        }
-        if s["unit"]:
-            payload["unit_of_measurement"] = s["unit"]
-        if s["class"]:
-            payload["device_class"] = s["class"]
-
-        client.publish(config_topic, json.dumps(payload), retain=True)
-
-    # --- 4. PUBLISH PER-BATTERY CONFIGS ---
-    for i in range(1, BATTERY_COUNT + 1):
-        for s in bat_sensors:
-            unique_id = f"{NODE_ID}_bat{i}_{s['suffix']}"
-            object_id = f"bat{i}_{s['suffix']}"
-            config_topic = f"{DISCOVERY_PREFIX}/sensor/{NODE_ID}/{object_id}/config"
-
-            # Access list by index [i-1] because lists are 0-indexed but batteries are 1-indexed
-            template = f"{{{{ value_json.batteries[{i - 1}].{s['prop']} }}}}"
-
-            payload = {
-                "name": f"Battery {i} {s['name']}",
-                "unique_id": unique_id,
-                "state_topic": STATE_TOPIC,
-                "value_template": template,
-                "device": device_info,
-            }
-            if s["unit"]:
-                payload["unit_of_measurement"] = s["unit"]
-            if s["class"]:
-                payload["device_class"] = s["class"]
-
-            client.publish(config_topic, json.dumps(payload), retain=True)
-
-    print("Discovery sent. Check Home Assistant devices.")
+# ---------------------------------------------------------------------------
+# BMS connection
+# ---------------------------------------------------------------------------
 
 
-def parse_pwr_response(raw_text):
-    """
-    Parses the ASCII table from the 'pwr' command.
-    Returns a list of battery objects and a summary object.
-    """
-    batteries = []
-    lines = raw_text.splitlines()
-    for line in lines:
-        parts = line.split()
-        if len(parts) > 10 and parts[0].isdigit():
-            if "Absent" in line:
-                continue
+class BmsConnection:
+    """Manages a serial or TCP connection to the Pylontech BMS."""
+
+    def __init__(self) -> None:
+        self._tcp: socket.socket | None = None
+        self._serial: serial.Serial | None = None
+
+    def _open(self) -> None:
+        if CONNECTION_TYPE == "tcp":
+            _LOGGER.info("Opening TCP connection to %s:%d", TCP_HOST, TCP_PORT)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect((TCP_HOST, TCP_PORT))
+            self._tcp = s
+        else:
+            _LOGGER.info("Opening serial on %s @ %d baud", SERIAL_PORT, BAUD_RATE)
+            self._serial = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
+
+    def _ensure_open(self) -> None:
+        if CONNECTION_TYPE == "tcp":
+            if self._tcp is None:
+                self._open()
+        else:
+            if self._serial is None:
+                self._open()
+            elif not self._serial.is_open:
+                self._serial.open()
+
+    def send_command(self, cmd: str) -> str:
+        """Send a command and return the ASCII response."""
+        self._ensure_open()
+        if CONNECTION_TYPE == "tcp":
+            assert self._tcp is not None
+            self._tcp.sendall((cmd + "\n").encode("ascii"))
+            time.sleep(1.0)
+            data = b""
+            self._tcp.settimeout(2.0)
             try:
-                bat_id = int(parts[0])
-                # Parsing logic based on your provided table
-                voltage = int(parts[1]) / 1000.0
-                current = int(parts[2]) / 1000.0
-                temp = int(parts[3]) / 1000.0
-                status = parts[8]
-                soc = int(parts[12].replace("%", ""))
+                while True:
+                    chunk = self._tcp.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+            except socket.timeout:
+                pass
+            return data.decode("ascii", errors="ignore")
+        else:
+            assert self._serial is not None
+            self._serial.reset_input_buffer()
+            self._serial.write(b"\n")
+            time.sleep(0.1)
+            self._serial.read_all()
+            self._serial.write((cmd + "\n").encode("ascii"))
+            time.sleep(1.0)
+            return (self._serial.read_all() or b"").decode("ascii", errors="ignore")
 
-                batteries.append(
-                    {
-                        "id": bat_id,
-                        "voltage": voltage,
-                        "current": current,
-                        "temp": temp,
-                        "soc": soc,
-                        "status": status,
-                        "power": round(voltage * current, 2),
-                    }
-                )
-            except ValueError as error:
-                print("Could not parse response:")
-                print(error)
-                continue
-
-    total_voltage = 0
-    total_current = 0
-    avg_soc = 0
-    total_power = 0
-
-    print(f"Found {len(batteries)} batteries.")
-
-    if batteries:
-        total_voltage = sum(b["voltage"] for b in batteries) / len(batteries)
-        total_current = sum(b["current"] for b in batteries)
-        avg_soc = sum(b["soc"] for b in batteries) / len(batteries)
-        total_power = total_voltage * total_current
-
-    return {
-        "system": {
-            "voltage": round(total_voltage, 2),
-            "current": round(total_current, 2),
-            "soc": round(avg_soc, 1),
-            "power": round(total_power, 1),
-            "count": len(batteries),
-        },
-        "batteries": batteries,
-    }
+    def close(self) -> None:
+        for conn in (self._tcp, self._serial):
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        self._tcp = None
+        self._serial = None
 
 
-def main():
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "PylonDiscovery")
-    client.username_pw_set(MQTT_USER, MQTT_PASS)
+# ---------------------------------------------------------------------------
+# Energy tracker
+# ---------------------------------------------------------------------------
 
-    try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        client.loop_start()
 
-        # 1. SEND DISCOVERY CONFIG ONCE ON STARTUP
-        publish_discovery_config(client)
+class EnergyTracker:
+    def __init__(self) -> None:
+        self.energy_in: float = 0.0
+        self.energy_out: float = 0.0
+        self._last_time: Optional[datetime] = None
 
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
-        print(f"Listening on {SERIAL_PORT}...")
-
-        while True:
-            print('Requesting "pwr" to batteries...')
-            ser.write(b"\n")
-            time.sleep(0.2)
-            ser.read_all()
-            ser.write(b"pwr\n")
-            time.sleep(1.5)
-
-            print("Reading response...")
-            raw_bytes = ser.read_all() or b""
-            raw_data = raw_bytes.decode("ascii", errors="ignore")
-
-            if "Power Volt" in raw_data:
-                data = parse_pwr_response(raw_data)
-                # Only publish if we actually parsed data
-                if data and data["system"]["count"] > 0:
-                    print("Parsed response:")
-                    print(data)
-                    json_str = json.dumps(data)
-                    client.publish(STATE_TOPIC, json_str)
-                    print("Data published.")
-                else:
-                    print("Could not parse data:")
-                    print(data)
+    def update(self, power_w: float) -> None:
+        now = datetime.now()
+        if self._last_time is not None:
+            hours = (now - self._last_time).total_seconds() / 3600.0
+            kwh = abs(power_w * hours) / 1000.0
+            if power_w >= 0:
+                self.energy_in += kwh
             else:
-                print("Got unknown response:")
-                print(raw_data)
+                self.energy_out += kwh
+        self._last_time = now
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    if not MQTT_BROKER:
+        _LOGGER.error("MQTT_BROKER environment variable is required")
+        sys.exit(1)
+    if CONNECTION_TYPE == "tcp" and not TCP_HOST:
+        _LOGGER.error("TCP_HOST is required when CONNECTION_TYPE=tcp")
+        sys.exit(1)
+
+    _LOGGER.info(
+        "Starting pylon2mqtt | connection=%s | MQTT=%s:%d | topic=%s | poll=%ds",
+        CONNECTION_TYPE.upper(),
+        MQTT_BROKER,
+        MQTT_PORT_ENV,
+        MQTT_TOPIC_PREFIX,
+        POLL_INTERVAL,
+    )
+
+    # -- MQTT setup --
+    client = mqtt.Client(CallbackAPIVersion.VERSION2)
+    if MQTT_USER:
+        client.username_pw_set(MQTT_USER, MQTT_PASS)
+    client.will_set(AVAIL_TOPIC, "offline", retain=True)
+
+    def on_connect(c, userdata, flags, reason_code, properties):  # noqa: ANN001
+        if reason_code.is_failure:
+            _LOGGER.error("MQTT connect failed: %s", reason_code)
+        else:
+            _LOGGER.info("MQTT connected")
+            c.publish(AVAIL_TOPIC, "online", retain=True)
+
+    def on_disconnect(c, userdata, disconnect_flags, reason_code, properties):  # noqa: ANN001
+        _LOGGER.warning("MQTT disconnected: %s", reason_code)
+
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+
+    while True:
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT_ENV, 60)
+            break
+        except Exception as err:
+            _LOGGER.error("Cannot connect to MQTT broker: %s — retrying in 10 s", err)
             time.sleep(10)
 
-    except KeyboardInterrupt:
-        client.loop_stop()
-        ser.close()
-        print("Exiting...")
+    client.loop_start()
+
+    # -- BMS poll loop --
+    bms = BmsConnection()
+    energy = EnergyTracker()
+    system: Optional[PylontechSystem] = None
+    info_fetched = False
+
+    while True:
+        try:
+            if not info_fetched:
+                _LOGGER.info("Fetching device info...")
+                raw_info = bms.send_command("info")
+                if system is None:
+                    system = PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
+                PylontechParser.parse_info(raw_info, system)
+                info_fetched = True
+
+                if AUTO_SYNC_TIME:
+                    _LOGGER.info("Syncing BMS time...")
+                    bms.send_command(
+                        PylontechParser.generate_time_command(datetime.now())
+                    )
+
+            _LOGGER.debug("Polling BMS...")
+            raw_pwr = bms.send_command("pwr")
+            if "Power Volt" not in raw_pwr:
+                time.sleep(1.0)
+                raw_pwr = bms.send_command("pwr")
+            if "Power Volt" not in raw_pwr:
+                raise IOError("Did not receive valid 'pwr' response")
+
+            raw_stat = bms.send_command("stat")
+            raw_time = bms.send_command("time")
+
+            if system is None:
+                system = PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
+
+            PylontechParser.parse_pwr(raw_pwr, system)
+            PylontechParser.parse_stat(raw_stat, system)
+            PylontechParser.parse_time(raw_time, system)
+
+            energy.update(system.power)
+            system.energy_in = round(energy.energy_in, 3)
+            system.energy_out = round(energy.energy_out, 3)
+
+            payload = json.dumps(asdict(system), default=str)
+            client.publish(STATE_TOPIC, payload, retain=True)
+            _LOGGER.info(
+                "Published | V=%.2fV I=%.2fA SOC=%.1f%% P=%.1fW batteries=%d",
+                system.voltage,
+                system.current,
+                system.soc,
+                system.power,
+                len(system.batteries),
+            )
+
+        except (serial.SerialException, OSError, IOError) as err:
+            _LOGGER.error("BMS connection error: %s — reconnecting in 5 s", err)
+            bms.close()
+            info_fetched = False
+            time.sleep(5)
+            continue
+        except KeyboardInterrupt:
+            _LOGGER.info("Shutting down...")
+            client.publish(AVAIL_TOPIC, "offline", retain=True)
+            client.loop_stop()
+            client.disconnect()
+            bms.close()
+            sys.exit(0)
+        except Exception as err:
+            _LOGGER.error("Unexpected error: %s", err, exc_info=True)
+
+        time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
