@@ -37,17 +37,23 @@ _MULTI_GRP_PORT = 12401
 # Helpers: spin up extra stub instances for variant configurations
 # ---------------------------------------------------------------------------
 
+
 def _spawn_stub(port: int, *extra_args: str) -> subprocess.Popen:
     """Start pylon_stub.py on *port* with fixed base config + *extra_args*."""
     return subprocess.Popen(
         [
             sys.executable,
             str(_ROOT / "scripts" / "pylon_stub.py"),
-            "--host", STUB_HOST,
-            "--port", str(port),
-            "--batteries", "2",
-            "--model", "US5000",
-            "--soc", "75",
+            "--host",
+            STUB_HOST,
+            "--port",
+            str(port),
+            "--batteries",
+            "2",
+            "--model",
+            "US5000",
+            "--soc",
+            "75",
             *extra_args,
         ],
         stdout=subprocess.PIPE,
@@ -69,6 +75,7 @@ def _wait_port(host: str, port: int, timeout: float = 5.0) -> None:
 # ---------------------------------------------------------------------------
 # Module-scoped fixtures for variant stubs
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def new_fw_stub():
@@ -113,6 +120,7 @@ def multi_grp_conn(multi_grp_stub):
 # ===========================================================================
 # 1. Additional simple commands not covered by test_parser.py
 # ===========================================================================
+
 
 class TestStubAdditionalCommands:
     """Commands implemented in the stub but not yet exercised by the parser suite."""
@@ -195,6 +203,7 @@ class TestStubAdditionalCommands:
 # 2. cmdquit — connection teardown
 # ===========================================================================
 
+
 class TestStubCmdquit:
     def test_cmdquit_writes_quit_message(self, stub_server):
         """After cmdquit the server writes the quit message and closes the TCP session."""
@@ -240,6 +249,7 @@ class TestStubCmdquit:
 # ===========================================================================
 # 3. pwr N — indexed (vertical key:value) format
 # ===========================================================================
+
 
 class TestStubPwrIndexed:
     """pwr N returns a completely different response shape from the tabular pwr."""
@@ -298,6 +308,7 @@ class TestStubPwrIndexed:
 # 4. bat N — per-cell data
 # ===========================================================================
 
+
 class TestStubBatCommand:
     def test_bat_no_index_defaults_to_bat1(self, stub_conn):
         resp = _raw_command(stub_conn, "bat")
@@ -345,6 +356,7 @@ class TestStubBatCommand:
 # 5. soh N — per-cell state-of-health
 # ===========================================================================
 
+
 class TestStubSohCommand:
     def test_soh_no_index_defaults_to_bat1(self, stub_conn):
         resp = _raw_command(stub_conn, "soh")
@@ -389,6 +401,7 @@ class TestStubSohCommand:
 # ===========================================================================
 # 6. login / logout
 # ===========================================================================
+
 
 class TestStubLoginLogout:
     def test_correct_password_grants_admin(self, stub_conn):
@@ -436,8 +449,8 @@ class TestStubLoginLogout:
 # 7. stub admin controls
 # ===========================================================================
 
-class TestStubAdminControls:
 
+class TestStubAdminControls:
     # --- guard ---
 
     def test_stub_rejected_without_admin(self, stub_conn):
@@ -602,6 +615,7 @@ class TestStubAdminControls:
 # ===========================================================================
 # 8. Fault propagation — inject fault, verify across all relevant views, clear
 # ===========================================================================
+
 
 class TestStubFaultPropagation:
     """Inject each fault type and verify it surfaces in pwr, bat, pwr N, and pwrsys."""
@@ -780,7 +794,9 @@ class TestStubFaultPropagation:
         self._inject(stub_conn, 1, "absent")
         try:
             online_after = int(
-                re.search(r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")).group(1)
+                re.search(
+                    r"Online\s*:\s*(\d+)", _raw_command(stub_conn, "pwrsys")
+                ).group(1)
             )
             assert online_after < online_before
         finally:
@@ -804,6 +820,7 @@ class TestStubFaultPropagation:
 # ===========================================================================
 # 9. re — remote command forwarding
 # ===========================================================================
+
 
 class TestStubRemoteForward:
     def test_re_forwards_pwr(self, stub_conn):
@@ -831,6 +848,7 @@ class TestStubRemoteForward:
 # ===========================================================================
 # 10. New firmware layout (--firmware new)
 # ===========================================================================
+
 
 class TestStubNewFirmware:
     """Verify the 23-column 'new' firmware pwr layout with *.Id columns."""
@@ -884,6 +902,7 @@ class TestStubNewFirmware:
 # ===========================================================================
 # 11. Multi-group topology (--groups 2)
 # ===========================================================================
+
 
 class TestStubMultiGroup:
     """Verify LV-HUB (groups > 1) topology responses."""
@@ -942,3 +961,224 @@ class TestStubMultiGroup:
         resp = _raw_command(multi_grp_conn, "pwr 9")
         assert "Power 9" in resp
         assert "Voltage" in resp
+
+
+# ===========================================================================
+# 12. bat_id < 1 — lower-bound OOB paths not covered by the > max tests
+# ===========================================================================
+
+class TestStubBatIdBelowOne:
+    """bat_id = 0 exercises the `bat_id < 1` branch in pwr N, bat N, soh N."""
+
+    def test_pwr_indexed_zero_returns_not_found(self, stub_conn):
+        resp = _raw_command(stub_conn, "pwr 0")
+        assert "not found" in resp.lower()
+
+    def test_bat_zero_returns_not_found(self, stub_conn):
+        resp = _raw_command(stub_conn, "bat 0")
+        assert "not found" in resp.lower()
+
+    def test_soh_zero_returns_not_found(self, stub_conn):
+        resp = _raw_command(stub_conn, "soh 0")
+        assert "not found" in resp.lower()
+
+
+# ===========================================================================
+# 13. pwr with non-integer argument — ValueError catch → tabular fallback
+# ===========================================================================
+
+class TestStubPwrNonIntegerArg:
+    def test_pwr_noninteger_arg_falls_back_to_tabular(self, stub_conn):
+        """pwr badarg catches ValueError; bat_id_filter stays None so the full
+        tabular table is returned — same output as bare pwr."""
+        resp = _raw_command(stub_conn, "pwr badarg")
+        assert "Command completed successfully" in resp
+        # Must produce the tabular header, not the indexed block
+        assert "Volt" in resp
+        assert "Base.St" in resp
+        # Must NOT be the 'not found' indexed error
+        assert "not found" not in resp.lower()
+
+
+# ===========================================================================
+# 14. stub sub-command with missing required argument → usage
+# ===========================================================================
+
+class TestStubMissingArgUsage:
+    """Each sub-command needs at least one extra argument; omitting it must
+    fall through to the generic usage string."""
+
+    def test_stub_soc_no_pct_returns_usage(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            resp = _raw_command(stub_conn, "stub soc")
+            assert "Usage" in resp
+        finally:
+            _raw_command(stub_conn, "logout")
+
+    def test_stub_current_no_ma_returns_usage(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            resp = _raw_command(stub_conn, "stub current")
+            assert "Usage" in resp
+        finally:
+            _raw_command(stub_conn, "logout")
+
+    def test_stub_clear_no_bat_returns_usage(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            resp = _raw_command(stub_conn, "stub clear")
+            assert "Usage" in resp
+        finally:
+            _raw_command(stub_conn, "logout")
+
+
+# ===========================================================================
+# 15. _base_state "Idle" and "Dischg" paths
+# ===========================================================================
+
+class TestStubBaseState:
+    """Verify the three _base_state branches: Charge (default), Idle, Dischg."""
+
+    def test_idle_state_in_pwr_table(self, stub_conn):
+        """|current| < 500 mA → _base_state returns 'Idle'."""
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current 100")
+            resp = _raw_command(stub_conn, "pwr")
+            assert "Idle" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_idle_state_in_bat_command(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current 100")
+            resp = _raw_command(stub_conn, "bat 1")
+            assert "Idle" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_idle_state_in_pwr_indexed(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current 100")
+            resp = _raw_command(stub_conn, "pwr 1")
+            assert "Idle" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_idle_state_in_pwrsys(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current 100")
+            resp = _raw_command(stub_conn, "pwrsys")
+            assert "Idle" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_dischg_state_in_pwr_table(self, stub_conn):
+        """Negative current outside OC-fault path → _base_state returns 'Dischg'."""
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current -5000")
+            resp = _raw_command(stub_conn, "pwr")
+            assert "Dischg" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_dischg_state_in_pwr_indexed(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current -5000")
+            resp = _raw_command(stub_conn, "pwr 1")
+            assert "Dischg" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+    def test_dischg_state_in_pwrsys(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub current -5000")
+            resp = _raw_command(stub_conn, "pwrsys")
+            assert "Dischg" in resp
+        finally:
+            _raw_command(stub_conn, "stub current auto")
+            _raw_command(stub_conn, "logout")
+
+
+# ===========================================================================
+# 16. pwrsys charge/discharge current taper at SOC extremes
+# ===========================================================================
+
+class TestStubPwrsysTaper:
+    """At SOC > 95 charge current is tapered to 30 %; at SOC < 10 discharge
+    current is tapered.  US5000 limits: max_chg = 200 000 mA, max_dsg = 200 000 mA.
+    Tapered value = int(200 000 × 0.3) × 1 group = 60 000 mA."""
+
+    def test_charge_taper_at_high_soc(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub soc 99")
+            resp = _raw_command(stub_conn, "pwrsys")
+            # Tapered rec_chg_curr = int(200000 * 0.3) = 60000
+            assert re.search(r"Rec ChgCurr\s*:\s*60000\s*mA", resp), (
+                "charge taper at SOC 99 should yield Rec ChgCurr = 60000 mA"
+            )
+        finally:
+            _raw_command(stub_conn, f"stub soc {STUB_SOC_START}")
+            _raw_command(stub_conn, "logout")
+
+    def test_discharge_taper_at_low_soc(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub soc 5")
+            resp = _raw_command(stub_conn, "pwrsys")
+            # Tapered rec_dsg_curr = int(200000 * 0.3) = 60000
+            assert re.search(r"Rec DsgCurr\s*:\s*60000\s*mA", resp), (
+                "discharge taper at SOC 5 should yield Rec DsgCurr = 60000 mA"
+            )
+        finally:
+            _raw_command(stub_conn, f"stub soc {STUB_SOC_START}")
+            _raw_command(stub_conn, "logout")
+
+    def test_no_taper_at_mid_soc(self, stub_conn):
+        """At mid-range SOC both factors are 1.0; US5000 limits are unchanged."""
+        resp = _raw_command(stub_conn, "pwrsys")
+        assert re.search(r"Rec ChgCurr\s*:\s*200000\s*mA", resp), (
+            "no charge taper at mid SOC — rec_chg_curr should be 200000 mA"
+        )
+        assert re.search(r"Rec DsgCurr\s*:\s*200000\s*mA", resp), (
+            "no discharge taper at mid SOC — rec_dsg_curr should be 200000 mA"
+        )
+
+
+# ===========================================================================
+# 17. New-firmware SysAlarm.St column shows "Alarm" on injected fault
+# ===========================================================================
+
+class TestStubNewFirmwareFaultInjection:
+    """Verify the per-row SysAlarm.St column in the new-firmware pwr table
+    changes from 'Normal' to 'Alarm' when a fault is injected."""
+
+    def test_sysalarm_column_normal_without_fault(self, new_fw_conn):
+        resp = _raw_command(new_fw_conn, "pwr")
+        # Rows for present batteries should have 'Normal' in SysAlarm.St
+        assert "Normal" in resp
+
+    def test_sysalarm_column_alarm_on_ov_fault(self, new_fw_conn):
+        _raw_command(new_fw_conn, "login 000000")
+        _raw_command(new_fw_conn, "stub fault 1 ov")
+        try:
+            resp = _raw_command(new_fw_conn, "pwr")
+            # The SysAlarm.St column for the faulted battery should show 'Alarm'
+            assert "Alarm" in resp
+        finally:
+            _raw_command(new_fw_conn, "stub clear 1")
+            _raw_command(new_fw_conn, "logout")
