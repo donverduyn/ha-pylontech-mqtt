@@ -129,8 +129,9 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
                 except ValueError:
                     _LOGGER.debug("Could not parse battery spec '%s'", system["spec"])
                 else:
-                    self.default_capacity = derived
-                    self._auto_capacity_set = True
+                    if derived is not None:
+                        self.default_capacity = derived
+                        self._auto_capacity_set = True
                     _LOGGER.debug(
                         "Battery capacity auto-set to %.2f kWh from spec '%s'",
                         derived,

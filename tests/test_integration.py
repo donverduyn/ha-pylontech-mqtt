@@ -203,5 +203,7 @@ class TestIntegration:
         entity_id = ent_reg.async_get_entity_id(
             "sensor", DOMAIN, f"{entry.entry_id}_voltage"
         )
+        assert entity_id is not None
         state = hass.states.get(entity_id)
+        assert state is not None
         assert float(state.state) == pytest.approx(52.0)

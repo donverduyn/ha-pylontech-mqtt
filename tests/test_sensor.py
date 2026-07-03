@@ -209,22 +209,27 @@ class TestDeviceInfo:
     async def test_system_identifier(
         self, coord_with_data: PylontechCoordinator
     ) -> None:
-        assert (DOMAIN, "system") in _sys(coord_with_data, "voltage").device_info[
-            "identifiers"
-        ]
+        assert (DOMAIN, "system") in _sys(coord_with_data, "voltage").device_info.get(
+            "identifiers", set()
+        )
 
     async def test_system_name(self, coord_with_data: PylontechCoordinator) -> None:
-        assert _sys(coord_with_data, "voltage").device_info["name"] == "Pylontech Stack"
+        assert (
+            _sys(coord_with_data, "voltage").device_info.get("name")
+            == "Pylontech Stack"
+        )
 
     async def test_system_manufacturer_from_data(
         self, coord_with_data: PylontechCoordinator
     ) -> None:
-        assert _sys(coord_with_data, "voltage").device_info["manufacturer"] == "Pylon"
+        assert (
+            _sys(coord_with_data, "voltage").device_info.get("manufacturer") == "Pylon"
+        )
 
     async def test_system_manufacturer_fallback_when_no_data(
         self, coord: PylontechCoordinator
     ) -> None:
-        assert _sys(coord, "voltage").device_info["manufacturer"] == "Pylontech"
+        assert _sys(coord, "voltage").device_info.get("manufacturer") == "Pylontech"
 
     async def test_system_no_via_device(
         self, coord_with_data: PylontechCoordinator
@@ -237,22 +242,22 @@ class TestDeviceInfo:
     async def test_battery_identifier(
         self, coord_with_data: PylontechCoordinator
     ) -> None:
-        assert (DOMAIN, "battery_1") in _bat(coord_with_data, "voltage").device_info[
-            "identifiers"
-        ]
+        assert (DOMAIN, "battery_1") in _bat(
+            coord_with_data, "voltage"
+        ).device_info.get("identifiers", set())
 
     async def test_battery_name_includes_id(
         self, coord_with_data: PylontechCoordinator
     ) -> None:
         assert (
-            _bat(coord_with_data, "voltage", bat_id=3).device_info["name"]
+            _bat(coord_with_data, "voltage", bat_id=3).device_info.get("name")
             == "Pylontech Module 3"
         )
 
     async def test_battery_via_device_links_to_system(
         self, coord_with_data: PylontechCoordinator
     ) -> None:
-        assert _bat(coord_with_data, "voltage").device_info["via_device"] == (
+        assert _bat(coord_with_data, "voltage").device_info.get("via_device") == (
             DOMAIN,
             "system",
         )
@@ -263,10 +268,9 @@ class TestDeviceInfo:
         self, coord_with_data: PylontechCoordinator
     ) -> None:
         """Cells attach to their parent battery device, not a separate device."""
-        assert (
-            _cell(coord_with_data, "voltage").device_info["identifiers"]
-            == _bat(coord_with_data, "voltage").device_info["identifiers"]
-        )
+        assert _cell(coord_with_data, "voltage").device_info.get("identifiers") == _bat(
+            coord_with_data, "voltage"
+        ).device_info.get("identifiers")
 
     async def test_cell_entity_name_includes_cell_id(
         self, coord_with_data: PylontechCoordinator

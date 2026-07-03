@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def _enable_sockets() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _restore_sockets_per_test() -> None:
+def _restore_sockets_per_test() -> Generator[None, None, None]:
     """Re-enable sockets for each test after the HA plugin's per-test blocking."""
     _enable_sockets()
     yield

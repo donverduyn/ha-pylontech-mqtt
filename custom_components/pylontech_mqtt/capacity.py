@@ -1,7 +1,7 @@
 import re
 
 
-def parse_spec_capacity(spec: str) -> float | None:
+def parse_spec_capacity(spec: str | None) -> float | None:
     """Parse a BMS spec string (e.g. '48V/100AH') and return the kWh capacity.
 
     Handles mixed case and optional whitespace around the separator.
