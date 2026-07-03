@@ -49,7 +49,10 @@ def _test_mqtt_connection(
 
     try:
         client.connect(host, port, keepalive=10)
-    except OSError:
+    except (OSError, ValueError):
+        # OSError  — host unreachable, connection refused, etc.
+        # ValueError — paho raises this for an empty or syntactically invalid
+        #              hostname before any network I/O is attempted.
         return "cannot_connect"
 
     deadline = time.monotonic() + 5.0

@@ -23,6 +23,7 @@ All configuration is via environment variables:
 import json
 import logging
 import os
+import signal
 import socket
 import sys
 import time
@@ -209,6 +210,13 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Treat SIGTERM (sent by `docker stop`) the same as KeyboardInterrupt so the
+    # clean-shutdown path publishes "offline" before exiting.
+    def _handle_sigterm(signum, frame):  # noqa: ANN001
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     _LOGGER.info(
         "Starting pylon2mqtt | connection=%s | MQTT=%s:%d | topic=%s | poll=%ds",
         CONNECTION_TYPE.upper(),
@@ -336,6 +344,9 @@ def main() -> None:
             sys.exit(0)
         except Exception as err:
             _LOGGER.error("Unexpected error: %s", err, exc_info=True)
+            # Close the BMS connection so the next poll starts fresh; the
+            # exception may have left the serial/TCP socket in a broken state.
+            bms.close()
             info_fetched = False
 
         time.sleep(POLL_INTERVAL)

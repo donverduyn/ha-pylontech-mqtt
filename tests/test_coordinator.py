@@ -204,6 +204,17 @@ class TestComputeEnergyStored:
         assert s["batteries"][0]["energy_stored"] == pytest.approx(2.4 * 0.80, rel=1e-3)
         assert s["batteries"][1]["energy_stored"] == pytest.approx(4.8 * 0.50, rel=1e-3)
 
+    async def test_battery_missing_sys_id_is_skipped(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        """A battery dict without sys_id must be silently skipped, not raise KeyError."""
+        # One valid battery (sys_id=1, soc=80) and one with no sys_id.
+        no_id_bat = {k: v for k, v in _BAT1.items() if k != "sys_id"}
+        s = coordinator._deserialize({**_PAYLOAD, "batteries": [_BAT1, no_id_bat]})
+        # Must not raise; only the valid battery contributes to the total.
+        coordinator._compute_energy_stored(s)
+        assert s["energy_stored"] == pytest.approx(2.4 * 0.80, rel=1e-3)
+
 
 # ---------------------------------------------------------------------------
 # set_battery_capacity
@@ -383,6 +394,22 @@ class TestAvailability:
         coordinator._on_message(
             None, None, _msg("pylontech/stack/availability", "unknown")
         )
+        await hass.async_block_till_done()
+        assert coordinator.last_update_success is False
+
+    async def test_disconnect_marks_unavailable(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """An MQTT disconnect must immediately mark the coordinator unavailable.
+
+        paho-mqtt reconnects automatically; on reconnect the broker re-delivers
+        the retained availability payload to restore the correct state.  During
+        the reconnect window HA must reflect the loss of comms.
+        """
+        coordinator.last_update_success = True
+        from types import SimpleNamespace
+
+        coordinator._on_disconnect(None, None, SimpleNamespace(), 0, None)
         await hass.async_block_till_done()
         assert coordinator.last_update_success is False
 

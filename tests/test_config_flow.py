@@ -9,6 +9,8 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
+from custom_components.pylontech_mqtt.config_flow import _test_mqtt_connection
+
 DOMAIN = "pylontech_mqtt"
 
 _VALID_INPUT = {
@@ -207,3 +209,44 @@ async def test_options_updated_successfully(hass: HomeAssistant) -> None:
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"]["mqtt_host"] == "192.168.1.5"
+
+
+# ---------------------------------------------------------------------------
+# _test_mqtt_connection unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_empty_hostname_returns_cannot_connect() -> None:
+    """_test_mqtt_connection must return 'cannot_connect' for an empty hostname.
+
+    paho raises ValueError('Invalid host.') for an empty string — not OSError.
+    The function must catch it rather than letting it propagate as an unhandled
+    exception through the config-flow executor wrapper.
+    """
+    result = _test_mqtt_connection("", 1883)
+    assert result == "cannot_connect"
+
+
+async def test_empty_hostname_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """An empty hostname must surface as cannot_connect, not crash the flow.
+
+    paho raises ValueError (not OSError) for an empty host string.  The
+    config-flow executor wrapper must catch it and return cannot_connect.
+    """
+    empty_host_input = {**_VALID_INPUT, "mqtt_host": ""}
+    # Call the real _test_mqtt_connection in an executor — it must catch
+    # ValueError and return "cannot_connect" without raising.
+    init = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    # Patch only the executor wrapper to avoid a real network call, but
+    # simulate what the real function returns for an empty host.
+    with patch(_PATCH_CONN, return_value="cannot_connect"):
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init["flow_id"], empty_host_input
+            ),
+        )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"

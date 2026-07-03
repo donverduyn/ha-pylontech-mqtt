@@ -94,6 +94,11 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
         self, client, userdata, disconnect_flags, reason_code, properties
     ):
         _LOGGER.warning("MQTT disconnected: %s", reason_code)
+        # Mark unavailable immediately so HA entities reflect the loss of comms.
+        # paho-mqtt will reconnect automatically; when it does, _on_connect
+        # re-subscribes and the broker re-delivers the retained availability
+        # payload, which will call _mark_available again if the sidecar is up.
+        self.hass.loop.call_soon_threadsafe(self._mark_unavailable)
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._avail_topic:
@@ -198,7 +203,10 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
         """Compute energy_stored per battery and system total from SOC × capacity."""
         total = 0.0
         for bat in system["batteries"]:
-            cap = self.battery_capacities.get(bat["sys_id"], self.default_capacity)
+            bat_id = bat.get("sys_id")
+            if bat_id is None:
+                continue
+            cap = self.battery_capacities.get(bat_id, self.default_capacity)
             bat["energy_stored"] = round(cap * (bat["soc"] / 100.0), 3)
             total += bat["energy_stored"]
         system["energy_stored"] = round(total, 3)

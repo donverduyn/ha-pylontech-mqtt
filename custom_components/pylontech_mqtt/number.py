@@ -81,6 +81,11 @@ class PylontechBatteryCapacityNumber(PylontechBatteryEntity, RestoreNumber):
         )
         self._attr_native_value = capacity
         self.coordinator.set_battery_capacity(self._bat_id, capacity)
+        # Re-compute energy_stored with the restored capacity immediately so
+        # the sensor reflects the correct value without waiting for the next
+        # MQTT push (typically 15 s).
+        if self.coordinator.data is not None:
+            await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
