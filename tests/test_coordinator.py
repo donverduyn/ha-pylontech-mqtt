@@ -476,7 +476,6 @@ class TestOnMessageErrors:
     ) -> None:
         """A valid JSON payload that is not a dict (e.g. null, list, int) must
         be logged and dropped without updating coordinator.data."""
-        import json
 
         for bad_value in ("null", "[]", "123"):
             coordinator._on_message(

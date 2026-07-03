@@ -182,6 +182,15 @@ class EnergyTracker:
                 self.energy_out += kwh
         self._last_time = now
 
+    def invalidate_last_time(self) -> None:
+        """Clear the last-poll timestamp.
+
+        Must be called after any communication gap (BMS error, reconnect) so
+        that the next update() call does not compute a kWh delta spanning the
+        outage period and falsely inflate the energy counters.
+        """
+        self._last_time = None
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -332,6 +341,7 @@ def main() -> None:
         except (serial.SerialException, OSError, IOError) as err:
             _LOGGER.error("BMS connection error: %s — reconnecting in 5 s", err)
             bms.close()
+            energy.invalidate_last_time()
             info_fetched = False
             time.sleep(5)
             continue
@@ -347,6 +357,7 @@ def main() -> None:
             # Close the BMS connection so the next poll starts fresh; the
             # exception may have left the serial/TCP socket in a broken state.
             bms.close()
+            energy.invalidate_last_time()
             info_fetched = False
 
         time.sleep(POLL_INTERVAL)
