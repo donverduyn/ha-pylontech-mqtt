@@ -98,8 +98,11 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._avail_topic:
             if msg.payload.decode("utf-8", errors="replace") == "online":
-                if self.data is not None:
-                    self.hass.loop.call_soon_threadsafe(self._mark_available)
+                # Mark available immediately — do not gate on data being present.
+                # The "online" availability message can arrive before the first
+                # state payload; gating would cause the device to appear offline
+                # until the race resolves.
+                self.hass.loop.call_soon_threadsafe(self._mark_available)
             else:
                 self.hass.loop.call_soon_threadsafe(self._mark_unavailable)
             return

@@ -358,17 +358,22 @@ class TestAvailability:
         await hass.async_block_till_done()
         assert coordinator.last_update_success is True
 
-    async def test_online_without_data_does_not_mark_available(
+    async def test_online_without_data_marks_available(
         self, hass: HomeAssistant, coordinator: PylontechCoordinator
     ) -> None:
-        """'online' before any state message must not falsely claim availability."""
+        """'online' before any state message must immediately mark the device available.
+
+        The availability and state topics are independent; gating the 'online'
+        signal on data being present creates a race where the device appears
+        offline even though the sidecar already published 'online'.
+        """
         assert coordinator.data is None
         coordinator._on_message(
             None, None, _msg("pylontech/stack/availability", "online")
         )
         await hass.async_block_till_done()
-        # last_update_success starts False and must remain False — no data yet
-        assert coordinator.last_update_success is False
+        # Device should be marked available regardless of whether data has arrived.
+        assert coordinator.last_update_success is True
 
     async def test_unrecognised_avail_payload_marks_unavailable(
         self, hass: HomeAssistant, coordinator: PylontechCoordinator

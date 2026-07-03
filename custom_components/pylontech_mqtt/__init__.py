@@ -65,9 +65,10 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        coordinator: PylontechCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        await hass.async_add_executor_job(coordinator.shutdown)
+    # Always remove and shut down the coordinator so the MQTT client thread is
+    # never leaked, even when platform unload partially fails.
+    coordinator: PylontechCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+    await hass.async_add_executor_job(coordinator.shutdown)
     return unload_ok
 
 

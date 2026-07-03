@@ -26,12 +26,13 @@ async def async_setup_entry(
             return
         new_entities = []
         for bat in coordinator.data.get("batteries", []):
-            if bat.get("sys_id") not in seen_bat_ids:
-                seen_bat_ids.add(bat.get("sys_id"))
+            bat_id = bat.get("sys_id")
+            if bat_id is None:
+                continue
+            if bat_id not in seen_bat_ids:
+                seen_bat_ids.add(bat_id)
                 new_entities.append(
-                    PylontechBatteryCapacityNumber(
-                        coordinator, entry.entry_id, bat.get("sys_id")
-                    )
+                    PylontechBatteryCapacityNumber(coordinator, entry.entry_id, bat_id)
                 )
         if new_entities:
             async_add_entities(new_entities)
@@ -73,6 +74,11 @@ class PylontechBatteryCapacityNumber(PylontechBatteryEntity, RestoreNumber):
         else:
             capacity = float(self.coordinator.default_capacity)
 
+        # Clamp to current min/max in case a previously persisted value falls
+        # outside the now-allowed range (e.g. saved under an older version).
+        capacity = max(
+            self._attr_native_min_value, min(self._attr_native_max_value, capacity)
+        )
         self._attr_native_value = capacity
         self.coordinator.set_battery_capacity(self._bat_id, capacity)
 

@@ -469,24 +469,28 @@ async def async_setup_entry(
             return
         new_entities: list = []
         for bat in coordinator.data.get("batteries", []):
-            if bat.get("sys_id") not in seen_bat_ids:
-                seen_bat_ids.add(bat.get("sys_id"))
+            bat_id = bat.get("sys_id")
+            if bat_id is None:
+                continue
+            if bat_id not in seen_bat_ids:
+                seen_bat_ids.add(bat_id)
                 new_entities.extend(
-                    PylontechBatterySensor(
-                        coordinator, entry.entry_id, bat.get("sys_id"), desc
-                    )
+                    PylontechBatterySensor(coordinator, entry.entry_id, bat_id, desc)
                     for desc in BATTERY_SENSORS
                 )
-            bat_cells = seen_cell_ids.setdefault(bat.get("sys_id"), set())
+            bat_cells = seen_cell_ids.setdefault(bat_id, set())
             for cell in bat.get("cells", []):
-                if cell.get("cell_id") not in bat_cells:
-                    bat_cells.add(cell.get("cell_id"))
+                cell_id = cell.get("cell_id")
+                if cell_id is None:
+                    continue
+                if cell_id not in bat_cells:
+                    bat_cells.add(cell_id)
                     new_entities.extend(
                         PylontechCellSensor(
                             coordinator,
                             entry.entry_id,
-                            bat.get("sys_id"),
-                            cell.get("cell_id"),
+                            bat_id,
+                            cell_id,
                             desc,
                         )
                         for desc in CELL_SENSORS
