@@ -511,6 +511,7 @@ def _resp_info(cmd: str) -> bytes:
 def _resp_stat(cmd: str) -> bytes:
     with _state_lock:
         s = dict(_state)
+    base_soh = max(0, 100 - int(s["cycles"] * 0.02))
     body = (
         f"Device address           1\r\r\n"
         f"Data Items      :     1689\r\r\n"
@@ -551,6 +552,7 @@ def _resp_stat(cmd: str) -> bytes:
         f"SOH Times       :        0\r\r\n"
         f"BMICERR Times   :        0\r\r\n"
         f"CYCLE Times     :  {s['cycles']:>7}\r\r\n"
+        f"Sys SOH         :  {base_soh}%\r\r\n"
         f"Pwr Percent     :  {s['soc']:>7}\r\r\n"
         f"Pwr Coulomb     : {s['pwr_coulomb']}\r\r\n"
         f"Dsg Cap         : {s['dsg_cap']}\r\r\n"

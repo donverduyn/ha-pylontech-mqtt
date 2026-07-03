@@ -254,6 +254,7 @@ class PylontechParser:
             m = re.search(pattern, raw_text, re.IGNORECASE)
             return int(m.group(1)) if m else None
 
+        system.soh = _int(r"Sys SOH\s*:\s*(\d+)")
         system.cycles = _int(r"CYCLE Times\s*:\s*(\d+)")
         system.charge_times = _int(r"Charge Times\s*:\s*(\d+)")
         system.discharge_cnt = _int(r"Discharge Cnt\.\s*:\s*(\d+)")

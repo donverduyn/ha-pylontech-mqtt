@@ -341,9 +341,15 @@ class TestParseStat:
         assert stat_system.dsg_cap is not None
         assert stat_system.dsg_cap >= 0
 
+    def test_soh_present(self, stat_system):
+        """SOH must be populated from the stat output."""
+        assert stat_system.soh is not None
+        assert 0 <= stat_system.soh <= 100
+
     def test_stub_initial_values(self, stat_system):
         """Verify the stub seeds its counters with known values."""
         assert stat_system.cycles == 430
+        assert stat_system.soh == 92  # max(0, 100 - int(430 * 0.02))
         assert stat_system.charge_times == 1150
         assert stat_system.shut_times == 329
         assert stat_system.reset_times == 67

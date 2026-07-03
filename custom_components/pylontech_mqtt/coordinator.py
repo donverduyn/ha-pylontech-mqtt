@@ -132,11 +132,11 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
                     if derived is not None:
                         self.default_capacity = derived
                         self._auto_capacity_set = True
-                    _LOGGER.debug(
-                        "Battery capacity auto-set to %.2f kWh from spec '%s'",
-                        derived,
-                        system["spec"],
-                    )
+                        _LOGGER.debug(
+                            "Battery capacity auto-set to %.2f kWh from spec '%s'",
+                            derived,
+                            system["spec"],
+                        )
             self._compute_energy_stored(system)
             self.async_set_updated_data(system)
         except Exception as err:
