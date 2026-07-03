@@ -23,6 +23,11 @@ _ENTRY_DATA: dict[str, Any] = {
     "mqtt_topic": "pylontech/stack",
 }
 
+# Entity/device identity is derived from the topic prefix (see
+# entity.stack_id_from_topic), not entry.entry_id — this must match
+# _ENTRY_DATA["mqtt_topic"] with "/" replaced by "_".
+_STACK_ID = "pylontech_stack"
+
 _PAYLOAD: dict[str, Any] = {
     "voltage": 51.2,
     "current": 10.0,
@@ -84,7 +89,7 @@ class TestIntegration:
         entry, _ = await _create_entry(hass)
         ent_reg = er.async_get(hass)
         assert (
-            ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_voltage")
+            ent_reg.async_get_entity_id("sensor", DOMAIN, f"{_STACK_ID}_voltage")
             is not None
         )
 
@@ -96,7 +101,7 @@ class TestIntegration:
         ent_reg = er.async_get(hass)
         assert (
             ent_reg.async_get_entity_id(
-                "sensor", DOMAIN, f"{entry.entry_id}_bat1_voltage"
+                "sensor", DOMAIN, f"{_STACK_ID}_bat1_voltage"
             )
             is None
         )
@@ -113,7 +118,7 @@ class TestIntegration:
 
         assert (
             ent_reg.async_get_entity_id(
-                "sensor", DOMAIN, f"{entry.entry_id}_bat1_voltage"
+                "sensor", DOMAIN, f"{_STACK_ID}_bat1_voltage"
             )
             is not None
         )
@@ -130,7 +135,7 @@ class TestIntegration:
 
         assert (
             ent_reg.async_get_entity_id(
-                "sensor", DOMAIN, f"{entry.entry_id}_bat1_cell0_voltage"
+                "sensor", DOMAIN, f"{_STACK_ID}_bat1_cell0_voltage"
             )
             is not None
         )
@@ -146,7 +151,7 @@ class TestIntegration:
         await hass.async_block_till_done()
 
         entity_id = ent_reg.async_get_entity_id(
-            "sensor", DOMAIN, f"{entry.entry_id}_voltage"
+            "sensor", DOMAIN, f"{_STACK_ID}_voltage"
         )
         assert entity_id is not None
         state = hass.states.get(entity_id)
@@ -164,7 +169,7 @@ class TestIntegration:
         await hass.async_block_till_done()
 
         entity_id = ent_reg.async_get_entity_id(
-            "sensor", DOMAIN, f"{entry.entry_id}_bat1_soc"
+            "sensor", DOMAIN, f"{_STACK_ID}_bat1_soc"
         )
         assert entity_id is not None
         state = hass.states.get(entity_id)
@@ -186,7 +191,7 @@ class TestIntegration:
         await hass.async_block_till_done()
 
         entity_id = ent_reg.async_get_entity_id(
-            "sensor", DOMAIN, f"{entry.entry_id}_voltage"
+            "sensor", DOMAIN, f"{_STACK_ID}_voltage"
         )
         assert entity_id is not None
         state = hass.states.get(entity_id)
@@ -229,13 +234,72 @@ class TestUnloadEntry:
             await hass.config_entries.async_reload(entry.entry_id)
             await hass.async_block_till_done()
 
-        reloaded_entries = hass.config_entries.async_entries(DOMAIN)
-        assert reloaded_entries
-        new_entry = reloaded_entries[0]
+        assert hass.config_entries.async_entries(DOMAIN)
         ent_reg = er.async_get(hass)
         assert (
-            ent_reg.async_get_entity_id(
-                "sensor", DOMAIN, f"{new_entry.entry_id}_voltage"
-            )
+            ent_reg.async_get_entity_id("sensor", DOMAIN, f"{_STACK_ID}_voltage")
             is not None
         )
+
+
+class TestRegistryIdentityMigration:
+    """Entities/devices created under the legacy entry-id-based scheme must be
+    renamed in place to the topic-based scheme on the next setup, rather than
+    orphaned (see custom_components.pylontech_mqtt._migrate_registry_identity).
+    """
+
+    async def test_legacy_entity_unique_id_is_renamed(
+        self, hass: HomeAssistant
+    ) -> None:
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        entry = MockConfigEntry(domain=DOMAIN, data=_ENTRY_DATA)
+        entry.add_to_hass(hass)
+        ent_reg = er.async_get(hass)
+        legacy_entity = ent_reg.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{entry.entry_id}_voltage",
+            config_entry=entry,
+        )
+
+        with patch(_PATCH_SETUP):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+
+        migrated = ent_reg.async_get(legacy_entity.entity_id)
+        assert migrated is not None
+        assert migrated.unique_id == f"{_STACK_ID}_voltage"
+
+    async def test_legacy_device_identifier_is_renamed(
+        self, hass: HomeAssistant
+    ) -> None:
+        from homeassistant.helpers import device_registry as dr
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        entry = MockConfigEntry(domain=DOMAIN, data=_ENTRY_DATA)
+        entry.add_to_hass(hass)
+        dev_reg = dr.async_get(hass)
+        legacy_device = dev_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{entry.entry_id}_system")},
+            name="Pylontech Stack",
+        )
+
+        with patch(_PATCH_SETUP):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+
+        migrated = dev_reg.async_get(legacy_device.id)
+        assert migrated is not None
+        assert (DOMAIN, f"{_STACK_ID}_system") in migrated.identifiers
+        assert (DOMAIN, f"{entry.entry_id}_system") not in migrated.identifiers
+
+    async def test_fresh_install_has_no_legacy_prefix(
+        self, hass: HomeAssistant
+    ) -> None:
+        """A brand-new entry must never see entry_id-prefixed identifiers at all."""
+        entry, _ = await _create_entry(hass)
+        ent_reg = er.async_get(hass)
+        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+            assert not entity.unique_id.startswith(entry.entry_id)

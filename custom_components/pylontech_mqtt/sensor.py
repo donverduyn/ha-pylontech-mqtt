@@ -447,7 +447,7 @@ async def async_setup_entry(
 
     # System-level sensors are always known upfront.
     async_add_entities(
-        PylontechSystemSensor(coordinator, entry.entry_id, desc)
+        PylontechSystemSensor(coordinator, coordinator.topic_prefix, desc)
         for desc in SYSTEM_SENSORS
     )
 
@@ -467,7 +467,9 @@ async def async_setup_entry(
             if bat_id not in seen_bat_ids:
                 seen_bat_ids.add(bat_id)
                 new_entities.extend(
-                    PylontechBatterySensor(coordinator, entry.entry_id, bat_id, desc)
+                    PylontechBatterySensor(
+                        coordinator, coordinator.topic_prefix, bat_id, desc
+                    )
                     for desc in BATTERY_SENSORS
                 )
             bat_cells = seen_cell_ids.setdefault(bat_id, set())
@@ -480,7 +482,7 @@ async def async_setup_entry(
                     new_entities.extend(
                         PylontechCellSensor(
                             coordinator,
-                            entry.entry_id,
+                            coordinator.topic_prefix,
                             bat_id,
                             cell_id,
                             desc,
@@ -507,12 +509,12 @@ class PylontechSystemSensor(PylontechSystemEntity, SensorEntity):
     def __init__(
         self,
         coordinator,
-        entry_id: str,
+        topic_prefix: str,
         description: SensorEntityDescription,
     ) -> None:
-        super().__init__(coordinator, entry_id)
+        super().__init__(coordinator, topic_prefix)
         self.entity_description = description
-        self._attr_unique_id = f"{entry_id}_{description.key}"
+        self._attr_unique_id = f"{self._stack_id}_{description.key}"
 
     @property
     def native_value(self):
@@ -529,13 +531,13 @@ class PylontechBatterySensor(PylontechBatteryEntity, SensorEntity):
     def __init__(
         self,
         coordinator,
-        entry_id: str,
+        topic_prefix: str,
         bat_id: int,
         description: SensorEntityDescription,
     ) -> None:
-        super().__init__(coordinator, entry_id, bat_id)
+        super().__init__(coordinator, topic_prefix, bat_id)
         self.entity_description = description
-        self._attr_unique_id = f"{entry_id}_bat{bat_id}_{description.key}"
+        self._attr_unique_id = f"{self._stack_id}_bat{bat_id}_{description.key}"
 
     @property
     def native_value(self):
@@ -555,14 +557,16 @@ class PylontechCellSensor(PylontechCellEntity, SensorEntity):
     def __init__(
         self,
         coordinator,
-        entry_id: str,
+        topic_prefix: str,
         bat_id: int,
         cell_id: int,
         description: SensorEntityDescription,
     ) -> None:
-        super().__init__(coordinator, entry_id, bat_id, cell_id)
+        super().__init__(coordinator, topic_prefix, bat_id, cell_id)
         self.entity_description = description
-        self._attr_unique_id = f"{entry_id}_bat{bat_id}_cell{cell_id}_{description.key}"
+        self._attr_unique_id = (
+            f"{self._stack_id}_bat{bat_id}_cell{cell_id}_{description.key}"
+        )
         self._attr_name = f"Cell {cell_id} {description.name}"
 
     @property

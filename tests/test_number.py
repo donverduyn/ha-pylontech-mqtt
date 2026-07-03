@@ -58,6 +58,11 @@ _ENTRY_DATA: dict = {
     "mqtt_topic": "pylontech/stack",
 }
 
+# Entity identity is derived from the topic prefix (see
+# entity.stack_id_from_topic) — must match _ENTRY_DATA["mqtt_topic"] with
+# "/" replaced by "_".
+_STACK_ID = "pylontech_stack"
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -124,6 +129,17 @@ class TestNumberEntityAttributes:
     ) -> None:
         n = PylontechBatteryCapacityNumber(coordinator, "pfx", 3)
         assert n._attr_unique_id == "pfx_bat3_capacity"
+
+    def test_unavailable_when_battery_not_in_payload(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        """The capacity number inherits PylontechBatteryEntity.available, so
+        a module missing from the payload can't be configured as if it were
+        still there."""
+        coordinator.last_update_success = True
+        coordinator._process_payload(_PAYLOAD)  # only bat 1
+        assert _make_number(coordinator, bat_id=1).available is True
+        assert _make_number(coordinator, bat_id=2).available is False
 
 
 # ===========================================================================
@@ -218,7 +234,7 @@ class TestNumberEntityRegistration:
         ent_reg = er.async_get(hass)
         assert (
             ent_reg.async_get_entity_id(
-                "number", DOMAIN, f"{entry.entry_id}_bat1_capacity"
+                "number", DOMAIN, f"{_STACK_ID}_bat1_capacity"
             )
             is None
         )
@@ -235,7 +251,7 @@ class TestNumberEntityRegistration:
 
         assert (
             ent_reg.async_get_entity_id(
-                "number", DOMAIN, f"{entry.entry_id}_bat1_capacity"
+                "number", DOMAIN, f"{_STACK_ID}_bat1_capacity"
             )
             is not None
         )
@@ -251,7 +267,7 @@ class TestNumberEntityRegistration:
         await hass.async_block_till_done()
 
         entity_id = ent_reg.async_get_entity_id(
-            "number", DOMAIN, f"{entry.entry_id}_bat1_capacity"
+            "number", DOMAIN, f"{_STACK_ID}_bat1_capacity"
         )
         assert entity_id is not None
         state = hass.states.get(entity_id)
@@ -272,13 +288,13 @@ class TestNumberEntityRegistration:
 
         assert (
             ent_reg.async_get_entity_id(
-                "number", DOMAIN, f"{entry.entry_id}_bat1_capacity"
+                "number", DOMAIN, f"{_STACK_ID}_bat1_capacity"
             )
             is not None
         )
         assert (
             ent_reg.async_get_entity_id(
-                "number", DOMAIN, f"{entry.entry_id}_bat2_capacity"
+                "number", DOMAIN, f"{_STACK_ID}_bat2_capacity"
             )
             is not None
         )

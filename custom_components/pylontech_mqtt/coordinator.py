@@ -34,6 +34,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
         self._mqtt_port = mqtt_port
         self._mqtt_user = mqtt_user
         self._mqtt_pass = mqtt_pass
+        self.topic_prefix = topic_prefix
         self._state_topic = f"{topic_prefix}/state"
         self._avail_topic = f"{topic_prefix}/availability"
         self._client: mqtt.Client | None = None
@@ -219,3 +220,38 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
     def set_battery_capacity(self, bat_id: int, capacity: float) -> None:
         """Update the configured capacity for a specific battery module."""
         self.battery_capacities[bat_id] = capacity
+
+    # ------------------------------------------------------------------
+    # Per-module / per-cell presence
+    #
+    # The sidecar's "pwr" parser drops "Absent" module rows from the
+    # payload entirely (see pylontech_parser.parse_pwr), so a module that
+    # drops out simply stops appearing in system["batteries"] on the next
+    # message — it is never reported as present-but-errored. Entities for
+    # that module and its cells are deliberately NOT removed from the
+    # registry when this happens (that would delete history/customization
+    # for what may just be a transient blip, and re-adding it later would
+    # get a fresh entity_id, undermining the stable-identity fix in
+    # entity.py). Instead, PylontechBatteryEntity/PylontechCellEntity use
+    # these to report themselves unavailable while their module is absent,
+    # rather than silently freezing on stale last-known values.
+    # ------------------------------------------------------------------
+
+    def is_battery_present(self, bat_id: int) -> bool:
+        """Return whether *bat_id* appears in the most recent payload."""
+        if not self.data:
+            return False
+        return any(
+            bat.get("sys_id") == bat_id for bat in self.data.get("batteries", [])
+        )
+
+    def is_cell_present(self, bat_id: int, cell_id: int) -> bool:
+        """Return whether *cell_id* of *bat_id* appears in the most recent payload."""
+        if not self.data:
+            return False
+        for bat in self.data.get("batteries", []):
+            if bat.get("sys_id") == bat_id:
+                return any(
+                    cell.get("cell_id") == cell_id for cell in bat.get("cells", [])
+                )
+        return False

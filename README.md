@@ -26,6 +26,8 @@ The sidecar and HA are completely decoupled. You can run the sidecar on any mach
 - **Energy Dashboard Ready**: `energy_in` / `energy_out` sensors with `total_increasing` state class, ready for the HA Energy dashboard.
 - **Per-Battery Monitoring**: Voltage, Current, SOC, Temperature, Status, min/max cell values for each module.
 - **Per-Battery Capacity**: Number entity per module lets you tune the kWh capacity for accurate stored-energy calculation.
+- **Stable entity identity**: Entities and devices are keyed off the MQTT topic prefix, not an internal config-entry ID — deleting and re-adding the integration with the same topic prefix keeps your existing entity IDs, history, and dashboard references instead of creating duplicates.
+- **Per-module availability**: A battery module (or cell) that drops out of the stack's reported data shows as unavailable instead of silently freezing on its last known values.
 - **Diagnostic sensors**: Cycle count, SOH, firmware/board/comm versions, charge/discharge counters, fault event counts.
 - **Diagnostics download**: Supports HA's built-in "Download diagnostics" for the config entry when reporting issues (broker password is redacted).
 - **Automatic reconnection**: The sidecar reconnects to the BMS on failure; the HA coordinator reconnects to MQTT automatically.

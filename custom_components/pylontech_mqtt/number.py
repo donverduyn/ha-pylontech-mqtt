@@ -32,7 +32,9 @@ async def async_setup_entry(
             if bat_id not in seen_bat_ids:
                 seen_bat_ids.add(bat_id)
                 new_entities.append(
-                    PylontechBatteryCapacityNumber(coordinator, entry.entry_id, bat_id)
+                    PylontechBatteryCapacityNumber(
+                        coordinator, coordinator.topic_prefix, bat_id
+                    )
                 )
         if new_entities:
             async_add_entities(new_entities)
@@ -47,12 +49,12 @@ class PylontechBatteryCapacityNumber(PylontechBatteryEntity, RestoreNumber):
     def __init__(
         self,
         coordinator: PylontechCoordinator,
-        unique_id_prefix: str,
+        topic_prefix: str,
         bat_id: int,
     ) -> None:
-        super().__init__(coordinator, unique_id_prefix, bat_id)
+        super().__init__(coordinator, topic_prefix, bat_id)
 
-        self._attr_unique_id = f"{unique_id_prefix}_bat{bat_id}_capacity"
+        self._attr_unique_id = f"{self._stack_id}_bat{bat_id}_capacity"
         self._attr_translation_key = "battery_capacity"
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
         self._attr_device_class = NumberDeviceClass.ENERGY_STORAGE

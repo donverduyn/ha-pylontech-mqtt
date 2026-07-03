@@ -293,6 +293,69 @@ class TestDeviceInfo:
 
 
 # ===========================================================================
+# Availability — a missing module/cell must report unavailable, not just
+# freeze on stale values (PylontechBatteryEntity/PylontechCellEntity.available)
+# ===========================================================================
+
+
+class TestAvailability:
+    async def test_battery_available_when_present(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        coord_with_data.last_update_success = True
+        assert _bat(coord_with_data, "voltage", bat_id=1).available is True
+
+    async def test_battery_unavailable_when_dropped_from_payload(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        """Module 2 was never in _PAYLOAD (only module 1 is) — this is the
+        same situation as a module dropping out between polls."""
+        coord_with_data.last_update_success = True
+        assert _bat(coord_with_data, "voltage", bat_id=2).available is False
+
+    async def test_battery_unavailable_when_coordinator_unavailable(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        """Coordinator-level unavailability must still take priority even
+        for a module that IS present in the last-known payload."""
+        coord_with_data.last_update_success = False
+        assert _bat(coord_with_data, "voltage", bat_id=1).available is False
+
+    async def test_battery_unavailable_before_first_payload(
+        self, coord: PylontechCoordinator
+    ) -> None:
+        coord.last_update_success = True
+        assert _bat(coord, "voltage", bat_id=1).available is False
+
+    async def test_cell_available_when_present(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        coord_with_data.last_update_success = True
+        assert _cell(coord_with_data, "voltage", bat_id=1, cell_id=0).available is True
+
+    async def test_cell_unavailable_when_dropped_from_payload(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        coord_with_data.last_update_success = True
+        assert _cell(coord_with_data, "voltage", bat_id=1, cell_id=9).available is False
+
+    async def test_cell_unavailable_when_parent_battery_absent(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        """A cell can't be available if its own module isn't reporting at all."""
+        coord_with_data.last_update_success = True
+        assert _cell(coord_with_data, "voltage", bat_id=2, cell_id=0).available is False
+
+    async def test_system_availability_unaffected_by_battery_presence(
+        self, coord_with_data: PylontechCoordinator
+    ) -> None:
+        """System-level entities track only coordinator availability — there
+        is no per-module presence concept at the stack level."""
+        coord_with_data.last_update_success = True
+        assert _sys(coord_with_data, "voltage").available is True
+
+
+# ===========================================================================
 # Sensor metadata — unit_of_measurement, device_class, state_class
 # Protects the HA energy dashboard and device history from regressions.
 # ===========================================================================

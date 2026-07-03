@@ -254,6 +254,76 @@ class TestSetBatteryCapacity:
 
 
 # ---------------------------------------------------------------------------
+# is_battery_present / is_cell_present
+# ---------------------------------------------------------------------------
+
+
+class TestBatteryAndCellPresence:
+    async def test_absent_before_any_payload(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        assert coordinator.is_battery_present(1) is False
+        assert coordinator.is_cell_present(1, 0) is False
+
+    async def test_present_battery_after_payload(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(_PAYLOAD)  # only bat 1
+        assert coordinator.is_battery_present(1) is True
+
+    async def test_unknown_battery_id_is_absent(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(_PAYLOAD)  # only bat 1
+        assert coordinator.is_battery_present(99) is False
+
+    async def test_battery_dropped_between_payloads_becomes_absent(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        """A module present in one payload but missing from the next
+        (the sidecar drops "Absent" rows entirely) must read as absent —
+        this is what lets entity availability track real module presence."""
+        two_batteries = {
+            **_PAYLOAD,
+            "batteries": [_BAT1, {**_BAT1, "sys_id": 2}],
+        }
+        coordinator._process_payload(two_batteries)
+        assert coordinator.is_battery_present(2) is True
+
+        coordinator._process_payload(_PAYLOAD)  # bat 2 no longer reported
+        assert coordinator.is_battery_present(2) is False
+        assert coordinator.is_battery_present(1) is True
+
+    async def test_present_cell(self, coordinator: PylontechCoordinator) -> None:
+        cell = {"cell_id": 0, "voltage": 3.4, "soc": 80, "base_state": "Charge"}
+        payload = {**_PAYLOAD, "batteries": [{**_BAT1, "cells": [cell]}]}
+        coordinator._process_payload(payload)
+        assert coordinator.is_cell_present(1, 0) is True
+
+    async def test_cell_absent_when_its_battery_is_absent(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(_PAYLOAD)  # bat 1 exists, no bat 2 at all
+        assert coordinator.is_cell_present(2, 0) is False
+
+    async def test_cell_dropped_between_payloads_becomes_absent(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        cell0 = {"cell_id": 0, "voltage": 3.4, "soc": 80, "base_state": "Charge"}
+        cell1 = {"cell_id": 1, "voltage": 3.4, "soc": 80, "base_state": "Charge"}
+        coordinator._process_payload(
+            {**_PAYLOAD, "batteries": [{**_BAT1, "cells": [cell0, cell1]}]}
+        )
+        assert coordinator.is_cell_present(1, 1) is True
+
+        coordinator._process_payload(
+            {**_PAYLOAD, "batteries": [{**_BAT1, "cells": [cell0]}]}
+        )
+        assert coordinator.is_cell_present(1, 1) is False
+        assert coordinator.is_cell_present(1, 0) is True
+
+
+# ---------------------------------------------------------------------------
 # Auto-capacity detection via _process_payload
 # ---------------------------------------------------------------------------
 

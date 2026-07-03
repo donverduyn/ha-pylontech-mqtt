@@ -95,8 +95,21 @@ AVAIL_TOPIC = f"{MQTT_TOPIC_PREFIX}/availability"
 # ---------------------------------------------------------------------------
 
 
+PROMPT = b"pylon>"
+_READ_TIMEOUT = 5.0  # overall deadline waiting for a complete response
+_POLL_INTERVAL = 0.1  # per-read timeout while polling for more data
+
+
 class BmsConnection:
-    """Manages a serial or TCP connection to the Pylontech BMS."""
+    """Manages a serial or TCP connection to the Pylontech BMS.
+
+    Every command's response ends with the console's "pylon>" prompt, so
+    reads poll in short bursts until that terminator appears (or a deadline
+    elapses) instead of sleeping a fixed duration and grabbing whatever
+    happens to be available — a fast response returns immediately, a slow
+    one gets the full deadline, and a response is never returned truncated
+    mid-stream.
+    """
 
     def __init__(self) -> None:
         self._tcp: socket.socket | None = None
@@ -109,9 +122,20 @@ class BmsConnection:
             s.settimeout(5)
             s.connect((TCP_HOST, TCP_PORT))
             self._tcp = s
+            # The console sends an unsolicited banner/prompt as soon as a
+            # client connects; drain it now so it can't be mistaken for part
+            # of the first real command's response.
+            self._read_until_prompt()
         else:
             _LOGGER.info("Opening serial on %s @ %d baud", SERIAL_PORT, BAUD_RATE)
-            self._serial = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
+            self._serial = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=_POLL_INTERVAL)
+            # Unlike a fresh TCP session, opening the serial port doesn't by
+            # itself make the BMS print anything. Prime it with a blank line
+            # to elicit a known-fresh prompt, then drain it — this also
+            # clears out any stale bytes left over from a previous run.
+            self._serial.reset_input_buffer()
+            self._serial.write(b"\n")
+            self._read_until_prompt()
 
     def _ensure_open(self) -> None:
         if CONNECTION_TYPE == "tcp":
@@ -123,6 +147,32 @@ class BmsConnection:
             elif not self._serial.is_open:
                 self._serial.open()
 
+    def _read_until_prompt(self) -> bytes:
+        """Read chunks until the "pylon>" prompt appears, or _READ_TIMEOUT elapses."""
+        deadline = time.monotonic() + _READ_TIMEOUT
+        data = b""
+        while time.monotonic() < deadline:
+            if CONNECTION_TYPE == "tcp":
+                if self._tcp is None:
+                    break
+                self._tcp.settimeout(_POLL_INTERVAL)
+                try:
+                    chunk = self._tcp.recv(4096)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break  # remote closed the connection
+            else:
+                if self._serial is None:
+                    break
+                chunk = self._serial.read(4096)
+                if not chunk:
+                    continue
+            data += chunk
+            if PROMPT in data:
+                break
+        return data
+
     def send_command(self, cmd: str) -> str:
         """Send a command and return the ASCII response."""
         self._ensure_open()
@@ -130,28 +180,12 @@ class BmsConnection:
             if self._tcp is None:
                 raise RuntimeError("TCP socket is not open")
             self._tcp.sendall((cmd + "\n").encode("ascii"))
-            time.sleep(1.0)
-            data = b""
-            self._tcp.settimeout(2.0)
-            try:
-                while True:
-                    chunk = self._tcp.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-            except socket.timeout:
-                pass
-            return data.decode("ascii", errors="ignore")
         else:
             if self._serial is None:
                 raise RuntimeError("Serial port is not open")
             self._serial.reset_input_buffer()
-            self._serial.write(b"\n")
-            time.sleep(0.1)
-            self._serial.read_all()
             self._serial.write((cmd + "\n").encode("ascii"))
-            time.sleep(1.0)
-            return (self._serial.read_all() or b"").decode("ascii", errors="ignore")
+        return self._read_until_prompt().decode("ascii", errors="ignore")
 
     def close(self) -> None:
         for conn in (self._tcp, self._serial):
@@ -170,10 +204,18 @@ class BmsConnection:
 
 
 class EnergyTracker:
+    # A gap longer than this is treated as a comms outage / stall rather than
+    # a real interval — its energy is dropped instead of integrated, the same
+    # way invalidate_last_time() already handles an explicit reconnect gap.
+    # Guards against system clock jumps and long stalls that weren't
+    # explicitly invalidated inflating the counters via a huge bogus delta.
+    _MAX_INTERVAL_SECONDS = 3600.0
+
     def __init__(self, state_file: str = "") -> None:
         self.energy_in: float = 0.0
         self.energy_out: float = 0.0
-        self._last_time: Optional[datetime] = None
+        self._last_time: Optional[float] = None  # time.monotonic() timestamp
+        self._last_power: Optional[float] = None
         self._state_file = state_file
         if state_file:
             self._load()
@@ -202,41 +244,65 @@ class EnergyTracker:
             )
 
     def _save(self) -> None:
-        """Persist current counters to the state file."""
+        """Persist current counters to the state file.
+
+        Writes to a temp file in the same directory and atomically renames it
+        into place with os.replace(), so a crash or power loss mid-write can
+        never leave a partially-written, corrupt state file — a reader always
+        sees either the old or the new content in full.
+        """
         try:
-            parent = os.path.dirname(self._state_file)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            with open(self._state_file, "w") as f:
+            parent = os.path.dirname(self._state_file) or "."
+            os.makedirs(parent, exist_ok=True)
+            tmp_path = f"{self._state_file}.tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(
                     {"energy_in": self.energy_in, "energy_out": self.energy_out}, f
                 )
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._state_file)
         except OSError as err:
             _LOGGER.warning(
                 "Could not save energy state to %s: %s", self._state_file, err
             )
 
     def update(self, power_w: float) -> None:
-        now = datetime.now()
-        if self._last_time is not None:
-            hours = (now - self._last_time).total_seconds() / 3600.0
-            kwh = abs(power_w * hours) / 1000.0
-            if power_w >= 0:
-                self.energy_in += kwh
-            else:
-                self.energy_out += kwh
-            if self._state_file:
-                self._save()
+        now = time.monotonic()
+        if self._last_time is not None and self._last_power is not None:
+            elapsed_seconds = now - self._last_time
+            if 0 < elapsed_seconds <= self._MAX_INTERVAL_SECONDS:
+                # Trapezoidal integration: average this sample with the
+                # previous one rather than assuming the whole interval was at
+                # the latest reading (rectangular/step integration mis-counts
+                # whenever power changes materially between polls).
+                avg_power = (self._last_power + power_w) / 2.0
+                hours = elapsed_seconds / 3600.0
+                kwh = abs(avg_power * hours) / 1000.0
+                if avg_power >= 0:
+                    self.energy_in += kwh
+                else:
+                    self.energy_out += kwh
+                if self._state_file:
+                    self._save()
+            elif elapsed_seconds > self._MAX_INTERVAL_SECONDS:
+                _LOGGER.warning(
+                    "Skipping energy integration over an unexpectedly long "
+                    "%.0f s gap (system clock jump or stall?)",
+                    elapsed_seconds,
+                )
         self._last_time = now
+        self._last_power = power_w
 
     def invalidate_last_time(self) -> None:
-        """Clear the last-poll timestamp.
+        """Clear the last-poll timestamp and power sample.
 
         Must be called after any communication gap (BMS error, reconnect) so
         that the next update() call does not compute a kWh delta spanning the
         outage period and falsely inflate the energy counters.
         """
         self._last_time = None
+        self._last_power = None
 
 
 # ---------------------------------------------------------------------------
