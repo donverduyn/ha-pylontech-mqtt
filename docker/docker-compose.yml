@@ -31,3 +31,13 @@ services:
     # Only needed for serial mode — map the USB device into the container
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
+
+    # Persists energy_state.json (cumulative energy_in/energy_out) across
+    # container recreation — without this volume the counters reset every
+    # time the container is rebuilt/recreated (they survive plain restarts
+    # either way, since the writable layer itself is kept).
+    volumes:
+      - energy_state:/data
+
+volumes:
+  energy_state:

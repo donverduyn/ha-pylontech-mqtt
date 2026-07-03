@@ -204,6 +204,9 @@ class EnergyTracker:
     def _save(self) -> None:
         """Persist current counters to the state file."""
         try:
+            parent = os.path.dirname(self._state_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             with open(self._state_file, "w") as f:
                 json.dump(
                     {"energy_in": self.energy_in, "energy_out": self.energy_out}, f

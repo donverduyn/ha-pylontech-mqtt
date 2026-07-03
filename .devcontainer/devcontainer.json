@@ -4,7 +4,9 @@
   "name": "Python 3",
   "image": "mcr.microsoft.com/devcontainers/python:3-3.14-trixie",
   "features": {
-    "ghcr.io/devcontainers-extra/features/ripgrep:1": {}
+    "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers-extra/features/claude-code:2": {}
   },
   // Recreate the venv with pip and install all dev dependencies on container creation.
   "postCreateCommand": "python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements_dev.txt",

@@ -79,6 +79,13 @@ services:
 
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0   # serial mode only
+
+    # Persists cumulative energy_in/energy_out across container recreation
+    volumes:
+      - energy_state:/data
+
+volumes:
+  energy_state:
 ```
 
 Build and start:
@@ -108,6 +115,7 @@ The sidecar publishes:
 | `MQTT_TOPIC_PREFIX` | `pylontech/stack` | Base topic; `/state` and `/availability` are appended |
 | `POLL_INTERVAL` | `15` | Seconds between BMS polls |
 | `AUTO_SYNC_TIME` | `false` | Sync BMS clock to system time on startup |
+| `ENERGY_STATE_FILE` | `/data/energy_state.json` | Where cumulative energy_in/energy_out are persisted; set to `""` to disable. Requires the `/data` volume mount shown above to survive container recreation. |
 
 ### Step 2 — Install the HA integration
 
