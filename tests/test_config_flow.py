@@ -36,9 +36,12 @@ def _enable_custom_integrations(enable_custom_integrations) -> None:
 
 async def test_form_shown_on_user_step(hass: HomeAssistant) -> None:
     """Opening the config flow must show the MQTT broker form."""
-    result = cast(dict[str, Any], await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    ))
+    result = cast(
+        dict[str, Any],
+        await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        ),
+    )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "user"
 
@@ -49,9 +52,12 @@ async def test_cannot_connect_shows_error(hass: HomeAssistant) -> None:
         init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        result = cast(dict[str, Any], await hass.config_entries.flow.async_configure(
-            init["flow_id"], _VALID_INPUT
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init["flow_id"], _VALID_INPUT
+            ),
+        )
     assert result["type"] == FlowResultType.FORM
     assert result["errors"]["base"] == "cannot_connect"
 
@@ -62,9 +68,12 @@ async def test_invalid_auth_shows_error(hass: HomeAssistant) -> None:
         init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        result = cast(dict[str, Any], await hass.config_entries.flow.async_configure(
-            init["flow_id"], _VALID_INPUT
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init["flow_id"], _VALID_INPUT
+            ),
+        )
     assert result["errors"]["base"] == "invalid_auth"
 
 
@@ -74,9 +83,12 @@ async def test_successful_entry_created(hass: HomeAssistant) -> None:
         init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        result = cast(dict[str, Any], await hass.config_entries.flow.async_configure(
-            init["flow_id"], _VALID_INPUT
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init["flow_id"], _VALID_INPUT
+            ),
+        )
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"]["mqtt_host"] == "localhost"
     assert result["data"]["mqtt_port"] == 1883
@@ -96,9 +108,12 @@ async def test_duplicate_host_port_topic_aborts(hass: HomeAssistant) -> None:
         init2 = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        result2 = cast(dict[str, Any], await hass.config_entries.flow.async_configure(
-            init2["flow_id"], _VALID_INPUT
-        ))
+        result2 = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init2["flow_id"], _VALID_INPUT
+            ),
+        )
     assert result2["type"] == FlowResultType.ABORT
     assert result2["reason"] == "already_configured"
 
@@ -112,9 +127,12 @@ async def test_timeout_treated_as_cannot_connect(hass: HomeAssistant) -> None:
         init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        result = cast(dict[str, Any], await hass.config_entries.flow.async_configure(
-            init["flow_id"], _VALID_INPUT
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.flow.async_configure(
+                init["flow_id"], _VALID_INPUT
+            ),
+        )
     assert result["errors"]["base"] == "cannot_connect"
 
 
@@ -132,7 +150,9 @@ async def test_options_form_shown(hass: HomeAssistant) -> None:
         await hass.config_entries.flow.async_configure(init["flow_id"], _VALID_INPUT)
 
     entry = hass.config_entries.async_entries(DOMAIN)[0]
-    result = cast(dict[str, Any], await hass.config_entries.options.async_init(entry.entry_id))
+    result = cast(
+        dict[str, Any], await hass.config_entries.options.async_init(entry.entry_id)
+    )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "init"
 
@@ -149,10 +169,13 @@ async def test_options_cannot_connect(hass: HomeAssistant) -> None:
     opts = await hass.config_entries.options.async_init(entry.entry_id)
 
     with patch(_PATCH_CONN, return_value="cannot_connect"):
-        result = cast(dict[str, Any], await hass.config_entries.options.async_configure(
-            opts["flow_id"],
-            {**_VALID_INPUT, "mqtt_host": "192.168.1.99"},
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.options.async_configure(
+                opts["flow_id"],
+                {**_VALID_INPUT, "mqtt_host": "192.168.1.99"},
+            ),
+        )
     assert result["errors"]["base"] == "cannot_connect"
 
 
@@ -173,9 +196,12 @@ async def test_options_updated_successfully(hass: HomeAssistant) -> None:
         opts = await hass.config_entries.options.async_init(entry.entry_id)
 
         new_input = {**_VALID_INPUT, "mqtt_host": "192.168.1.5"}
-        result = cast(dict[str, Any], await hass.config_entries.options.async_configure(
-            opts["flow_id"], new_input
-        ))
+        result = cast(
+            dict[str, Any],
+            await hass.config_entries.options.async_configure(
+                opts["flow_id"], new_input
+            ),
+        )
         # Drain the scheduled reload task before the patch exits.
         await hass.async_block_till_done()
 
