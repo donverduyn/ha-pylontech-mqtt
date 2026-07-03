@@ -32,8 +32,8 @@ from typing import Optional
 
 import paho.mqtt.client as mqtt
 import serial
-from pylontech_parser import PylontechParser
 from paho.mqtt.enums import CallbackAPIVersion
+from pylontech_parser import PylontechParser
 from structs import PylontechSystem
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """Unit tests for EnergyTracker (docker/main.py)."""
+
 from datetime import datetime
 from unittest.mock import patch
 
 import pytest
-
 from main import EnergyTracker
 
 
@@ -90,8 +90,8 @@ class TestEnergyTrackerCumulative:
         t2 = datetime(2024, 1, 1, 14, 0, 0)
         with patch("main.datetime") as mock_dt:
             mock_dt.now.side_effect = [t0, t1, t2]
-            tracker.update(500.0)    # first call: no accumulation
-            tracker.update(500.0)    # 1 h at 500 W → 0.5 kWh in
-            tracker.update(-500.0)   # 1 h at -500 W → 0.5 kWh out
+            tracker.update(500.0)  # first call: no accumulation
+            tracker.update(500.0)  # 1 h at 500 W → 0.5 kWh in
+            tracker.update(-500.0)  # 1 h at -500 W → 0.5 kWh out
         assert tracker.energy_in == pytest.approx(0.5)
         assert tracker.energy_out == pytest.approx(0.5)

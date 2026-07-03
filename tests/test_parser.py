@@ -17,8 +17,8 @@ from conftest import (
     STUB_SOC_START,
     _raw_command,
 )
-from pylontech_parser import PylontechParser
 from pylontech_mqtt.capacity import parse_spec_capacity
+from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
 

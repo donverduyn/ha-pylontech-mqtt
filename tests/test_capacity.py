@@ -1,4 +1,5 @@
 """Tests for parse_spec_capacity."""
+
 import pytest
 
 from custom_components.pylontech_mqtt.capacity import parse_spec_capacity

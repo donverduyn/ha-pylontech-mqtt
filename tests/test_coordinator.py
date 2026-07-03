@@ -410,9 +410,7 @@ class TestOnMessageErrors:
         coordinator._on_message(
             None,
             None,
-            SimpleNamespace(
-                topic="pylontech/stack/availability", payload=b"\xff\xfe"
-            ),
+            SimpleNamespace(topic="pylontech/stack/availability", payload=b"\xff\xfe"),
         )
         await hass.async_block_till_done()
         assert coordinator.last_update_success is False
@@ -424,9 +422,7 @@ class TestOnMessageErrors:
         coordinator._on_message(
             None,
             None,
-            SimpleNamespace(
-                topic="pylontech/stack/state", payload=b"not-json{}"
-            ),
+            SimpleNamespace(topic="pylontech/stack/state", payload=b"not-json{}"),
         )
         await hass.async_block_till_done()
         assert coordinator.data is None
@@ -438,9 +434,7 @@ class TestOnMessageErrors:
         coordinator._on_message(
             None,
             None,
-            SimpleNamespace(
-                topic="pylontech/stack/state", payload=b"\xff\xfe"
-            ),
+            SimpleNamespace(topic="pylontech/stack/state", payload=b"\xff\xfe"),
         )
         await hass.async_block_till_done()
         assert coordinator.data is None

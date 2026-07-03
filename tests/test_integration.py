@@ -1,5 +1,6 @@
 """End-to-end integration tests: entry setup → MQTT payload → sensor states."""
-from typing import Any, cast
+
+from typing import Any
 from unittest.mock import patch
 
 import pytest
