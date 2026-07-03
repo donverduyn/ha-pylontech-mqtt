@@ -94,8 +94,11 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._avail_topic:
-            if msg.payload.decode() != "online":
-                self.hass.call_soon_threadsafe(self._mark_unavailable)
+            if msg.payload.decode() == "online":
+                if self.data is not None:
+                    self.hass.loop.call_soon_threadsafe(self._mark_available)
+            else:
+                self.hass.loop.call_soon_threadsafe(self._mark_unavailable)
             return
 
         try:
@@ -107,7 +110,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
         # Hand off to the HA event loop — all state mutations (deserialization,
         # energy computation, capacity lookups) happen on a single thread so
         # battery_capacities never needs a lock.
-        self.hass.call_soon_threadsafe(self._process_payload, payload)
+        self.hass.loop.call_soon_threadsafe(self._process_payload, payload)
 
     def _process_payload(self, payload: dict) -> None:
         """Deserialize and update coordinator data. Always called on the HA event loop."""
@@ -150,6 +153,10 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _mark_available(self) -> None:
+        self.last_update_success = True
+        self.async_update_listeners()
 
     def _mark_unavailable(self) -> None:
         self.last_update_success = False

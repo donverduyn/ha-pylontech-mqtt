@@ -6,6 +6,8 @@ The coordinator's MQTT client is never started (no ``setup()`` call), so these
 tests exercise the pure-logic methods in isolation.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from homeassistant.core import HomeAssistant
 
@@ -304,3 +306,91 @@ class TestAutoCapacity:
         coordinator._process_payload(_PAYLOAD)
         assert coordinator.data["batteries"][0]["energy_stored"] > 0
         assert coordinator.data["energy_stored"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Availability lifecycle (_mark_available / _mark_unavailable / _on_message)
+# ---------------------------------------------------------------------------
+
+
+def _msg(topic: str, payload: str) -> SimpleNamespace:
+    """Build a minimal paho-style message object for _on_message tests."""
+    return SimpleNamespace(topic=topic, payload=payload.encode())
+
+
+class TestAvailability:
+    async def test_mark_unavailable_sets_flag(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator.last_update_success = True
+        coordinator._mark_unavailable()
+        assert coordinator.last_update_success is False
+
+    async def test_mark_available_sets_flag(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator.last_update_success = False
+        coordinator._mark_available()
+        assert coordinator.last_update_success is True
+
+    async def test_offline_message_marks_unavailable(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """Receiving 'offline' on the avail topic must mark the coordinator unavailable."""
+        coordinator.last_update_success = True
+        coordinator._on_message(
+            None, None, _msg("pylontech/stack/availability", "offline")
+        )
+        await hass.async_block_till_done()
+        assert coordinator.last_update_success is False
+
+    async def test_online_after_offline_restores_available(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """Receiving 'online' after 'offline' must restore availability when data exists."""
+        coordinator._process_payload(_PAYLOAD)  # populate coordinator.data
+        coordinator._mark_unavailable()  # simulate sidecar going offline
+        assert coordinator.last_update_success is False
+
+        coordinator._on_message(
+            None, None, _msg("pylontech/stack/availability", "online")
+        )
+        await hass.async_block_till_done()
+        assert coordinator.last_update_success is True
+
+    async def test_online_without_data_does_not_mark_available(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """'online' before any state message must not falsely claim availability."""
+        assert coordinator.data is None
+        coordinator._on_message(
+            None, None, _msg("pylontech/stack/availability", "online")
+        )
+        await hass.async_block_till_done()
+        # last_update_success starts False and must remain False — no data yet
+        assert coordinator.last_update_success is False
+
+    async def test_unrecognised_avail_payload_marks_unavailable(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """Any payload other than 'online' must be treated as unavailable."""
+        coordinator.last_update_success = True
+        coordinator._on_message(
+            None, None, _msg("pylontech/stack/availability", "unknown")
+        )
+        await hass.async_block_till_done()
+        assert coordinator.last_update_success is False
+
+    async def test_state_message_not_dispatched_to_availability_handler(
+        self, hass: HomeAssistant, coordinator: PylontechCoordinator
+    ) -> None:
+        """A valid state JSON on the state topic must populate data, not change avail flag."""
+        import json
+
+        coordinator.last_update_success = False
+        coordinator._on_message(
+            None, None, _msg("pylontech/stack/state", json.dumps(_PAYLOAD))
+        )
+        await hass.async_block_till_done()
+        assert coordinator.data is not None
+        assert coordinator.last_update_success is True
