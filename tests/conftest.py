@@ -2,25 +2,22 @@
 """
 Shared pytest fixtures and import bootstrap for ha-pylontech-mqtt tests.
 
-The custom_components package pulls in `homeassistant` at __init__.py time,
-which is not available outside HA.  We bypass __init__.py by registering a
-namespace package manually in sys.modules, then loading pylontech_parser.py / structs.py
-directly via importlib.  Both files have zero HA dependencies.
+`pyproject.toml` puts the repo root and `docker/` on ``pythonpath``, so both
+`custom_components.pylontech_mqtt.*` and the HA-independent `pylontech_parser` /
+`structs` modules import normally with no manual sys.modules wiring needed.
 """
 
-import importlib.util
 import socket
 import subprocess
 import sys
 import time
-import types
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 _ROOT = Path(__file__).parent.parent
-_COMP = _ROOT / "custom_components" / "pylontech_mqtt"
 
 
 # ---------------------------------------------------------------------------
@@ -58,29 +55,48 @@ def hass_config_dir() -> str:
     return str(_ROOT)
 
 
-# Register a namespace package so relative imports inside the module files work
-_pkg = types.ModuleType("pylontech_mqtt")
-_pkg.__path__ = [str(_COMP)]
-_pkg.__package__ = "pylontech_mqtt"
-sys.modules.setdefault("pylontech_mqtt", _pkg)
+# ---------------------------------------------------------------------------
+# Shared config-flow patch targets
+#
+# Every test that drives the config/options flow without a real MQTT broker
+# patches these same two boundaries. Defined once here so a future rename of
+# either target can't drift out of sync across test files.
+# ---------------------------------------------------------------------------
+PATCH_CONN = "custom_components.pylontech_mqtt.config_flow._test_mqtt_connection"
+PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinator.setup"
 
 
-def _load_module(name: str, path: Path):
-    """Load a single .py file into sys.modules as part of the pylontech_mqtt pkg."""
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None:
-        raise ImportError(f"Cannot find module spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "pylontech_mqtt"
-    sys.modules[name] = mod
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    return mod
+def make_coordinator(hass, *, topic_prefix: str = "pylontech/stack"):
+    """Build a bare PylontechCoordinator wired to *hass* (MQTT client not started)."""
+    from custom_components.pylontech_mqtt.coordinator import PylontechCoordinator
+
+    return PylontechCoordinator(
+        hass=hass,
+        mqtt_host="localhost",
+        mqtt_port=1883,
+        mqtt_user="",
+        mqtt_pass="",
+        topic_prefix=topic_prefix,
+    )
 
 
-_load_module("pylontech_mqtt.capacity", _COMP / "capacity.py")
+async def create_config_entry(hass, entry_data: dict):
+    """Drive the user config flow to create an entry; return (entry, coordinator)."""
+    from homeassistant import config_entries
+
+    from custom_components.pylontech_mqtt.const import DOMAIN
+
+    with patch(PATCH_CONN, return_value=None), patch(PATCH_SETUP):
+        init = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await hass.config_entries.flow.async_configure(init["flow_id"], entry_data)
+        await hass.async_block_till_done()
+
+    entries = hass.config_entries.async_entries(DOMAIN)
+    assert entries, "Config entry was not created"
+    entry = entries[0]
+    return entry, hass.data[DOMAIN][entry.entry_id]
 
 
 # ---------------------------------------------------------------------------

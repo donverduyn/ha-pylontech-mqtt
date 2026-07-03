@@ -6,6 +6,7 @@ are the primary output users see in the dashboard.
 """
 
 import pytest
+from conftest import make_coordinator
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     PERCENTAGE,
@@ -73,14 +74,7 @@ _PAYLOAD = {
 
 @pytest.fixture
 async def coord(hass: HomeAssistant) -> PylontechCoordinator:
-    return PylontechCoordinator(
-        hass=hass,
-        mqtt_host="localhost",
-        mqtt_port=1883,
-        mqtt_user="",
-        mqtt_pass="",
-        topic_prefix="test",
-    )
+    return make_coordinator(hass)
 
 
 @pytest.fixture

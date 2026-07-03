@@ -9,6 +9,7 @@ tests exercise the pure-logic methods in isolation.
 from types import SimpleNamespace
 
 import pytest
+from conftest import make_coordinator
 from homeassistant.core import HomeAssistant
 
 from custom_components.pylontech_mqtt.coordinator import PylontechCoordinator
@@ -51,14 +52,7 @@ _PAYLOAD: dict = {
 @pytest.fixture
 async def coordinator(hass: HomeAssistant) -> PylontechCoordinator:
     """Coordinator wired to the test HA instance, MQTT client not started."""
-    return PylontechCoordinator(
-        hass=hass,
-        mqtt_host="localhost",
-        mqtt_port=1883,
-        mqtt_user="",
-        mqtt_pass="",
-        topic_prefix="pylontech/stack",
-    )
+    return make_coordinator(hass)
 
 
 # ---------------------------------------------------------------------------
@@ -324,9 +318,11 @@ class TestAutoCapacity:
 # ---------------------------------------------------------------------------
 
 
-def _msg(topic: str, payload: str) -> SimpleNamespace:
+def _msg(topic: str, payload: str | bytes) -> SimpleNamespace:
     """Build a minimal paho-style message object for _on_message tests."""
-    return SimpleNamespace(topic=topic, payload=payload.encode())
+    return SimpleNamespace(
+        topic=topic, payload=payload if isinstance(payload, bytes) else payload.encode()
+    )
 
 
 class TestAvailability:
@@ -440,9 +436,7 @@ class TestOnMessageErrors:
         """A non-UTF-8 payload on the availability topic must be treated as offline."""
         coordinator.last_update_success = True
         coordinator._on_message(
-            None,
-            None,
-            SimpleNamespace(topic="pylontech/stack/availability", payload=b"\xff\xfe"),
+            None, None, _msg("pylontech/stack/availability", b"\xff\xfe")
         )
         await hass.async_block_till_done()
         assert coordinator.last_update_success is False
@@ -451,11 +445,7 @@ class TestOnMessageErrors:
         self, hass: HomeAssistant, coordinator: PylontechCoordinator
     ) -> None:
         """An invalid JSON payload on the state topic must not raise or update state."""
-        coordinator._on_message(
-            None,
-            None,
-            SimpleNamespace(topic="pylontech/stack/state", payload=b"not-json{}"),
-        )
+        coordinator._on_message(None, None, _msg("pylontech/stack/state", b"not-json{}"))
         await hass.async_block_till_done()
         assert coordinator.data is None
 
@@ -463,11 +453,7 @@ class TestOnMessageErrors:
         self, hass: HomeAssistant, coordinator: PylontechCoordinator
     ) -> None:
         """A non-UTF-8 payload on the state topic must not raise."""
-        coordinator._on_message(
-            None,
-            None,
-            SimpleNamespace(topic="pylontech/stack/state", payload=b"\xff\xfe"),
-        )
+        coordinator._on_message(None, None, _msg("pylontech/stack/state", b"\xff\xfe"))
         await hass.async_block_till_done()
         assert coordinator.data is None
 
@@ -478,13 +464,6 @@ class TestOnMessageErrors:
         be logged and dropped without updating coordinator.data."""
 
         for bad_value in ("null", "[]", "123"):
-            coordinator._on_message(
-                None,
-                None,
-                SimpleNamespace(
-                    topic="pylontech/stack/state",
-                    payload=bad_value.encode(),
-                ),
-            )
+            coordinator._on_message(None, None, _msg("pylontech/stack/state", bad_value))
         await hass.async_block_till_done()
         assert coordinator.data is None

@@ -9,9 +9,10 @@ entry loader and verify the entity lifecycle matches the sensor platform
 (absent before the first payload, present and correctly valued after it).
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from conftest import create_config_entry, make_coordinator
 from homeassistant.components.number import NumberDeviceClass, NumberMode
 from homeassistant.const import EntityCategory, UnitOfEnergy
 from homeassistant.core import HomeAssistant
@@ -58,10 +59,6 @@ _ENTRY_DATA: dict = {
     "mqtt_topic": "pylontech/stack",
 }
 
-_PATCH_CONN = "custom_components.pylontech_mqtt.config_flow._test_mqtt_connection"
-_PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinator.setup"
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -69,14 +66,7 @@ _PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinato
 
 @pytest.fixture
 async def coordinator(hass: HomeAssistant) -> PylontechCoordinator:
-    return PylontechCoordinator(
-        hass=hass,
-        mqtt_host="localhost",
-        mqtt_port=1883,
-        mqtt_user="",
-        mqtt_pass="",
-        topic_prefix="pylontech/stack",
-    )
+    return make_coordinator(hass)
 
 
 def _make_number(
@@ -213,17 +203,7 @@ class TestSetNativeValue:
 
 
 async def _create_entry(hass: HomeAssistant):
-    from homeassistant import config_entries
-
-    with patch(_PATCH_CONN, return_value=None), patch(_PATCH_SETUP):
-        init = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(init["flow_id"], _ENTRY_DATA)
-        await hass.async_block_till_done()
-    entries = hass.config_entries.async_entries(DOMAIN)
-    entry = entries[0]
-    return entry, hass.data[DOMAIN][entry.entry_id]
+    return await create_config_entry(hass, _ENTRY_DATA)
 
 
 class TestNumberEntityRegistration:

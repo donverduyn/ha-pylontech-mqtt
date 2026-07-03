@@ -1,15 +1,21 @@
 """Tests for Pylontech MQTT config flow (user setup and options update)."""
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
+from conftest import PATCH_CONN as _PATCH_CONN
+from conftest import PATCH_SETUP as _PATCH_SETUP
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.pylontech_mqtt.config_flow import _test_mqtt_connection
+from custom_components.pylontech_mqtt.config_flow import (
+    _reason_code_to_error,
+    _test_mqtt_connection,
+)
 
 DOMAIN = "pylontech_mqtt"
 
@@ -20,10 +26,6 @@ _VALID_INPUT = {
     "mqtt_pass": "",
     "mqtt_topic": "pylontech/stack",
 }
-
-# Shared patch helpers
-_PATCH_CONN = "custom_components.pylontech_mqtt.config_flow._test_mqtt_connection"
-_PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinator.setup"
 
 
 @pytest.fixture(autouse=True)
@@ -122,10 +124,7 @@ async def test_duplicate_host_port_topic_aborts(hass: HomeAssistant) -> None:
 
 async def test_timeout_treated_as_cannot_connect(hass: HomeAssistant) -> None:
     """If broker validation times out, the flow must show cannot_connect."""
-    with patch(
-        "custom_components.pylontech_mqtt.config_flow.asyncio.wait_for",
-        side_effect=asyncio.TimeoutError,
-    ):
+    with patch(_PATCH_CONN, side_effect=asyncio.TimeoutError):
         init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
@@ -245,6 +244,28 @@ async def test_options_update_rejects_duplicate_effective_settings(
 # ---------------------------------------------------------------------------
 # _test_mqtt_connection unit tests
 # ---------------------------------------------------------------------------
+
+
+def _reason_code(*, is_failure: bool, value: int | None = None) -> SimpleNamespace:
+    """Build a minimal paho-style reason code for _reason_code_to_error tests."""
+    return SimpleNamespace(is_failure=is_failure, value=value)
+
+
+def test_reason_code_success_returns_none() -> None:
+    """A non-failure CONNACK reason code must map to no error."""
+    assert _reason_code_to_error(_reason_code(is_failure=False)) is None
+
+
+@pytest.mark.parametrize("rc", [4, 5])
+def test_reason_code_bad_credentials_returns_invalid_auth(rc: int) -> None:
+    """CONNACK codes 4 and 5 (bad credentials/not authorized) must map to invalid_auth."""
+    assert _reason_code_to_error(_reason_code(is_failure=True, value=rc)) == "invalid_auth"
+
+
+@pytest.mark.parametrize("rc", [1, 2, 3, None])
+def test_reason_code_other_failure_returns_cannot_connect(rc: int | None) -> None:
+    """Any other failing CONNACK reason code must map to cannot_connect."""
+    assert _reason_code_to_error(_reason_code(is_failure=True, value=rc)) == "cannot_connect"
 
 
 def test_empty_hostname_returns_cannot_connect() -> None:

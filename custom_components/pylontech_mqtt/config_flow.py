@@ -24,6 +24,14 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _reason_code_to_error(reason_code) -> str | None:
+    """Map a CONNACK reason code to a config-flow error key, or None on success."""
+    if not reason_code.is_failure:
+        return None
+    rc = getattr(reason_code, "value", None)
+    return "invalid_auth" if rc in (4, 5) else "cannot_connect"
+
+
 def _test_mqtt_connection(
     host: str, port: int, user: str = "", password: str = ""
 ) -> str | None:
@@ -35,11 +43,7 @@ def _test_mqtt_connection(
     outcome: list[str | None] = [None]
 
     def on_connect(c, userdata, flags, reason_code, properties):
-        if reason_code.is_failure:
-            rc = getattr(reason_code, "value", None)
-            outcome[0] = "invalid_auth" if rc in (4, 5) else "cannot_connect"
-        else:
-            outcome[0] = "ok"
+        outcome[0] = _reason_code_to_error(reason_code) or "ok"
         c.disconnect()
 
     client = mqtt.Client(CallbackAPIVersion.VERSION2)

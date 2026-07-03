@@ -4,7 +4,8 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from homeassistant import config_entries
+from conftest import PATCH_SETUP as _PATCH_SETUP
+from conftest import create_config_entry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
@@ -56,10 +57,6 @@ _PAYLOAD: dict[str, Any] = {
     ],
 }
 
-_PATCH_CONN = "custom_components.pylontech_mqtt.config_flow._test_mqtt_connection"
-_PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinator.setup"
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -72,18 +69,7 @@ def _enable_custom_integrations(enable_custom_integrations) -> None:
 
 async def _create_entry(hass: HomeAssistant):
     """Create a config entry via the UI flow; return (entry, coordinator)."""
-    with patch(_PATCH_CONN, return_value=None), patch(_PATCH_SETUP):
-        init = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(init["flow_id"], _ENTRY_DATA)
-        await hass.async_block_till_done()
-
-    entries = hass.config_entries.async_entries(DOMAIN)
-    assert entries, "Config entry was not created"
-    entry = entries[0]
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    return entry, coordinator
+    return await create_config_entry(hass, _ENTRY_DATA)
 
 
 # ---------------------------------------------------------------------------

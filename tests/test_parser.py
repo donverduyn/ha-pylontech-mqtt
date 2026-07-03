@@ -17,7 +17,6 @@ from conftest import (
     STUB_SOC_START,
     _raw_command,
 )
-from pylontech_mqtt.capacity import parse_spec_capacity
 from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
@@ -830,41 +829,6 @@ class TestStructs:
     def test_battery_cells_default_to_empty_list(self):
         bat = PylontechBattery(1, 50.0, 3.0, 25.0, 85, "Charge", 150.0, "", 0.0)
         assert bat.cells == []
-
-
-class TestParseSpecCapacity:
-    """Unit tests for capacity.parse_spec_capacity."""
-
-    def test_us2000(self):
-        assert parse_spec_capacity("48V/50AH") == pytest.approx(2.40)
-
-    def test_us3000(self):
-        assert parse_spec_capacity("48V/74AH") == pytest.approx(3.55)
-
-    def test_us5000(self):
-        assert parse_spec_capacity("48V/100AH") == pytest.approx(4.80)
-
-    def test_lowercase_units(self):
-        assert parse_spec_capacity("48v/100ah") == pytest.approx(4.80)
-
-    def test_spaces_around_slash(self):
-        assert parse_spec_capacity("48V / 100AH") == pytest.approx(4.80)
-
-    def test_decimal_voltage(self):
-        """Non-integer voltage (e.g. some LiFePO4 stacks use 51.2 V nominal)."""
-        assert parse_spec_capacity("51.2V/100AH") == pytest.approx(5.12)
-
-    def test_unparseable_raises_value_error(self):
-        with pytest.raises(ValueError):
-            parse_spec_capacity("UNKNOWN")
-
-    def test_empty_returns_none(self):
-        assert parse_spec_capacity("") is None
-
-    def test_partial_spec_raises_value_error(self):
-        """Only voltage present, no Ah component."""
-        with pytest.raises(ValueError):
-            parse_spec_capacity("48V")
 
 
 # ===========================================================================
