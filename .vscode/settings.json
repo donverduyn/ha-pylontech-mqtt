@@ -2,7 +2,8 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.extraPaths": [
-    "${workspaceFolder}/custom_components"
+    "${workspaceFolder}/custom_components",
+    "${workspaceFolder}/docker"
   ],
   "editor.formatOnSave": true,
   "[python]": {

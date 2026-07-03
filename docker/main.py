@@ -33,8 +33,7 @@ from typing import Optional
 import paho.mqtt.client as mqtt
 import serial
 from paho.mqtt.enums import CallbackAPIVersion
-
-from parser import PylontechParser
+from pylon_parser import PylontechParser
 from structs import PylontechSystem
 
 # ---------------------------------------------------------------------------
@@ -123,8 +122,7 @@ class BmsConnection:
         """Send a command and return the ASCII response."""
         self._ensure_open()
         if CONNECTION_TYPE == "tcp":
-            if self._tcp is None:
-                raise RuntimeError("TCP socket is None after _ensure_open()")
+            assert self._tcp is not None
             self._tcp.sendall((cmd + "\n").encode("ascii"))
             time.sleep(1.0)
             data = b""
@@ -139,8 +137,7 @@ class BmsConnection:
                 pass
             return data.decode("ascii", errors="ignore")
         else:
-            if self._serial is None:
-                raise RuntimeError("Serial port is None after _ensure_open()")
+            assert self._serial is not None
             self._serial.reset_input_buffer()
             self._serial.write(b"\n")
             time.sleep(0.1)

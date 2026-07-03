@@ -495,7 +495,11 @@ async def async_setup_entry(
                     bat_cells.add(cell.get("cell_id"))
                     new_entities.extend(
                         PylontechCellSensor(
-                            coordinator, entry.entry_id, bat.get("sys_id"), cell.get("cell_id"), desc
+                            coordinator,
+                            entry.entry_id,
+                            bat.get("sys_id"),
+                            cell.get("cell_id"),
+                            desc,
                         )
                         for desc in CELL_SENSORS
                     )

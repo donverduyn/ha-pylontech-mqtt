@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
 testpaths   = ["tests"]
-pythonpath  = ["tests", "."]     # "." makes custom_components importable for HA tests
+pythonpath  = ["tests", ".", "docker"]     # "." makes custom_components importable; "docker" exposes pylon_parser and structs
 addopts     = "-v --tb=short --allow-hosts=127.0.0.1,localhost"
 asyncio_mode = "auto"

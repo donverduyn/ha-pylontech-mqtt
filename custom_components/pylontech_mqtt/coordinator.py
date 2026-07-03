@@ -162,10 +162,20 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
             for b in data.get("batteries", [])
         ]
         required_defaults = {
-            "voltage": 0, "current": 0, "soc": 0, "power": 0,
-            "energy_in": 0.0, "energy_out": 0.0, "raw": "",
+            "voltage": 0,
+            "current": 0,
+            "soc": 0,
+            "power": 0,
+            "energy_in": 0.0,
+            "energy_out": 0.0,
+            "raw": "",
         }
-        return {**required_defaults, **data, "energy_stored": 0.0, "batteries": batteries}
+        return {
+            **required_defaults,
+            **data,
+            "energy_stored": 0.0,
+            "batteries": batteries,
+        }
 
     def _compute_energy_stored(self, system: dict) -> None:
         """Compute energy_stored per battery and system total from SOC × capacity."""

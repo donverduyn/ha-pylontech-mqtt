@@ -162,7 +162,9 @@ class TestComputeEnergyStored:
         payload = {**_PAYLOAD, "batteries": [_BAT1, {**_BAT1, "sys_id": 2, "soc": 60}]}
         s = coordinator._deserialize(payload)
         coordinator._compute_energy_stored(s)
-        expected = s["batteries"][0]["energy_stored"] + s["batteries"][1]["energy_stored"]
+        expected = (
+            s["batteries"][0]["energy_stored"] + s["batteries"][1]["energy_stored"]
+        )
         assert s["energy_stored"] == pytest.approx(expected, rel=1e-3)
 
     async def test_per_battery_capacity_override(

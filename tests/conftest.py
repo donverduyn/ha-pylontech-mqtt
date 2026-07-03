@@ -79,9 +79,6 @@ def _load_module(name: str, path: Path):
     return mod
 
 
-_structs = _load_module("pylontech_mqtt.structs", _ROOT / "docker" / "structs.py")
-sys.modules.setdefault("structs", _structs)
-_load_module("pylontech_mqtt.parser", _ROOT / "docker" / "parser.py")
 _load_module("pylontech_mqtt.capacity", _COMP / "capacity.py")
 
 
@@ -220,7 +217,7 @@ def stub_conn(stub_server):
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def pwr_system(_session_conn):
-    from pylontech_mqtt.parser import PylontechParser
+    from pylon_parser import PylontechParser
 
     raw = _raw_command(_session_conn, "pwr")
     return PylontechParser.parse_pwr(raw)
@@ -228,8 +225,8 @@ def pwr_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def info_system(_session_conn):
-    from pylontech_mqtt.parser import PylontechParser
-    from pylontech_mqtt.structs import PylontechSystem
+    from pylon_parser import PylontechParser
+    from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "info")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -238,8 +235,8 @@ def info_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def stat_system(_session_conn):
-    from pylontech_mqtt.parser import PylontechParser
-    from pylontech_mqtt.structs import PylontechSystem
+    from pylon_parser import PylontechParser
+    from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "stat")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -248,8 +245,8 @@ def stat_system(_session_conn):
 
 @pytest.fixture(scope="session")
 def time_system(_session_conn):
-    from pylontech_mqtt.parser import PylontechParser
-    from pylontech_mqtt.structs import PylontechSystem
+    from pylon_parser import PylontechParser
+    from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "time")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -260,7 +257,7 @@ def time_system(_session_conn):
 def bat_battery(_session_conn, pwr_system):
     """Return the first battery from pwr_system with its cells populated
     by parsing the 'bat 1' response from the stub."""
-    from pylontech_mqtt.parser import PylontechParser
+    from pylon_parser import PylontechParser
 
     bat = pwr_system.batteries[0]
     raw = _raw_command(_session_conn, f"bat {bat.sys_id}")

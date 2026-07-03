@@ -17,8 +17,9 @@ from conftest import (
     STUB_SOC_START,
     _raw_command,
 )
-from pylontech_mqtt.parser import PylontechParser
-from pylontech_mqtt.structs import PylontechBattery, PylontechSystem
+from pylontech_mqtt.capacity import parse_spec_capacity
+from pylon_parser import PylontechParser
+from structs import PylontechBattery, PylontechSystem
 
 
 # ===========================================================================
@@ -825,36 +826,36 @@ class TestStructs:
 
 
 class TestParseSpecCapacity:
-    """Unit tests for PylontechParser.parse_spec_capacity."""
+    """Unit tests for capacity.parse_spec_capacity."""
 
     def test_us2000(self):
-        assert PylontechParser.parse_spec_capacity("48V/50AH") == pytest.approx(2.40)
+        assert parse_spec_capacity("48V/50AH") == pytest.approx(2.40)
 
     def test_us3000(self):
-        assert PylontechParser.parse_spec_capacity("48V/74AH") == pytest.approx(3.55)
+        assert parse_spec_capacity("48V/74AH") == pytest.approx(3.55)
 
     def test_us5000(self):
-        assert PylontechParser.parse_spec_capacity("48V/100AH") == pytest.approx(4.80)
+        assert parse_spec_capacity("48V/100AH") == pytest.approx(4.80)
 
     def test_lowercase_units(self):
-        assert PylontechParser.parse_spec_capacity("48v/100ah") == pytest.approx(4.80)
+        assert parse_spec_capacity("48v/100ah") == pytest.approx(4.80)
 
     def test_spaces_around_slash(self):
-        assert PylontechParser.parse_spec_capacity("48V / 100AH") == pytest.approx(4.80)
+        assert parse_spec_capacity("48V / 100AH") == pytest.approx(4.80)
 
     def test_decimal_voltage(self):
         """Non-integer voltage (e.g. some LiFePO4 stacks use 51.2 V nominal)."""
-        assert PylontechParser.parse_spec_capacity("51.2V/100AH") == pytest.approx(5.12)
+        assert parse_spec_capacity("51.2V/100AH") == pytest.approx(5.12)
 
     def test_unparseable_returns_none(self):
-        assert PylontechParser.parse_spec_capacity("UNKNOWN") is None
+        assert parse_spec_capacity("UNKNOWN") is None
 
     def test_empty_returns_none(self):
-        assert PylontechParser.parse_spec_capacity("") is None
+        assert parse_spec_capacity("") is None
 
     def test_partial_spec_returns_none(self):
         """Only voltage present, no Ah component."""
-        assert PylontechParser.parse_spec_capacity("48V") is None
+        assert parse_spec_capacity("48V") is None
 
 
 # ===========================================================================
@@ -932,8 +933,8 @@ class TestParseBat:
 
     def test_absent_battery_has_no_cells(self, stub_conn):
         """Requesting 'bat N' for an absent/unknown slot must yield an empty cell list."""
-        from pylontech_mqtt.parser import PylontechParser
-        from pylontech_mqtt.structs import PylontechBattery
+        from pylon_parser import PylontechParser
+        from structs import PylontechBattery
 
         # Slot 99 does not exist in the stub → "Battery 99 not found" response
         raw = _raw_command(stub_conn, "bat 99")
@@ -945,8 +946,8 @@ class TestParseBat:
         """A non-numeric voltage in a cell row must be skipped, not crash."""
         import logging
 
-        from pylontech_mqtt.parser import PylontechParser
-        from pylontech_mqtt.structs import PylontechBattery
+        from pylon_parser import PylontechParser
+        from structs import PylontechBattery
 
         raw = (
             "bat 1\r\n@\r\r\n"

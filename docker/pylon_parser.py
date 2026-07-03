@@ -335,21 +335,3 @@ class PylontechParser:
                 _LOGGER.error("Error parsing bat line '%s': %s", line, err)
         battery.cells = cells
         return battery
-
-    @staticmethod
-    def parse_spec_capacity(spec: str) -> float | None:
-        """Parse a BMS spec string (e.g. '48V/100AH') and return the kWh capacity.
-
-        Handles mixed case and optional whitespace around the separator.
-        Returns None when the string is absent or cannot be parsed.
-
-        Examples::
-
-            '48V/100AH' -> 4.8
-            '48V/74AH'  -> 3.55
-            '48V/50AH'  -> 2.4
-        """
-        m = re.search(r"(\d+(?:\.\d+)?)\s*[Vv]\s*/\s*(\d+(?:\.\d+)?)\s*[Aa][Hh]", spec)
-        if not m:
-            return None
-        return round(float(m.group(1)) * float(m.group(2)) / 1000.0, 2)

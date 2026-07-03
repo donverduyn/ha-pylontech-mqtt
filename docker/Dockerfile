@@ -5,7 +5,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir pyserial "paho-mqtt>=2.0.0"
 
 # Copy parser, structs, and the sidecar entry point
-COPY docker/parser.py .
+COPY docker/pylon_parser.py .
 COPY docker/structs.py .
 COPY docker/main.py .
 

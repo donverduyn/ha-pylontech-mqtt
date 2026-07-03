@@ -16,7 +16,9 @@ class PylontechSystemEntity(CoordinatorEntity[PylontechCoordinator]):
         return DeviceInfo(
             identifiers={(DOMAIN, "system")},
             name="Pylontech Stack",
-            manufacturer=(data.get("manufacturer") or "Pylontech") if data else "Pylontech",
+            manufacturer=(data.get("manufacturer") or "Pylontech")
+            if data
+            else "Pylontech",
             model=data.get("model") if data else None,
             sw_version=data.get("fw_version") if data else None,
             serial_number=data.get("barcode") if data else None,
@@ -38,7 +40,9 @@ class PylontechBatteryEntity(CoordinatorEntity[PylontechCoordinator]):
         return DeviceInfo(
             identifiers={(DOMAIN, f"battery_{self._bat_id}")},
             name=f"Pylontech Module {self._bat_id}",
-            manufacturer=(data.get("manufacturer") or "Pylontech") if data else "Pylontech",
+            manufacturer=(data.get("manufacturer") or "Pylontech")
+            if data
+            else "Pylontech",
             model=data.get("model") if data else None,
             sw_version=data.get("fw_version") if data else None,
             via_device=(DOMAIN, "system"),
