@@ -5,11 +5,16 @@ pyserial>=3.5
 
 # Testing — bundles homeassistant core, pytest, pytest-asyncio, and all HA test fixtures
 pytest-homeassistant-custom-component
+# Coverage reporting; already pulled in transitively but pinned here directly
+# since CI now invokes it explicitly (pytest --cov).
+pytest-cov
 
 # Code quality
 ruff
 pyright
 mypy
+# Runs the .pre-commit-config.yaml hooks; see CONTRIBUTING.md.
+pre-commit
 # Stubs for pyserial, imported by docker/main.py; mypy's strict mode requires
 # an explicit stub package rather than falling back to untyped/Any.
 types-pyserial

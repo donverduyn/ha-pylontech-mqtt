@@ -44,7 +44,13 @@ jobs:
       - name: Install Mosquitto (for the e2e tests)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mosquitto
       - name: Run test suite
-        run: pytest
+        # --cov-fail-under is a non-regression floor (current combined coverage is
+        # ~89%), not a target — it catches a change that quietly drops coverage,
+        # not a mandate to hit 100%. Scoped to custom_components + docker since
+        # that's the shipped code; scripts/ (e2e-only helpers) is excluded.
+        run: >
+          pytest --cov=custom_components --cov=docker
+          --cov-report=term-missing --cov-fail-under=88
       - name: Run e2e tests (real subprocesses, real timeouts/retries)
         run: pytest -m e2e
 
@@ -59,14 +65,48 @@ jobs:
           cache-dependency-glob: requirements_dev.lock.txt
       - name: Install dependencies
         run: uv pip install --require-hashes -r requirements_dev.lock.txt
-      - name: Ruff
+      - name: Ruff check
         run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
       - name: Pyright
         run: pyright
       - name: Mypy
         run: mypy
       - name: pip-audit (runtime dependencies)
         run: pip-audit -r requirements_runtime.txt
+
+  meta-lint:
+    # Lints the project's own tooling (workflows, shell scripts, Dockerfile)
+    # rather than its Python code — separate job so a failure here doesn't
+    # block on/get confused with the `lint` job's Python-specific tools.
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Install actionlint
+        # ubuntu-latest doesn't ship actionlint, unlike shellcheck below.
+        # Downloaded and checksum-verified directly (pinned release asset)
+        # rather than via a third-party wrapper action, to match this repo's
+        # existing preference for pinned, minimal-trust-surface CI steps.
+        run: |
+          curl -sSfLo /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c
+          tar xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+      - name: actionlint
+        run: /tmp/actionlint -color .github/workflows/*.yaml
+      - name: ShellCheck
+        # Preinstalled on ubuntu-latest runners; scoped to the repo's only two
+        # shell scripts (docker/Dockerfile has no other shell to lint).
+        run: shellcheck scripts/clean.sh .devcontainer/postCreate.sh
+      - name: Install Hadolint
+        run: |
+          curl -sSfLo /tmp/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-linux-x86_64
+          echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  /tmp/hadolint" | sha256sum -c
+          chmod +x /tmp/hadolint
+      - name: Hadolint
+        run: /tmp/hadolint docker/Dockerfile
 
   docker-build:
     runs-on: "ubuntu-latest"
@@ -78,3 +118,51 @@ jobs:
             --build-arg GIT_SHA="${{ github.sha }}" \
             --build-arg SIDECAR_VERSION="ci-${{ github.sha }}" \
             -t pylon2mqtt:ci .
+      - name: Smoke test the built image
+        # No real BMS/broker is available in CI, so this doesn't exercise the
+        # full poll loop — but it does prove the image actually runs under its
+        # pinned Python 3.11 runtime (not just that `docker build` succeeds),
+        # that main.py's entry point and its pinned deps (paho-mqtt, pyserial)
+        # import cleanly, and that missing config fails fast (exit 1, clear
+        # log) instead of hanging forever waiting on hardware that isn't there.
+        run: |
+          set +e
+          output="$(docker run --rm pylon2mqtt:ci 2>&1)"
+          code=$?
+          set -e
+          echo "$output"
+          if [ "$code" -ne 1 ]; then
+            echo "::error::Expected exit code 1 (fail-fast config validation), got $code"
+            exit 1
+          fi
+          if ! echo "$output" | grep -q "MQTT_BROKER environment variable is required"; then
+            echo "::error::Expected fail-fast MQTT_BROKER validation message was not logged"
+            exit 1
+          fi
+      - name: Scan image for known vulnerabilities
+        # Report-only (exit-code 0), not a gate: a scan of the pinned base image
+        # alone (python:3.11.15-slim, see docker/Dockerfile) already turns up
+        # HIGH-severity CVEs in OS/vendored packages (e.g. perl-base,
+        # jaraco.context) that this project can't fix by changing its own code
+        # — only by the base image publisher patching upstream, same as the
+        # PYSEC-2026-* noise requirements_runtime.txt already keeps out of
+        # pip-audit. Failing the build on those would just make this
+        # permanently red for issues nobody here can act on; the table output
+        # still gives visibility on every run.
+        uses: "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25" # v0.36.0
+        with:
+          image-ref: "pylon2mqtt:ci"
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+          ignore-unfixed: true
+      - name: Generate SBOM
+        uses: "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" # v0.24.0
+        with:
+          image: "pylon2mqtt:ci"
+          format: "spdx-json"
+          output-file: "pylon2mqtt-sbom.spdx.json"
+      - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7.0.1
+        with:
+          name: sbom
+          path: pylon2mqtt-sbom.spdx.json

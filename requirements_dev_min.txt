@@ -22,11 +22,16 @@ pyserial>=3.5
 # this project's declared minimum. Bump only in lockstep with a deliberate
 # minimum-version bump in hacs.json/manifest.json.
 pytest-homeassistant-custom-component==0.13.232
+# Coverage reporting; already pulled in transitively but pinned here directly
+# since CI now invokes it explicitly (pytest --cov).
+pytest-cov
 
 # Code quality
 ruff
 pyright
 mypy
+# Runs the .pre-commit-config.yaml hooks; see CONTRIBUTING.md.
+pre-commit
 # Stubs for pyserial, imported by docker/main.py; mypy's strict mode requires
 # an explicit stub package rather than falling back to untyped/Any.
 types-pyserial
