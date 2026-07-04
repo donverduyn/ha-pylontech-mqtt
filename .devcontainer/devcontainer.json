@@ -25,6 +25,58 @@
   "containerEnv": {
     "VIRTUAL_ENV": "/home/vscode/.venv"
   },
+  // Runs on the HOST, before the container is created, so the files below
+  // exist by the time the mounts try to attach to them — see the script for
+  // why that ordering matters.
+  "initializeCommand": "bash .devcontainer/seedHostAgentConfig.sh",
+  // Bind-mounts so every AI CLI's login and hand-set preferences survive a
+  // container rebuild instead of re-provisioning from scratch each time.
+  // Deliberately file-level (not whole tool directories) except where noted:
+  // several of these tools keep an actively-written SQLite WAL database
+  // right next to their config (Codex/OpenCode/Copilot), and bind-mounting
+  // that is a known source of slowness/flakiness, especially on non-Linux
+  // Docker hosts — safer to mount only the identity/prefs file and let
+  // caches, sessions, logs, and (for Kilocode) host-arch-specific native
+  // node_modules regenerate per rebuild.
+  //
+  // Each tool also has its own native per-project override mechanism, which
+  // needs no mount at all — it's just a file committed in this repo that
+  // the tool itself merges on top of the mounted global config:
+  //   Claude Code   -> .claude/settings.json (or .claude/settings.local.json, gitignored)
+  //   Codex         -> .codex/config.toml (walks up the tree; closest wins)
+  //   OpenCode      -> opencode.json(c) in the repo root
+  //   Kilocode CLI  -> .kilo/kilo.jsonc (wins) or kilo.jsonc in the repo root
+  //   Copilot CLI   -> .github/mcp.json, .github/lsp.json, .github/hooks/
+  //   Antigravity   -> .gemini/settings.json in the repo root (shares Gemini CLI's settings engine)
+  //   GitHub CLI    -> no native project-level override; global-only
+  "mounts": [
+    // Claude Code: settings, credentials, and persistent memory
+    // (projects/*/memory) all live under the directory itself.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind",
+    // Codex
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/auth.json,target=/home/vscode/.codex/auth.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/config.toml,target=/home/vscode/.codex/config.toml,type=bind",
+    // OpenCode
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/opencode/opencode.jsonc,target=/home/vscode/.config/opencode/opencode.jsonc,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.local/share/opencode/auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind",
+    // Kilocode CLI (its node_modules dir is a build artifact with
+    // host-arch-specific native binaries — deliberately not mounted)
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/kilo/kilo.jsonc,target=/home/vscode/.config/kilo/kilo.jsonc,type=bind",
+    // GitHub CLI
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/hosts.yml,target=/home/vscode/.config/gh/hosts.yml,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/config.yml,target=/home/vscode/.config/gh/config.yml,type=bind",
+    // GitHub Copilot CLI: whole directory, not a file — its login lives
+    // inside session-store.db (SQLite) rather than a plain config file.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.copilot,target=/home/vscode/.copilot,type=bind",
+    // Antigravity CLI / Gemini CLI (they share the ~/.gemini tree)
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/oauth_creds.json,target=/home/vscode/.gemini/oauth_creds.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/google_accounts.json,target=/home/vscode/.gemini/google_accounts.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/settings.json,target=/home/vscode/.gemini/settings.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/trustedFolders.json,target=/home/vscode/.gemini/trustedFolders.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/settings.json,target=/home/vscode/.gemini/antigravity-cli/settings.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/antigravity-oauth-token,target=/home/vscode/.gemini/antigravity-cli/antigravity-oauth-token,type=bind"
+  ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`
   // but applies to non-interactive shells and VS Code's integrated terminal too). This must be
   // remoteEnv, not containerEnv: containerEnv is baked into the initial `docker run`, before a

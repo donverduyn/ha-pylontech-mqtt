@@ -34,6 +34,28 @@ automatically on every commit — the same checks CI enforces in
 | `make typecheck`   | `mypy` + `pyright`                                        |
 | `make clean`       | Removes cache/coverage artifacts                          |
 
+### AI CLI config persistence
+
+The devcontainer bind-mounts each AI CLI's (Claude Code, Codex, OpenCode,
+Kilocode, GitHub CLI, Copilot CLI, Antigravity CLI) login/config from your
+host so it survives container rebuilds — see the `mounts` comment in
+`.devcontainer/devcontainer.json` for exactly what's mounted and why.
+
+To override any of these for this project specifically (without touching
+your global config), add the tool's own project-config file to the repo
+root — each tool merges it on top of the mounted global config itself, no
+devcontainer changes needed:
+
+| Tool | Project override file |
+| ---- | ---------------------- |
+| Claude Code | `.claude/settings.json` (shared) or `.claude/settings.local.json` (gitignored) |
+| Codex | `.codex/config.toml` |
+| OpenCode | `opencode.json` / `opencode.jsonc` |
+| Kilocode CLI | `.kilo/kilo.jsonc` (wins) or `kilo.jsonc` |
+| Copilot CLI | `.github/mcp.json`, `.github/lsp.json`, `.github/hooks/` |
+| Antigravity CLI | `.gemini/settings.json` |
+| GitHub CLI | not supported — global config only |
+
 ## Adding Translations
 
 We welcome translations to make this integration accessible to everyone!
