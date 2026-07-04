@@ -28,10 +28,7 @@ def _new_system() -> PylontechSystem:
     return PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
 
 
-@pytest.mark.parametrize(
-    "transcript_path", _TRANSCRIPTS, ids=[p.stem for p in _TRANSCRIPTS]
-)
-def test_transcript_replays_without_error(transcript_path: Path) -> None:
+def _replay(transcript_path: Path) -> None:
     commands: dict[str, str] = json.loads(transcript_path.read_text())["commands"]
     system = _new_system()
 
@@ -63,3 +60,17 @@ def test_transcript_replays_without_error(transcript_path: Path) -> None:
 
     if "pwr" in commands:
         assert system.voltage >= 0
+
+
+if _TRANSCRIPTS:
+
+    @pytest.mark.parametrize(
+        "transcript_path", _TRANSCRIPTS, ids=[p.stem for p in _TRANSCRIPTS]
+    )
+    def test_transcript_replays_without_error(transcript_path: Path) -> None:
+        _replay(transcript_path)
+
+# No placeholder test when _TRANSCRIPTS is empty: defining one just to skip
+# it still prints a SKIPPED line under this repo's `-v` addopts. Omitting the
+# test entirely means pytest collects zero items from this file — silent
+# until a transcript is contributed.

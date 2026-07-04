@@ -394,6 +394,7 @@ class TestRegistryIdentityMigration:
         assert migrated.unique_id == f"{new_stack_id}_voltage"
 
 
+@pytest.mark.e2e
 class TestLargeStackScale:
     """A 16-module stack with per-cell (MONITORING_LEVEL=high) detail is the
     largest configuration the sidecar documents (see docker/main.py's
@@ -402,6 +403,10 @@ class TestLargeStackScale:
     MONITORING_LEVEL default, so this exercises the entity-registry/platform
     setup path at that worst-case size instead of assuming it scales cleanly
     from the single-battery/single-cell fixtures used elsewhere.
+
+    Registering ~600 real HA entities makes this noticeably slower than its
+    siblings in this file, so it's excluded from the default fast run (see
+    addopts in pyproject.toml) and runs with `pytest -m e2e`.
     """
 
     _MODULES = 16
