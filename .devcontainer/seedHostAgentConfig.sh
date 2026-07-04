@@ -28,7 +28,8 @@ seed_dir() {
 }
 
 # Claude Code
-seed_dir "$home/.claude"
+seed_json "$home/.claude/settings.json"
+seed_json "$home/.claude/.credentials.json"
 seed_json "$home/.claude.json"
 
 # Codex

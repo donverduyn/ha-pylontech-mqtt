@@ -31,6 +31,8 @@
   "initializeCommand": "bash .devcontainer/seedHostAgentConfig.sh",
   // Bind-mounts so every AI CLI's login and hand-set preferences survive a
   // container rebuild instead of re-provisioning from scratch each time.
+  // Read-only by default (see the per-entry `readonly` flag below); a mount
+  // only gets write access when the tool needs to rewrite it for auth.
   // Deliberately file-level (not whole tool directories) except where noted:
   // several of these tools keep an actively-written SQLite WAL database
   // right next to their config (Codex/OpenCode/Copilot), and bind-mounting
@@ -50,31 +52,50 @@
   //   Antigravity   -> .gemini/settings.json in the repo root (shares Gemini CLI's settings engine)
   //   GitHub CLI    -> no native project-level override; global-only
   "mounts": [
-    // Claude Code: settings, credentials, and persistent memory
-    // (projects/*/memory) all live under the directory itself.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind",
+    // Default posture: read-only. A mount only gets write access when the
+    // tool needs to rewrite it as part of normal auth (token refresh, login
+    // state) — never just because the tool happens to touch the file.
+    //
+    // Claude Code: auto memory now lives in-project (see .claude/settings.json's
+    // autoMemoryDirectory), so ~/.claude no longer needs a whole-directory
+    // mount. daemon/, sessions/, cache/, plugins/, file-history/, etc. are
+    // therefore deliberately NOT mounted — they're operational state, not
+    // auth or a hand-set preference, so they just live/die with the container.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude/settings.json,target=/home/vscode/.claude/settings.json,type=bind,readonly",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude/.credentials.json,target=/home/vscode/.claude/.credentials.json,type=bind",
+    // Mixes an OAuth session token with MCP config and per-project trust
+    // state in one file — can't split those apart, so the auth requirement
+    // wins and the whole file stays writable.
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind",
     // Codex
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/auth.json,target=/home/vscode/.codex/auth.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/config.toml,target=/home/vscode/.codex/config.toml,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/config.toml,target=/home/vscode/.codex/config.toml,type=bind,readonly",
     // OpenCode
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/opencode/opencode.jsonc,target=/home/vscode/.config/opencode/opencode.jsonc,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/opencode/opencode.jsonc,target=/home/vscode/.config/opencode/opencode.jsonc,type=bind,readonly",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.local/share/opencode/auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind",
     // Kilocode CLI (its node_modules dir is a build artifact with
-    // host-arch-specific native binaries — deliberately not mounted)
+    // host-arch-specific native binaries — deliberately not mounted).
+    // kilo.jsonc is documented as the *one* config file shared across the
+    // CLI/extension/cloud agent, and we couldn't confirm auth lives
+    // elsewhere — kept writable rather than risking a broken login on an
+    // unverified assumption that it's pure preference.
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/kilo/kilo.jsonc,target=/home/vscode/.config/kilo/kilo.jsonc,type=bind",
     // GitHub CLI
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/hosts.yml,target=/home/vscode/.config/gh/hosts.yml,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/config.yml,target=/home/vscode/.config/gh/config.yml,type=bind",
-    // GitHub Copilot CLI: whole directory, not a file — its login lives
-    // inside session-store.db (SQLite) rather than a plain config file.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/config.yml,target=/home/vscode/.config/gh/config.yml,type=bind,readonly",
+    // GitHub Copilot CLI: whole directory, not a file, and read-write — its
+    // login lives inside session-store.db (SQLite) alongside everything
+    // else it stores, so auth can't be isolated from the rest here.
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.copilot,target=/home/vscode/.copilot,type=bind",
     // Antigravity CLI / Gemini CLI (they share the ~/.gemini tree)
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/oauth_creds.json,target=/home/vscode/.gemini/oauth_creds.json,type=bind",
+    // Written by the login flow itself, not hand-edited — treated as auth-adjacent.
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/google_accounts.json,target=/home/vscode/.gemini/google_accounts.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/settings.json,target=/home/vscode/.gemini/settings.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/trustedFolders.json,target=/home/vscode/.gemini/trustedFolders.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/settings.json,target=/home/vscode/.gemini/antigravity-cli/settings.json,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/settings.json,target=/home/vscode/.gemini/settings.json,type=bind,readonly",
+    // Not auth, but auto-written when you accept a trust prompt — read-only
+    // means re-accepting that prompt after every rebuild.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/trustedFolders.json,target=/home/vscode/.gemini/trustedFolders.json,type=bind,readonly",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/settings.json,target=/home/vscode/.gemini/antigravity-cli/settings.json,type=bind,readonly",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/antigravity-oauth-token,target=/home/vscode/.gemini/antigravity-cli/antigravity-oauth-token,type=bind"
   ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`

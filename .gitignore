@@ -52,5 +52,8 @@ docker/*.env
 # RUff
 .ruff_cache/
 
-# Claude
-.claude
+# Claude Code — settings.json (project-shared, sets autoMemoryDirectory) is
+# tracked; everything else here is per-machine/session state.
+.claude/settings.local.json
+.claude/memory/
+.claude/scheduled_tasks.lock
