@@ -48,3 +48,12 @@ EOF
 # user opens, not every process VS Code spawns in every directory.
 # shellcheck disable=SC2016 # $PATH must stay literal here — it's expanded later when .bashrc is sourced, not now
 grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_modules/.bin:$PATH"' >> /home/vscode/.bashrc
+
+# Auto mode ("--permission-mode auto") biases Claude Code toward acting
+# without stopping for clarifying questions. settings.json's
+# permissions.defaultMode is the documented way to default into a mode, but
+# it's user-scoped only (project settings are ignored for this key) and has
+# a known bug where it doesn't reliably activate on session start
+# (anthropics/claude-code#49273) — an alias is the reliable way to make this
+# devcontainer's Claude Code sessions start in auto mode by default.
+grep -qF 'alias claude=' /home/vscode/.bashrc || echo "alias claude='claude --permission-mode auto'" >> /home/vscode/.bashrc
