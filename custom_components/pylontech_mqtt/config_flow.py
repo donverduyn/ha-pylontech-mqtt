@@ -29,12 +29,24 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+_AUTH_FAILURE_REASON_NAMES = ("Bad user name or password", "Not authorized")
+
+
 def _reason_code_to_error(reason_code) -> str | None:
-    """Map a CONNACK reason code to a config-flow error key, or None on success."""
+    """Map a CONNACK reason code to a config-flow error key, or None on success.
+
+    Compared by name rather than numeric value: paho's ReasonCode.value is
+    134/135 for these two failures under the callback API v2 (even for a
+    plain MQTTv3.1.1 connection, since paho internally maps the legacy 4/5
+    CONNACK codes onto the MQTTv5 reason-code numbering before invoking the
+    v2 callback) — matching against the historical MQTTv3.1.1 codes 4/5
+    never fires, so every real auth failure was falling through to
+    "cannot_connect". Comparing against the named string is correct
+    regardless of which numbering the underlying protocol version uses.
+    """
     if not reason_code.is_failure:
         return None
-    rc = getattr(reason_code, "value", None)
-    return "invalid_auth" if rc in (4, 5) else "cannot_connect"
+    return "invalid_auth" if reason_code in _AUTH_FAILURE_REASON_NAMES else "cannot_connect"
 
 
 def _test_mqtt_connection(

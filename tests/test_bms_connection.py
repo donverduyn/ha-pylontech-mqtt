@@ -137,6 +137,37 @@ class TestReadUntilPromptTruncation:
             server.close()
             client.close()
 
+    def test_prompt_later_than_grace_window_does_not_leak_into_next_read(
+        self, monkeypatch
+    ) -> None:
+        """A 'pylon>' that arrives *after_ALT_TERMINATOR_GRACE has already
+        elapsed cannot be captured by the current read — it's still in
+        flight, not yet on the wire, when the grace window gives up. It
+        must instead be recognised and stripped from the *next* read
+        instead of getting prepended to that next command's real response
+        (see BmsConnection._stray_prompt_pending)."""
+        conn = self._connection(monkeypatch, read_timeout=2.0)
+        monkeypatch.setattr(main, "_ALT_TERMINATOR_GRACE", 0.05)
+        server, client = socket.socketpair()
+        conn._tcp = client
+        try:
+            server.sendall(b"Command completed successfully\r\n")
+            first = conn._read_until_prompt()
+            assert b"pylon>" not in first
+            assert conn._stray_prompt_pending is True
+
+            # The straggler prompt shows up now, glued to the front of the
+            # *next* command's real response — exactly the race the fix
+            # targets.
+            server.sendall(b"pylon>Power Volt Curr\r\n1 51200 100\r\npylon>")
+            second = conn._read_until_prompt()
+
+            assert second == b"Power Volt Curr\r\n1 51200 100\r\npylon>"
+            assert conn._stray_prompt_pending is False
+        finally:
+            server.close()
+            client.close()
+
     def test_late_prompt_within_grace_window_is_absorbed(self, monkeypatch) -> None:
         """A 'pylon>' that arrives in a separate read shortly after 'Command
         completed' must still be captured here — not left to leak into the

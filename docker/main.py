@@ -17,7 +17,9 @@ All configuration is via environment variables:
   MQTT_TOPIC_PREFIX : base MQTT topic, default "pylontech/stack"
   MQTT_TLS          : "true" to connect over TLS, default "false"
 
-  POLL_INTERVAL     : seconds between polls, default 15
+  POLL_INTERVAL     : seconds between polls, default 15, max 150 (must stay
+                      well under the HA integration's 300s staleness
+                      watchdog)
   AUTO_SYNC_TIME    : "true" to sync BMS clock on startup, default "false"
   MONITORING_LEVEL  : "low", "medium", or "high" (default) — how much detail
                       to walk per battery on top of the aggregate "pwr" table:
@@ -91,6 +93,12 @@ MQTT_TOPIC_PREFIX = os.getenv("MQTT_TOPIC_PREFIX", "pylontech/stack")
 MQTT_TLS = os.getenv("MQTT_TLS", "false").lower() == "true"
 
 POLL_INTERVAL = _int_env("POLL_INTERVAL", 15)
+# The Home Assistant integration's coordinator (custom_components/
+# pylontech_mqtt/coordinator.py: _STALE_TIMEOUT_SECONDS) marks the device
+# unavailable after 300s without an MQTT message. Capping POLL_INTERVAL at
+# half that guarantees at least one missed poll's worth of margin before
+# that watchdog would ever fire on a healthy, correctly-configured setup.
+_MAX_POLL_INTERVAL = 150
 AUTO_SYNC_TIME = os.getenv("AUTO_SYNC_TIME", "false").lower() == "true"
 MONITORING_LEVEL = os.getenv("MONITORING_LEVEL", "high").lower()
 MAX_BATTERIES = _int_env("MAX_BATTERIES", 16)
@@ -114,10 +122,10 @@ PROMPT = b"pylon>"
 _ALT_TERMINATOR = b"Command completed"
 # Once _ALT_TERMINATOR shows up without PROMPT, wait this much longer for a
 # trailing "pylon>" that arrived in a separate read before accepting the
-# response as-is. A serial port clears any such stragglers via
-# reset_input_buffer() before the next write; a TCP socket has no equivalent,
-# so without this grace window a late-arriving "pylon>" would sit in the
-# socket's receive buffer and get prepended to the *next* command's response.
+# response as-is — this is just a short best-effort wait, not a correctness
+# guarantee: if the prompt is slower than this, _stray_prompt_pending (see
+# BmsConnection) is what actually prevents it from leaking into whatever
+# gets read next, however late it eventually arrives.
 _ALT_TERMINATOR_GRACE = 0.3
 _READ_TIMEOUT = 5.0  # overall deadline waiting for a complete response
 _POLL_INTERVAL = 0.1  # per-read timeout while polling for more data
@@ -139,6 +147,15 @@ class BmsConnection:
     def __init__(self) -> None:
         self._tcp: socket.socket | None = None
         self._serial: serial.Serial | None = None
+        # Set when a response was accepted via _ALT_TERMINATOR without ever
+        # seeing "pylon>" — the BMS may still emit that trailing prompt after
+        # we've already moved on. It can arrive interleaved with the *next*
+        # command's response instead of before it (a fixed flush-before-write
+        # can't reliably beat this, since the byte may simply not exist yet
+        # on the wire at flush time). Tracking it explicitly lets the next
+        # read strip it wherever it actually shows up, rather than gambling
+        # on timing.
+        self._stray_prompt_pending: bool = False
 
     def _open(self) -> None:
         if CONNECTION_TYPE == "tcp":
@@ -205,12 +222,21 @@ class BmsConnection:
                 chunk = self._serial.read(4096)  # b"" on timeout; serial has no EOF
             if chunk:
                 data += chunk
+            if self._stray_prompt_pending and data.startswith(PROMPT):
+                # A real response never begins with the prompt itself (the
+                # console only ever prints it after content) — a leading
+                # occurrence here can only be the previous exchange's
+                # straggler. Strip it once and keep reading for *this*
+                # command's own terminator.
+                data = data[len(PROMPT):]
+                self._stray_prompt_pending = False
             if PROMPT in data:
                 return data
             if _ALT_TERMINATOR in data:
                 if grace_deadline is None:
                     grace_deadline = time.monotonic() + _ALT_TERMINATOR_GRACE
                 elif time.monotonic() >= grace_deadline:
+                    self._stray_prompt_pending = True
                     return data
         raise TimeoutError(
             f"Timed out after {_READ_TIMEOUT}s waiting for the "
@@ -282,6 +308,7 @@ class BmsConnection:
                     _LOGGER.debug("Error closing BMS connection: %s", err)
         self._tcp = None
         self._serial = None
+        self._stray_prompt_pending = False
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +324,22 @@ class EnergyTracker:
     # explicitly invalidated inflating the counters via a huge bogus delta.
     _MAX_INTERVAL_SECONDS = 3600.0
 
+    # Minimum spacing between disk checkpoints. At the default 15s poll
+    # interval, saving on every update() would mean ~5,760 forced
+    # fsync+rename cycles a day — hard on SD-card storage (the common case
+    # for a Raspberry Pi sidecar) for no real benefit, since a few minutes of
+    # energy counter drift on an unclean crash is immaterial. flush() bypasses
+    # this for a guaranteed save on clean shutdown.
+    _SAVE_INTERVAL_SECONDS = 300.0
+
     def __init__(self, state_file: str = "") -> None:
         self.energy_in: float = 0.0
         self.energy_out: float = 0.0
         self._last_time: Optional[float] = None  # time.monotonic() timestamp
         self._last_power: Optional[float] = None
         self._state_file = state_file
+        self._last_save_time: Optional[float] = None
+        self._dirty = False
         if state_file:
             self._load()
 
@@ -348,6 +385,8 @@ class EnergyTracker:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, self._state_file)
+            self._last_save_time = time.monotonic()
+            self._dirty = False
         except OSError as err:
             _LOGGER.warning(
                 "Could not save energy state to %s: %s", self._state_file, err
@@ -359,7 +398,11 @@ class EnergyTracker:
             elapsed_seconds = now - self._last_time
             if 0 < elapsed_seconds <= self._MAX_INTERVAL_SECONDS:
                 self._integrate(self._last_power, power_w, elapsed_seconds)
-                if self._state_file:
+                self._dirty = True
+                if self._state_file and (
+                    self._last_save_time is None
+                    or now - self._last_save_time >= self._SAVE_INTERVAL_SECONDS
+                ):
                     self._save()
             elif elapsed_seconds > self._MAX_INTERVAL_SECONDS:
                 _LOGGER.warning(
@@ -369,6 +412,15 @@ class EnergyTracker:
                 )
         self._last_time = now
         self._last_power = power_w
+
+    def flush(self) -> None:
+        """Force a checkpoint now, bypassing _SAVE_INTERVAL_SECONDS.
+
+        Called on clean shutdown so whatever accumulated since the last
+        periodic checkpoint isn't lost to a container restart.
+        """
+        if self._state_file and self._dirty:
+            self._save()
 
     def _integrate(
         self, start_power: float, end_power: float, elapsed_seconds: float
@@ -503,7 +555,9 @@ def _publish_succeeded(*infos: "mqtt.MQTTMessageInfo") -> bool:
     return all(info.rc == MQTTErrorCode.MQTT_ERR_SUCCESS for info in infos)
 
 
-def _clean_shutdown(client: mqtt.Client, bms: "BmsConnection") -> None:
+def _clean_shutdown(
+    client: mqtt.Client, bms: "BmsConnection", energy: "EnergyTracker"
+) -> None:
     """Publish offline, disconnect MQTT, and close the BMS link, then exit(0).
 
     Shared by every point in the poll loop that can observe a
@@ -512,11 +566,19 @@ def _clean_shutdown(client: mqtt.Client, bms: "BmsConnection") -> None:
     not just the ones inside the main try block.
     """
     _LOGGER.info("Shutting down...")
-    msg = client.publish(AVAIL_TOPIC, "offline", retain=True)
-    msg.wait_for_publish(timeout=5)
-    client.loop_stop()
-    client.disconnect()
-    bms.close()
+    try:
+        msg = client.publish(AVAIL_TOPIC, "offline", retain=True)
+        msg.wait_for_publish(timeout=5)
+    except Exception as err:
+        # wait_for_publish() raises if the broker connection is down (e.g.
+        # MQTT_ERR_NO_CONN during an outage) — best-effort notification only;
+        # it must never prevent the cleanup below from running.
+        _LOGGER.warning("Could not confirm 'offline' publish before shutdown: %s", err)
+    finally:
+        client.loop_stop()
+        client.disconnect()
+        bms.close()
+        energy.flush()
     sys.exit(0)
 
 
@@ -550,6 +612,17 @@ def main() -> None:
     if POLL_INTERVAL <= 0:
         _LOGGER.error(
             "POLL_INTERVAL must be a positive integer (got %d)", POLL_INTERVAL
+        )
+        sys.exit(1)
+    if POLL_INTERVAL > _MAX_POLL_INTERVAL:
+        _LOGGER.error(
+            "POLL_INTERVAL must be at most %ds — the Home Assistant "
+            "integration's coordinator marks the device unavailable after "
+            "%ds without a message, so anything higher will flap "
+            "availability every cycle (got %ds)",
+            _MAX_POLL_INTERVAL,
+            _MAX_POLL_INTERVAL * 2,
+            POLL_INTERVAL,
         )
         sys.exit(1)
 
@@ -633,26 +706,30 @@ def main() -> None:
 
             if "Power Volt" in raw_pwr:
                 PylontechParser.parse_pwr(raw_pwr, system)
-                if MONITORING_LEVEL in ("medium", "high"):
-                    _enrich_batteries_indexed(bms, system)
-            else:
-                # Some Pytes/Pylontech firmware either doesn't implement the
-                # aggregate table or formats its columns differently. Fall
-                # back to probing each battery individually via "pwr N",
-                # which uses a completely different (vertical) response
-                # format — see PylontechParser.parse_pwr_indexed. This
-                # correctness fallback runs regardless of MONITORING_LEVEL —
-                # without it there would be zero battery data on such
-                # firmware at any detail level.
+
+            if not system.batteries:
+                # Either the aggregate table's header is missing entirely, or
+                # it's present but every data row failed to parse (wrong
+                # column count, corrupt firmware output, etc.) — parse_pwr
+                # resets system.batteries to [] in both cases. Either way,
+                # zero batteries here means the aggregate response can't be
+                # trusted, so fall back to probing each battery individually
+                # via "pwr N", which uses a completely different (vertical)
+                # response format — see PylontechParser.parse_pwr_indexed.
+                # This correctness fallback runs regardless of
+                # MONITORING_LEVEL — without it there would be zero battery
+                # data on such firmware at any detail level.
                 _LOGGER.warning(
-                    "Aggregate 'pwr' response missing expected header — "
-                    "falling back to per-battery 'pwr N' polling"
+                    "Aggregate 'pwr' response missing or yielded no valid "
+                    "batteries — falling back to per-battery 'pwr N' polling"
                 )
                 _fetch_batteries_indexed(bms, system)
                 if not system.batteries:
                     raise IOError(
                         "Did not receive valid 'pwr' response (aggregate or indexed)"
                     )
+            elif MONITORING_LEVEL in ("medium", "high"):
+                _enrich_batteries_indexed(bms, system)
 
             raw_stat = bms.send_command("stat")
             raw_time = bms.send_command("time")
@@ -706,7 +783,7 @@ def main() -> None:
             time.sleep(5)
             continue
         except KeyboardInterrupt:
-            _clean_shutdown(client, bms)  # never returns — exits the process
+            _clean_shutdown(client, bms, energy)  # never returns — exits the process
         except Exception as err:
             _LOGGER.error("Unexpected error: %s", err, exc_info=True)
             client.publish(AVAIL_TOPIC, "offline", retain=True)
@@ -724,7 +801,7 @@ def main() -> None:
         try:
             time.sleep(POLL_INTERVAL)
         except KeyboardInterrupt:
-            _clean_shutdown(client, bms)
+            _clean_shutdown(client, bms, energy)
 
 
 if __name__ == "__main__":

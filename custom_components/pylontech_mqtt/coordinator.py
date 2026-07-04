@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import time
 from datetime import timedelta
 
@@ -15,6 +16,74 @@ from .capacity import parse_spec_capacity
 from .const import DEFAULT_BATTERY_CAPACITY, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+# Top-level fields every state payload must carry, and the range each is
+# allowed to fall in (None on either side means unbounded that direction).
+_REQUIRED_NUMERIC_FIELDS: dict[str, tuple[float | None, float | None]] = {
+    "voltage": (0, None),
+    "current": (None, None),
+    "soc": (0, 100),
+    "power": (None, None),
+    "energy_in": (0, None),
+    "energy_out": (0, None),
+}
+# Same idea, per battery entry in the "batteries" list.
+_REQUIRED_BATTERY_NUMERIC_FIELDS: dict[str, tuple[float | None, float | None]] = {
+    "voltage": (0, None),
+    "current": (None, None),
+    "soc": (0, 100),
+    "power": (None, None),
+}
+
+
+def _validate_number(
+    value: object, low: float | None, high: float | None
+) -> str | None:
+    """Return an error string if *value* isn't a finite number in [low, high]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"expected a number, got {value!r}"
+    if not math.isfinite(value):
+        return f"expected a finite number, got {value!r}"
+    if low is not None and value < low:
+        return f"{value!r} is below the minimum of {low!r}"
+    if high is not None and value > high:
+        return f"{value!r} is above the maximum of {high!r}"
+    return None
+
+
+def _validate_state_payload(payload: dict) -> str | None:
+    """Return a description of the first problem found in *payload*, or None if valid.
+
+    A publisher that is partial, incompatible, or simply buggy (e.g. an empty
+    ``{}``) must never be allowed to overwrite good live data with
+    zero-filled voltage/SOC/power/energy — this runs before any of that data
+    is accepted, so a bad message is dropped and the last-known-good reading
+    is kept instead.
+    """
+    for field, (low, high) in _REQUIRED_NUMERIC_FIELDS.items():
+        if field not in payload:
+            return f"missing required field {field!r}"
+        error = _validate_number(payload[field], low, high)
+        if error is not None:
+            return f"field {field!r}: {error}"
+
+    batteries = payload.get("batteries")
+    if not isinstance(batteries, list):
+        return "field 'batteries' must be a list"
+    for i, bat in enumerate(batteries):
+        if not isinstance(bat, dict):
+            return f"batteries[{i}] must be an object"
+        sys_id = bat.get("sys_id")
+        if not isinstance(sys_id, int) or isinstance(sys_id, bool):
+            return f"batteries[{i}].sys_id must be an int, got {sys_id!r}"
+        for field, (low, high) in _REQUIRED_BATTERY_NUMERIC_FIELDS.items():
+            if field not in bat:
+                return f"batteries[{i}].{field!r} is missing"
+            error = _validate_number(bat[field], low, high)
+            if error is not None:
+                return f"batteries[{i}].{field!r}: {error}"
+
+    return None
 
 
 class PylontechCoordinator(DataUpdateCoordinator[dict]):
@@ -169,6 +238,10 @@ class PylontechCoordinator(DataUpdateCoordinator[dict]):
                 "Unexpected MQTT payload type '%s' — expected a JSON object; dropping",
                 type(payload).__name__,
             )
+            return
+        error = _validate_state_payload(payload)
+        if error is not None:
+            _LOGGER.error("Rejecting malformed MQTT state payload — %s", error)
             return
         try:
             system = self._deserialize(payload)

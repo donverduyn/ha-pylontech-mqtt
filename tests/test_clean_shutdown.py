@@ -16,9 +16,10 @@ from main import _clean_shutdown
 def test_clean_shutdown_exits_with_status_zero() -> None:
     client = MagicMock()
     bms = MagicMock()
+    energy = MagicMock()
 
     with pytest.raises(SystemExit) as exc_info:
-        _clean_shutdown(client, bms)
+        _clean_shutdown(client, bms, energy)
 
     assert exc_info.value.code == 0
 
@@ -26,9 +27,10 @@ def test_clean_shutdown_exits_with_status_zero() -> None:
 def test_clean_shutdown_calls_expected_sequence() -> None:
     client = MagicMock()
     bms = MagicMock()
+    energy = MagicMock()
 
     with pytest.raises(SystemExit):
-        _clean_shutdown(client, bms)
+        _clean_shutdown(client, bms, energy)
 
     assert client.publish.called
     publish_args, publish_kwargs = client.publish.call_args
@@ -39,3 +41,25 @@ def test_clean_shutdown_calls_expected_sequence() -> None:
     client.loop_stop.assert_called_once()
     client.disconnect.assert_called_once()
     bms.close.assert_called_once()
+    energy.flush.assert_called_once()
+
+
+def test_clean_shutdown_still_cleans_up_when_publish_wait_raises() -> None:
+    """A broker outage makes wait_for_publish() raise (e.g. MQTT_ERR_NO_CONN);
+    loop_stop/disconnect/bms.close/energy.flush must still run and the
+    process must still exit 0 instead of crashing out mid-shutdown."""
+    client = MagicMock()
+    client.publish.return_value.wait_for_publish.side_effect = RuntimeError(
+        "Message publish failed: No connection"
+    )
+    bms = MagicMock()
+    energy = MagicMock()
+
+    with pytest.raises(SystemExit) as exc_info:
+        _clean_shutdown(client, bms, energy)
+
+    assert exc_info.value.code == 0
+    client.loop_stop.assert_called_once()
+    client.disconnect.assert_called_once()
+    bms.close.assert_called_once()
+    energy.flush.assert_called_once()

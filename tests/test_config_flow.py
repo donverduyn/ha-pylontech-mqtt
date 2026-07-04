@@ -12,6 +12,8 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.selector import TextSelector, TextSelectorType
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.reasoncodes import ReasonCode
 
 from custom_components.pylontech_mqtt.config_flow import (
     _broker_schema,
@@ -360,26 +362,35 @@ async def test_reconfigure_rejects_duplicate_effective_settings(
 # ---------------------------------------------------------------------------
 
 
-def _reason_code(*, is_failure: bool, value: int | None = None) -> SimpleNamespace:
-    """Build a minimal paho-style reason code for _reason_code_to_error tests."""
-    return SimpleNamespace(is_failure=is_failure, value=value)
+def _reason_code(name: str) -> ReasonCode:
+    """Build a real paho CONNACK reason code by name.
+
+    Using the actual paho ReasonCode class (rather than a hand-rolled stand-in
+    for its ``value``/``is_failure`` shape) is what caught the original bug:
+    a SimpleNamespace mock let the test assert against numeric CONNACK codes
+    (4/5) that paho's callback API v2 never actually produces — real
+    ReasonCode objects report 134/135 for these two failures instead.
+    """
+    return ReasonCode(PacketTypes.CONNACK, name)
 
 
 def test_reason_code_success_returns_none() -> None:
     """A non-failure CONNACK reason code must map to no error."""
-    assert _reason_code_to_error(_reason_code(is_failure=False)) is None
+    assert _reason_code_to_error(_reason_code("Success")) is None
 
 
-@pytest.mark.parametrize("rc", [4, 5])
-def test_reason_code_bad_credentials_returns_invalid_auth(rc: int) -> None:
-    """CONNACK codes 4 and 5 (bad credentials/not authorized) must map to invalid_auth."""
-    assert _reason_code_to_error(_reason_code(is_failure=True, value=rc)) == "invalid_auth"
+@pytest.mark.parametrize("name", ["Bad user name or password", "Not authorized"])
+def test_reason_code_bad_credentials_returns_invalid_auth(name: str) -> None:
+    """Bad-credential CONNACK reasons must map to invalid_auth."""
+    assert _reason_code_to_error(_reason_code(name)) == "invalid_auth"
 
 
-@pytest.mark.parametrize("rc", [1, 2, 3, None])
-def test_reason_code_other_failure_returns_cannot_connect(rc: int | None) -> None:
+@pytest.mark.parametrize(
+    "name", ["Unspecified error", "Server unavailable", "Banned"]
+)
+def test_reason_code_other_failure_returns_cannot_connect(name: str) -> None:
     """Any other failing CONNACK reason code must map to cannot_connect."""
-    assert _reason_code_to_error(_reason_code(is_failure=True, value=rc)) == "cannot_connect"
+    assert _reason_code_to_error(_reason_code(name)) == "cannot_connect"
 
 
 def test_empty_hostname_returns_cannot_connect() -> None:

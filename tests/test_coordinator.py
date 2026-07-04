@@ -636,3 +636,102 @@ class TestOnMessageErrors:
             coordinator._on_message(None, None, _msg("pylontech/stack/state", bad_value))
         await hass.async_block_till_done()
         assert coordinator.data is None
+
+
+# ---------------------------------------------------------------------------
+# _process_payload schema validation — a partial/incompatible publisher must
+# never be allowed to overwrite good live data with zero-filled readings.
+# ---------------------------------------------------------------------------
+
+
+class TestPayloadSchemaValidation:
+    async def test_empty_payload_is_rejected_not_zero_filled(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        """An empty {} must be dropped outright, not accepted as all-zero
+        voltage/soc/power/energy — that would silently corrupt live data."""
+        coordinator._process_payload({})
+        assert coordinator.data is None
+
+    async def test_empty_payload_does_not_clobber_existing_good_data(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(_PAYLOAD)
+        assert coordinator.data["voltage"] == 51.2
+
+        coordinator._process_payload({})  # malformed follow-up message
+
+        assert coordinator.data["voltage"] == 51.2
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        [
+            "voltage",
+            "current",
+            "soc",
+            "power",
+            "energy_in",
+            "energy_out",
+            "batteries",
+        ],
+    )
+    async def test_missing_top_level_field_is_rejected(
+        self, coordinator: PylontechCoordinator, missing_field: str
+    ) -> None:
+        payload = {k: v for k, v in _PAYLOAD.items() if k != missing_field}
+        coordinator._process_payload(payload)
+        assert coordinator.data is None
+
+    @pytest.mark.parametrize(
+        "field,bad_value",
+        [
+            ("voltage", "51.2"),  # string, not numeric
+            ("voltage", float("nan")),
+            ("voltage", float("inf")),
+            ("voltage", -1),  # out of range
+            ("soc", 150),  # out of range
+            ("soc", -5),
+            ("power", True),  # bool must not pass as numeric
+        ],
+    )
+    async def test_invalid_top_level_value_is_rejected(
+        self, coordinator: PylontechCoordinator, field: str, bad_value
+    ) -> None:
+        coordinator._process_payload({**_PAYLOAD, field: bad_value})
+        assert coordinator.data is None
+
+    async def test_batteries_not_a_list_is_rejected(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload({**_PAYLOAD, "batteries": {"sys_id": 1}})
+        assert coordinator.data is None
+
+    async def test_battery_missing_required_field_is_rejected(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        bad_bat = {k: v for k, v in _BAT1.items() if k != "voltage"}
+        coordinator._process_payload({**_PAYLOAD, "batteries": [bad_bat]})
+        assert coordinator.data is None
+
+    async def test_battery_non_int_sys_id_is_rejected(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(
+            {**_PAYLOAD, "batteries": [{**_BAT1, "sys_id": "1"}]}
+        )
+        assert coordinator.data is None
+
+    async def test_battery_soc_out_of_range_is_rejected(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(
+            {**_PAYLOAD, "batteries": [{**_BAT1, "soc": 101}]}
+        )
+        assert coordinator.data is None
+
+    async def test_well_formed_payload_is_accepted(
+        self, coordinator: PylontechCoordinator
+    ) -> None:
+        coordinator._process_payload(_PAYLOAD)
+        assert coordinator.data is not None
+        assert coordinator.data["voltage"] == 51.2

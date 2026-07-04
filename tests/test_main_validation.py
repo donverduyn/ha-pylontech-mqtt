@@ -82,3 +82,20 @@ def test_valid_monitoring_levels_pass_this_check(monkeypatch, caplog, level) -> 
     assert exc_info.value.code == 1
     assert "POLL_INTERVAL must be" in caplog.text
     assert "MONITORING_LEVEL must be" not in caplog.text
+
+
+def test_poll_interval_above_max_exits_before_connecting(monkeypatch, caplog) -> None:
+    """A POLL_INTERVAL above _MAX_POLL_INTERVAL must be rejected up front —
+    otherwise it silently produces a setup that flaps availability against
+    the HA integration's fixed 300s staleness watchdog."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "POLL_INTERVAL", main._MAX_POLL_INTERVAL + 1)
+
+    with caplog.at_level(logging.ERROR, logger="pylon2mqtt"):
+        with pytest.raises(SystemExit) as exc_info:
+            main.main()
+
+    assert exc_info.value.code == 1
+    assert "POLL_INTERVAL must be at most" in caplog.text

@@ -120,7 +120,7 @@ The sidecar publishes:
 | `MQTT_PASS` | — | MQTT password (optional) |
 | `MQTT_TLS` | `false` | `true` to connect to the broker over TLS |
 | `MQTT_TOPIC_PREFIX` | `pylontech/stack` | Base topic; `/state` and `/availability` are appended |
-| `POLL_INTERVAL` | `15` | Seconds between BMS polls |
+| `POLL_INTERVAL` | `15` | Seconds between BMS polls; max `150` — the HA integration marks the device unavailable after 300s without a message, so anything higher will flap availability |
 | `AUTO_SYNC_TIME` | `false` | Sync BMS clock to system time on startup |
 | `MONITORING_LEVEL` | `high` | `low`, `medium`, or `high` — how much detail to walk per battery on top of the aggregate `pwr` table. `low`: aggregate `pwr` only. `medium`: adds one `pwr N` round trip per battery for event/fault status the aggregate table doesn't expose. `high`: adds per-battery `bat N` cell polling on top of `medium`. Lower levels mean fewer round trips per poll — useful on larger stacks. |
 | `MAX_BATTERIES` | `16` | Upper bound on `pwr N` probes when the aggregate `pwr` response doesn't look valid (some firmware only exposes per-battery data this way) |

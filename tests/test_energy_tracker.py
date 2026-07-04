@@ -22,7 +22,7 @@ class TestEnergyTrackerCharging:
     def test_positive_power_adds_to_energy_in(self):
         """1000 W over 1 h = 1.0 kWh in."""
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(1000.0)
             tracker.update(1000.0)
         assert tracker.energy_in == pytest.approx(1.0)
@@ -31,7 +31,7 @@ class TestEnergyTrackerCharging:
     def test_zero_power_counts_as_charging(self):
         """power == 0 satisfies `power >= 0` → goes to energy_in (adds 0 kWh)."""
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(0.0)
             tracker.update(0.0)
         assert tracker.energy_in == 0.0
@@ -42,7 +42,7 @@ class TestEnergyTrackerDischarging:
     def test_negative_power_adds_to_energy_out(self):
         """−1000 W over 1 h = 1.0 kWh out."""
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(-1000.0)
             tracker.update(-1000.0)
         assert tracker.energy_in == 0.0
@@ -73,7 +73,7 @@ class TestEnergyTrackerTrapezoidalIntegration:
         the two endpoints (1500 W) for a more accurate 1.5 kWh.
         """
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(1000.0)
             tracker.update(2000.0)
         assert tracker.energy_in == pytest.approx(1.5)
@@ -108,7 +108,7 @@ class TestEnergyTrackerTrapezoidalIntegration:
         -500 W over 1/3 h averages -250 W = 1/12 kWh out.
         """
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(1000.0)
             tracker.update(-500.0)
         assert tracker.energy_in == pytest.approx(1.0 / 3.0)
@@ -147,7 +147,7 @@ class TestEnergyTrackerSanityLimits:
         """A gap exactly at _MAX_INTERVAL_SECONDS must still be counted —
         only gaps *longer* than the limit are treated as anomalous."""
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(1000.0)
             tracker.update(1000.0)
         assert tracker.energy_in == pytest.approx(1.0)
@@ -173,7 +173,7 @@ class TestEnergyTrackerInvalidate:
     def test_invalidate_does_not_reset_accumulated_totals(self):
         """Calling invalidate_last_time() must not zero energy_in / energy_out."""
         tracker = EnergyTracker()
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker.update(1000.0)  # set _last_time
             tracker.update(1000.0)  # 1 h at 1000 W → 1.0 kWh
 
@@ -200,7 +200,7 @@ class TestEnergyTrackerPersistence:
         that reads the same state file — simulating a container restart."""
         state_file = str(tmp_path / "energy.json")
 
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker = EnergyTracker(state_file=state_file)
             tracker.update(1000.0)  # first call: no accumulation
             tracker.update(1000.0)  # 1 h at 1000 W → 1.0 kWh in
@@ -213,7 +213,7 @@ class TestEnergyTrackerPersistence:
     def test_discharge_energy_persisted(self, tmp_path):
         state_file = str(tmp_path / "energy.json")
 
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker = EnergyTracker(state_file=state_file)
             tracker.update(-500.0)
             tracker.update(-500.0)  # 1 h at -500 W → 0.5 kWh out
@@ -253,7 +253,7 @@ class TestEnergyTrackerPersistence:
         """invalidate_last_time() must not touch the state file."""
         state_file = str(tmp_path / "energy.json")
 
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker = EnergyTracker(state_file=state_file)
             tracker.update(1000.0)
             tracker.update(1000.0)  # 1 kWh in
@@ -268,7 +268,7 @@ class TestEnergyTrackerPersistence:
         after a successful save, no leftover .tmp file should remain."""
         state_file = str(tmp_path / "energy.json")
 
-        with patch("main.time.monotonic", side_effect=[0.0, 3600.0]):
+        with patch("main.time.monotonic", side_effect=[0.0, 3600.0, 3600.0]):
             tracker = EnergyTracker(state_file=state_file)
             tracker.update(1000.0)
             tracker.update(1000.0)
