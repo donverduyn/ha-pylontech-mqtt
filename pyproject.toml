@@ -1,8 +1,13 @@
 [tool.pytest.ini_options]
 testpaths   = ["tests"]
 pythonpath  = ["tests", ".", "docker"]     # "." makes custom_components importable; "docker" exposes pylontech_parser and structs
-addopts     = "-v --tb=short --allow-hosts=127.0.0.1,localhost"
+# "-m 'not e2e'" keeps a bare `pytest` fast and hermetic (no subprocesses,
+# no real broker); run the e2e suite explicitly with `pytest -m e2e`.
+addopts     = "-v --tb=short --allow-hosts=127.0.0.1,localhost -m 'not e2e'"
 asyncio_mode = "auto"
+markers = [
+    "e2e: spawns real subprocesses (sidecar, Mosquitto, BMS stub) — excluded from the default run, see addopts",
+]
 
 [tool.pyright]
 include = ["custom_components", "docker", "scripts", "tests"]

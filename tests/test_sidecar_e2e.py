@@ -10,6 +10,10 @@ and verify what actually crosses the wire.
 
 Requires a local ``mosquitto`` binary (``apt install mosquitto`` /
 ``brew install mosquitto``); skipped automatically if it isn't on PATH.
+
+Marked "e2e" and excluded from the default `pytest` run (see addopts in
+pyproject.toml) since it spawns real subprocesses and takes several seconds,
+unlike the rest of the suite. Run explicitly with `pytest -m e2e`.
 """
 
 import json
@@ -27,10 +31,13 @@ import paho.mqtt.client as mqtt
 import pytest
 from paho.mqtt.enums import CallbackAPIVersion
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("mosquitto") is None,
-    reason="requires the 'mosquitto' broker binary on PATH",
-)
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.skipif(
+        shutil.which("mosquitto") is None,
+        reason="requires the 'mosquitto' broker binary on PATH",
+    ),
+]
 
 _ROOT = Path(__file__).parent.parent
 _HOST = "127.0.0.1"
