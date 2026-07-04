@@ -122,7 +122,7 @@ The sidecar publishes:
 | `MQTT_TOPIC_PREFIX` | `pylontech/stack` | Base topic; `/state` and `/availability` are appended |
 | `POLL_INTERVAL` | `15` | Seconds between BMS polls |
 | `AUTO_SYNC_TIME` | `false` | Sync BMS clock to system time on startup |
-| `CELL_POLLING` | `true` | Set to `false` to skip per-battery `bat N` cell polling — useful on larger stacks where the extra per-poll round trips are slow or unwanted |
+| `MONITORING_LEVEL` | `high` | `low`, `medium`, or `high` — how much detail to walk per battery on top of the aggregate `pwr` table. `low`: aggregate `pwr` only. `medium`: adds one `pwr N` round trip per battery for event/fault status the aggregate table doesn't expose. `high`: adds per-battery `bat N` cell polling on top of `medium`. Lower levels mean fewer round trips per poll — useful on larger stacks. |
 | `MAX_BATTERIES` | `16` | Upper bound on `pwr N` probes when the aggregate `pwr` response doesn't look valid (some firmware only exposes per-battery data this way) |
 | `ENERGY_STATE_FILE` | `/data/energy_state.json` | Where cumulative energy_in/energy_out are persisted; set to `""` to disable. Requires the `/data` volume mount shown above to survive container recreation. |
 

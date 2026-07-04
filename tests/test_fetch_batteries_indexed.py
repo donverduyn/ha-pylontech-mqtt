@@ -4,7 +4,7 @@ used when the aggregate 'pwr' response doesn't look valid.
 
 import main
 import pytest
-from structs import PylontechSystem
+from structs import PylontechBattery, PylontechSystem
 
 
 class _FakeBms:
@@ -120,3 +120,85 @@ def test_no_batteries_zeroes_metrics(monkeypatch):
     assert system.current == 0.0
     assert system.soc == 0.0
     assert system.power == 0.0
+
+
+# ===========================================================================
+# main._enrich_batteries_indexed — MONITORING_LEVEL medium/high detail walk
+# ===========================================================================
+def _battery(sys_id: int, **overrides) -> PylontechBattery:
+    bat = PylontechBattery(
+        sys_id=sys_id,
+        voltage=51.2,
+        current=3.806,
+        temperature=17.0,
+        soc=75,
+        status="Charge",
+        power=195.0,
+        energy_stored=0.0,
+    )
+    for key, value in overrides.items():
+        setattr(bat, key, value)
+    return bat
+
+
+def test_enrich_adds_event_and_status_fields():
+    bms = _FakeBms({1: _pwr_block(1)})
+    system = _new_system()
+    system.batteries = [_battery(1)]
+
+    main._enrich_batteries_indexed(bms, system)
+
+    bat = system.batteries[0]
+    assert bat.coul_status == "Normal"
+    assert bat.bat_events == 0
+    assert bat.power_events == 0
+    assert bat.sys_fault == 0
+
+
+def test_enrich_does_not_override_aggregate_core_fields():
+    """The aggregate 'pwr' table stays authoritative for voltage/current/soc
+    — enrichment only adds fields the aggregate table doesn't expose."""
+    bms = _FakeBms({1: _pwr_block(1, voltage=99999, current=99999, soc=1)})
+    system = _new_system()
+    system.batteries = [_battery(1, voltage=51.2, current=3.806, soc=75)]
+
+    main._enrich_batteries_indexed(bms, system)
+
+    bat = system.batteries[0]
+    assert bat.voltage == 51.2
+    assert bat.current == 3.806
+    assert bat.soc == 75
+
+
+def test_enrich_skips_absent_battery():
+    """If 'pwr N' reports the battery absent, existing fields are left
+    untouched and no exception propagates."""
+    bms = _FakeBms({1: "Power 1\r\nBasic Status    : Absent\r\n"})
+    system = _new_system()
+    system.batteries = [_battery(1)]
+
+    main._enrich_batteries_indexed(bms, system)
+
+    bat = system.batteries[0]
+    assert bat.coul_status is None
+    assert bat.bat_events is None
+
+
+def test_enrich_handles_send_command_failure(caplog):
+    """A transport error fetching one battery's indexed detail must be
+    logged and skipped, not abort enrichment for the remaining batteries."""
+    import logging
+
+    class _FailingBms:
+        def send_command(self, cmd: str) -> str:
+            raise TimeoutError("no response")
+
+    system = _new_system()
+    system.batteries = [_battery(1), _battery(2)]
+
+    with caplog.at_level(logging.WARNING):
+        main._enrich_batteries_indexed(_FailingBms(), system)
+
+    assert system.batteries[0].coul_status is None
+    assert system.batteries[1].coul_status is None
+    assert "Could not fetch indexed detail" in caplog.text

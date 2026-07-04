@@ -45,3 +45,40 @@ def test_valid_connection_types_pass_this_check(monkeypatch, caplog) -> None:
     assert exc_info.value.code == 1
     assert "TCP_HOST is required" in caplog.text
     assert "CONNECTION_TYPE must be" not in caplog.text
+
+
+def test_invalid_monitoring_level_exits_before_connecting(monkeypatch, caplog) -> None:
+    """A typo like MONITORING_LEVEL=med must fail validation up front rather
+    than silently falling through to some other detail level."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "MONITORING_LEVEL", "med")
+
+    with caplog.at_level(logging.ERROR, logger="pylon2mqtt"):
+        with pytest.raises(SystemExit) as exc_info:
+            main.main()
+
+    assert exc_info.value.code == 1
+    assert "MONITORING_LEVEL must be" in caplog.text
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high"])
+def test_valid_monitoring_levels_pass_this_check(monkeypatch, caplog, level) -> None:
+    """Each of the three valid levels must not be rejected by the new guard
+    itself — the SystemExit(1) it still hits next (invalid POLL_INTERVAL)
+    must come from the *existing* POLL_INTERVAL check, not a false-positive
+    MONITORING_LEVEL rejection."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "MONITORING_LEVEL", level)
+    monkeypatch.setattr(main, "POLL_INTERVAL", 0)
+
+    with caplog.at_level(logging.ERROR, logger="pylon2mqtt"):
+        with pytest.raises(SystemExit) as exc_info:
+            main.main()
+
+    assert exc_info.value.code == 1
+    assert "POLL_INTERVAL must be" in caplog.text
+    assert "MONITORING_LEVEL must be" not in caplog.text

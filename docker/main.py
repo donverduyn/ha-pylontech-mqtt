@@ -19,7 +19,12 @@ All configuration is via environment variables:
 
   POLL_INTERVAL     : seconds between polls, default 15
   AUTO_SYNC_TIME    : "true" to sync BMS clock on startup, default "false"
-  CELL_POLLING      : "false" to skip per-battery "bat N" cell polling, default "true"
+  MONITORING_LEVEL  : "low", "medium", or "high" (default) — how much detail
+                      to walk per battery on top of the aggregate "pwr" table:
+                        low    - aggregate "pwr" only
+                        medium - adds per-battery "pwr N" detail (events/fault
+                                 status the aggregate table doesn't expose)
+                        high   - adds per-cell "bat N" polling on top of medium
   MAX_BATTERIES     : upper bound on "pwr N" probes when the aggregate "pwr"
                       response is rejected, default 16
 """
@@ -87,7 +92,7 @@ MQTT_TLS = os.getenv("MQTT_TLS", "false").lower() == "true"
 
 POLL_INTERVAL = _int_env("POLL_INTERVAL", 15)
 AUTO_SYNC_TIME = os.getenv("AUTO_SYNC_TIME", "false").lower() == "true"
-CELL_POLLING = os.getenv("CELL_POLLING", "true").lower() == "true"
+MONITORING_LEVEL = os.getenv("MONITORING_LEVEL", "high").lower()
 MAX_BATTERIES = _int_env("MAX_BATTERIES", 16)
 
 # Path where the energy counters are persisted across container restarts.
@@ -107,8 +112,16 @@ PROMPT = b"pylon>"
 # emitting the "pylon>" prompt. Accepting this alternate terminator too keeps
 # those consoles from timing out on every single command.
 _ALT_TERMINATOR = b"Command completed"
+# Once _ALT_TERMINATOR shows up without PROMPT, wait this much longer for a
+# trailing "pylon>" that arrived in a separate read before accepting the
+# response as-is. A serial port clears any such stragglers via
+# reset_input_buffer() before the next write; a TCP socket has no equivalent,
+# so without this grace window a late-arriving "pylon>" would sit in the
+# socket's receive buffer and get prepended to the *next* command's response.
+_ALT_TERMINATOR_GRACE = 0.3
 _READ_TIMEOUT = 5.0  # overall deadline waiting for a complete response
 _POLL_INTERVAL = 0.1  # per-read timeout while polling for more data
+_COMMAND_RETRIES = 2  # extra attempts after a bare read timeout, before giving up
 
 
 class BmsConnection:
@@ -170,6 +183,7 @@ class BmsConnection:
         for expected substrings rather than a definitive terminator).
         """
         deadline = time.monotonic() + _READ_TIMEOUT
+        grace_deadline: float | None = None
         data = b""
         while time.monotonic() < deadline:
             if CONNECTION_TYPE == "tcp":
@@ -179,37 +193,85 @@ class BmsConnection:
                 try:
                     chunk = self._tcp.recv(4096)
                 except socket.timeout:
-                    continue
-                if not chunk:
-                    raise ConnectionError("BMS closed the TCP connection")
+                    chunk = None  # nothing arrived this tick — not EOF
+                else:
+                    if not chunk:
+                        # A real recv() of b"" (no exception) means the peer
+                        # closed the connection — always fatal, even mid-grace.
+                        raise ConnectionError("BMS closed the TCP connection")
             else:
                 if self._serial is None:
                     raise ConnectionError("Serial port is not open")
-                chunk = self._serial.read(4096)
-                if not chunk:
-                    continue
-            data += chunk
-            if PROMPT in data or _ALT_TERMINATOR in data:
+                chunk = self._serial.read(4096)  # b"" on timeout; serial has no EOF
+            if chunk:
+                data += chunk
+            if PROMPT in data:
                 return data
+            if _ALT_TERMINATOR in data:
+                if grace_deadline is None:
+                    grace_deadline = time.monotonic() + _ALT_TERMINATOR_GRACE
+                elif time.monotonic() >= grace_deadline:
+                    return data
         raise TimeoutError(
             f"Timed out after {_READ_TIMEOUT}s waiting for the "
             f"{PROMPT.decode()!r} prompt or {_ALT_TERMINATOR.decode()!r} "
             f"({len(data)} bytes received)"
         )
 
-    def send_command(self, cmd: str) -> str:
-        """Send a command and return the ASCII response."""
-        self._ensure_open()
+    def _flush_stale_input(self) -> None:
+        """Discard bytes left over from an abandoned previous response.
+
+        Without this, a retried or unrelated next command could have stale
+        bytes (e.g. a late "pylon>") prepended to its response.
+        """
         if CONNECTION_TYPE == "tcp":
             if self._tcp is None:
-                raise RuntimeError("TCP socket is not open")
-            self._tcp.sendall((cmd + "\n").encode("ascii"))
-        else:
-            if self._serial is None:
-                raise RuntimeError("Serial port is not open")
+                return
+            self._tcp.settimeout(0.05)
+            try:
+                while self._tcp.recv(4096):
+                    pass
+            except (socket.timeout, OSError):
+                pass
+        elif self._serial is not None:
             self._serial.reset_input_buffer()
-            self._serial.write((cmd + "\n").encode("ascii"))
-        return self._read_until_prompt().decode("ascii", errors="ignore")
+
+    def send_command(self, cmd: str) -> str:
+        """Send a command and return the ASCII response.
+
+        A bare read timeout (nothing corrupted, just no response arrived in
+        time) is retried in place up to _COMMAND_RETRIES times before giving
+        up — the same transient-stall case pytes_serial's write-retry
+        mechanism targets, without resending raw bytes based on serial
+        buffer-fill heuristics. A ConnectionError (remote/serial side gone)
+        is never retried here; that needs a full reconnect, handled by the
+        poll loop's outer exception handling.
+        """
+        self._ensure_open()
+        attempt = 0
+        while True:
+            self._flush_stale_input()
+            if CONNECTION_TYPE == "tcp":
+                if self._tcp is None:
+                    raise RuntimeError("TCP socket is not open")
+                self._tcp.sendall((cmd + "\n").encode("ascii"))
+            else:
+                if self._serial is None:
+                    raise RuntimeError("Serial port is not open")
+                self._serial.write((cmd + "\n").encode("ascii"))
+            try:
+                return self._read_until_prompt().decode("ascii", errors="ignore")
+            except TimeoutError:
+                attempt += 1
+                if attempt > _COMMAND_RETRIES:
+                    raise
+                _LOGGER.warning(
+                    "No response to %r within %.0fs — retrying (%d/%d)",
+                    cmd,
+                    _READ_TIMEOUT,
+                    attempt,
+                    _COMMAND_RETRIES,
+                )
 
     def close(self) -> None:
         for conn in (self._tcp, self._serial):
@@ -393,6 +455,33 @@ def _fetch_batteries_indexed(bms: "BmsConnection", system: PylontechSystem) -> N
         system.power = 0.0
 
 
+def _enrich_batteries_indexed(bms: "BmsConnection", system: PylontechSystem) -> None:
+    """Add per-battery detail only the vertical 'pwr N' block exposes
+    (coul_status, bat_events, power_events, sys_fault) on top of batteries
+    already populated from the aggregate 'pwr' table.
+
+    Used at MONITORING_LEVEL medium/high: the aggregate table stays the
+    cheap, single-round-trip source of truth for voltage/current/soc/status,
+    so this is additive detail, not a replacement — one extra round trip per
+    battery, walked only when the extra detail was actually asked for.
+    """
+    for bat in system.batteries:
+        try:
+            raw = bms.send_command(f"pwr {bat.sys_id}")
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not fetch indexed detail for battery %d: %s", bat.sys_id, err
+            )
+            continue
+        indexed = PylontechParser.parse_pwr_indexed(raw, bat.sys_id)
+        if indexed is None:
+            continue
+        bat.coul_status = indexed.coul_status
+        bat.bat_events = indexed.bat_events
+        bat.power_events = indexed.power_events
+        bat.sys_fault = indexed.sys_fault
+
+
 def _build_mqtt_client() -> mqtt.Client:
     """Construct the sidecar's paho client with auth, TLS, and LWT applied."""
     client = mqtt.Client(CallbackAPIVersion.VERSION2)
@@ -451,6 +540,12 @@ def main() -> None:
         sys.exit(1)
     if BAUD_RATE <= 0:
         _LOGGER.error("BAUD_RATE must be a positive integer (got %d)", BAUD_RATE)
+        sys.exit(1)
+    if MONITORING_LEVEL not in ("low", "medium", "high"):
+        _LOGGER.error(
+            "MONITORING_LEVEL must be 'low', 'medium', or 'high' (got %r)",
+            MONITORING_LEVEL,
+        )
         sys.exit(1)
     if POLL_INTERVAL <= 0:
         _LOGGER.error(
@@ -538,12 +633,17 @@ def main() -> None:
 
             if "Power Volt" in raw_pwr:
                 PylontechParser.parse_pwr(raw_pwr, system)
+                if MONITORING_LEVEL in ("medium", "high"):
+                    _enrich_batteries_indexed(bms, system)
             else:
                 # Some Pytes/Pylontech firmware either doesn't implement the
                 # aggregate table or formats its columns differently. Fall
                 # back to probing each battery individually via "pwr N",
                 # which uses a completely different (vertical) response
-                # format — see PylontechParser.parse_pwr_indexed.
+                # format — see PylontechParser.parse_pwr_indexed. This
+                # correctness fallback runs regardless of MONITORING_LEVEL —
+                # without it there would be zero battery data on such
+                # firmware at any detail level.
                 _LOGGER.warning(
                     "Aggregate 'pwr' response missing expected header — "
                     "falling back to per-battery 'pwr N' polling"
@@ -557,7 +657,7 @@ def main() -> None:
             raw_stat = bms.send_command("stat")
             raw_time = bms.send_command("time")
 
-            if CELL_POLLING:
+            if MONITORING_LEVEL == "high":
                 for bat in system.batteries:
                     try:
                         raw_bat = bms.send_command(f"bat {bat.sys_id}")

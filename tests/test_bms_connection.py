@@ -6,6 +6,7 @@ correct behavior against real (if simulated) response timing.
 """
 
 import socket
+import threading
 import time
 
 import main
@@ -132,6 +133,97 @@ class TestReadUntilPromptTruncation:
             data = conn._read_until_prompt()
             assert b"Command completed" in data
             assert b"pylon>" not in data
+        finally:
+            server.close()
+            client.close()
+
+    def test_late_prompt_within_grace_window_is_absorbed(self, monkeypatch) -> None:
+        """A 'pylon>' that arrives in a separate read shortly after 'Command
+        completed' must still be captured here — not left to leak into the
+        next command's response (see _ALT_TERMINATOR_GRACE)."""
+        conn = self._connection(monkeypatch, read_timeout=2.0)
+        monkeypatch.setattr(main, "_ALT_TERMINATOR_GRACE", 0.2)
+        server, client = socket.socketpair()
+        conn._tcp = client
+        try:
+            server.sendall(b"Command completed\r\n")
+
+            def _send_late_prompt() -> None:
+                time.sleep(0.05)
+                server.sendall(b"pylon>")
+
+            t = threading.Thread(target=_send_late_prompt)
+            t.start()
+            data = conn._read_until_prompt()
+            t.join(timeout=1)
+
+            assert b"pylon>" in data
+        finally:
+            server.close()
+            client.close()
+
+
+class TestSendCommandRetryAndFlush:
+    """send_command retries a bare read timeout in place before giving up,
+    and flushes stale unread bytes before every write so a retry (or the
+    next command entirely) never inherits contamination from an abandoned
+    response — see BmsConnection.send_command / _flush_stale_input."""
+
+    def _connection(self, monkeypatch, *, read_timeout: float, retries: int) -> "main.BmsConnection":
+        monkeypatch.setattr(main, "CONNECTION_TYPE", "tcp")
+        monkeypatch.setattr(main, "_READ_TIMEOUT", read_timeout)
+        monkeypatch.setattr(main, "_COMMAND_RETRIES", retries)
+        return main.BmsConnection()
+
+    def test_retries_after_a_stall_then_succeeds(self, monkeypatch) -> None:
+        conn = self._connection(monkeypatch, read_timeout=0.3, retries=2)
+        server, client = socket.socketpair()
+        conn._tcp = client
+
+        def _server() -> None:
+            server.recv(4096)  # first "pwr\n" write — deliberately ignored
+            time.sleep(0.5)  # outlast the client's 0.3s read timeout
+            server.recv(4096)  # the retried write
+            server.sendall(b"Command completed successfully\r\npylon>")
+
+        t = threading.Thread(target=_server)
+        try:
+            t.start()
+            result = conn.send_command("pwr")
+            t.join(timeout=2)
+            assert "Command completed successfully" in result
+        finally:
+            server.close()
+            client.close()
+
+    def test_gives_up_after_exhausting_retries(self, monkeypatch) -> None:
+        conn = self._connection(monkeypatch, read_timeout=0.2, retries=1)
+        server, client = socket.socketpair()
+        conn._tcp = client
+        try:
+            with pytest.raises(TimeoutError):
+                conn.send_command("pwr")  # server never responds at all
+        finally:
+            server.close()
+            client.close()
+
+    def test_flush_stale_input_drains_leftover_bytes(self, monkeypatch) -> None:
+        """Bytes abandoned from a previous response must not leak into the
+        next _read_until_prompt() call after a flush."""
+        monkeypatch.setattr(main, "CONNECTION_TYPE", "tcp")
+        conn = main.BmsConnection()
+        server, client = socket.socketpair()
+        conn._tcp = client
+        try:
+            server.sendall(b"stale leftover bytes from an abandoned response")
+            time.sleep(0.05)  # let the bytes actually land in the socket buffer
+            conn._flush_stale_input()
+
+            server.sendall(b"Command completed successfully\r\npylon>")
+            data = conn._read_until_prompt()
+
+            assert b"stale leftover" not in data
+            assert b"Command completed successfully" in data
         finally:
             server.close()
             client.close()
