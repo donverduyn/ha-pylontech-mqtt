@@ -1,37 +1,47 @@
 #!/bin/sh
 set -e
 
-# /home/vscode/.agent-sync is the one remaining bind mount (a directory, not
-# a file — see seedHostAgentConfig.sh for why that distinction matters).
-# Docker auto-creates its target as root before this script runs if it
-# doesn't already exist in the base image, so it needs its ownership fixed
-# before anything below can write into it.
+# /home/vscode/.agent-sync is a directory bind mount, staging just
+# .claude.json (see agent-config-files.txt and seedHostAgentConfig.sh for
+# why that one file alone still needs staging). Docker auto-creates its
+# target as root before this script runs if it doesn't already exist in the
+# base image, so it needs its ownership fixed before anything below can
+# write into it.
 sudo mkdir -p "$HOME/.agent-sync"
 sudo chown vscode:vscode "$HOME/.agent-sync"
 
-# Copy each AI CLI's staged config from the sync mount into its real
-# container-local path. Plain copies, not mounts, into paths nothing else
-# ever bind-mounts — so unlike the old per-file bind mounts, there's no
-# Docker-auto-created-as-root parent dir to fix here; mkdir -p below creates
-# each one as the vscode user directly.
-while IFS='|' read -r relpath _kind; do
+# Every "dir"-kind path in agent-config-files.txt is its own live bind mount
+# straight onto its real container path (see devcontainer.json's "mounts"),
+# so there's nothing to copy in for those — the mount already *is* the real
+# path. Docker still auto-creates each one as root before this script runs,
+# same as .agent-sync above, so ownership needs fixing regardless. The one
+# "json"-kind path (.claude.json) isn't mounted at all — copy it in from
+# the staging mount instead.
+while IFS='|' read -r relpath kind; do
   case "$relpath" in
     ''|'#'*) continue ;;
   esac
-  src="$HOME/.agent-sync/$relpath"
-  dest="$HOME/$relpath"
-  [ -f "$src" ] || continue
-  mkdir -p "$(dirname "$dest")"
-  cp -p "$src" "$dest"
+  case "$kind" in
+    dir)
+      sudo mkdir -p "$HOME/$relpath"
+      sudo chown -R vscode:vscode "$HOME/$relpath"
+      ;;
+    json)
+      src="$HOME/.agent-sync/$relpath"
+      dest="$HOME/$relpath"
+      [ -f "$src" ] || continue
+      mkdir -p "$(dirname "$dest")"
+      cp -p "$src" "$dest"
+      ;;
+  esac
 done < "$(dirname "$0")/agent-config-files.txt"
-
-# Whole-directory mount (not per-file), so its contents need to be usable too.
-sudo chown -R vscode:vscode "$HOME/.copilot" || true
 
 # xdg-utils provides xdg-open, which opencode/other CLIs shell out to for browser-based
 # auth flows; without it, browser launches silently fail even though $BROWSER is set.
+# inotify-tools provides inotifywait, which syncAgentConfigOut.sh (postStartCommand)
+# uses to push .claude.json out to the host the moment it changes instead of polling.
 sudo apt-get update
-sudo apt-get install -y xdg-utils
+sudo apt-get install -y xdg-utils inotify-tools
 
 npm install -g @openai/codex @kilocode/cli
 
@@ -84,3 +94,9 @@ grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_m
 # (anthropics/claude-code#49273) — an alias is the reliable way to make this
 # devcontainer's Claude Code sessions start in auto mode by default.
 grep -qF 'alias claude=' /home/vscode/.bashrc || echo "alias claude='claude --permission-mode auto'" >> /home/vscode/.bashrc
+
+# Same idea for the Antigravity CLI (agy): --dangerously-skip-permissions
+# auto-approves every tool permission request instead of prompting. A plain
+# alias still lets any extra arguments you type pass through untouched
+# (`agy foo` expands to `agy --dangerously-skip-permissions foo`).
+grep -qF 'alias agy=' /home/vscode/.bashrc || echo "alias agy='agy --dangerously-skip-permissions'" >> /home/vscode/.bashrc

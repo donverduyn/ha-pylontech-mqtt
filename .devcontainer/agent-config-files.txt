@@ -1,39 +1,39 @@
-# Single source of truth for every AI CLI config/auth file that needs to
-# survive a container rebuild, read by three scripts (host-side
-# seedHostAgentConfig.sh, and container-side postCreate.sh + syncAgentConfigOut.sh)
-# so the list of files is never duplicated. Format: "<path relative to
-# $HOME>|<seed kind>", where seed kind is:
-#   json  - missing file is created as an empty JSON object: {}
-#   empty - missing file is created zero-length (YAML/TOML/plain-token files,
-#           where an empty file parses the same as "no config")
-# GitHub Copilot CLI's ~/.copilot is deliberately not here: it's a whole
-# directory (session-store.db + friends), mounted directly rather than
-# staged through this file-by-file sync.
+# Single source of truth for every AI CLI config path that needs to survive
+# a container rebuild, read by four scripts (host-side seedHostAgentConfig.sh
+# and verifyHostAgentConfig.sh, container-side postCreate.sh and
+# syncAgentConfigOut.sh) so the list is never duplicated. Format: "<path
+# relative to $HOME>|<kind>", where kind is:
+#   dir   - a whole directory, bind-mounted read-write directly from this
+#           project's backup onto the container's real path for it (see
+#           devcontainer.json's "mounts"). Seeded once, ever, from whatever
+#           the host has at that path; after that the mount itself is the
+#           only copy anyone reads or writes -- no copying, no polling.
+#   json  - a bare file, not inside its own directory, so it can't be
+#           bind-mounted the same way (see seedHostAgentConfig.sh for why).
+#           Still handled the old file-by-file way: seeded once as {} if
+#           the host doesn't have one, copied into the container by
+#           postCreate.sh, and polled back out by syncAgentConfigOut.sh.
 
 # Claude Code
-.claude/settings.json|json
-.claude/.credentials.json|json
+.claude|dir
 .claude.json|json
 
 # Codex
-.codex/auth.json|json
-.codex/config.toml|empty
+.codex|dir
 
 # OpenCode
-.config/opencode/opencode.jsonc|json
-.local/share/opencode/auth.json|json
+.config/opencode|dir
+.local/share/opencode|dir
 
 # Kilocode CLI
-.config/kilo/kilo.jsonc|json
+.config/kilo|dir
 
 # GitHub CLI
-.config/gh/hosts.yml|empty
-.config/gh/config.yml|empty
+.config/gh|dir
 
 # Antigravity CLI / Gemini CLI (shared ~/.gemini tree)
-.gemini/oauth_creds.json|json
-.gemini/google_accounts.json|json
-.gemini/settings.json|json
-.gemini/trustedFolders.json|json
-.gemini/antigravity-cli/settings.json|json
-.gemini/antigravity-cli/antigravity-oauth-token|empty
+.gemini|dir
+
+# GitHub Copilot CLI (session-store.db mixes login in with everything else
+# it stores, same reasoning as the other directories above)
+.copilot|dir

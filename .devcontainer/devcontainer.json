@@ -13,7 +13,14 @@
     "ghcr.io/devcontainers-extra/features/claude-code:2": {},
     "ghcr.io/devcontainers-extra/features/opencode:1": {},
     "ghcr.io/devcontainers-extra/features/uv:1": {},
-    "ghcr.io/devcontainers/features/node:2": {},
+    // Pinned major version: the feature defaults to whatever "lts" resolves
+    // to at build time, which drifts across major versions over a
+    // container's lifetime. The npm-installed AI CLIs below (Codex,
+    // Kilocode) are deliberately left unpinned instead — those want latest
+    // by design, and floating is the whole point of an "agent" package.
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "22"
+    },
     "ghcr.io/devcontainers/features/copilot-cli:1": {},
     "ghcr.io/aqua/devcontainer-antigravity-cli/antigravity-cli:1": {},
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
@@ -44,19 +51,31 @@
   // closing a container mid-write could leave a torn/truncated file on the
   // host — see this repo's history for the incident that surfaced it.
   //
-  // Replacement: agent-config-files.txt lists every one of these files.
-  // Nothing in that list is bind-mounted anymore — seedHostAgentConfig.sh
-  // (initializeCommand, host-side) stages the host's current copy of each
-  // into a directory, postCreate.sh copies that staged directory into the
-  // container's real paths, and syncAgentConfigOut.sh (postStartCommand)
-  // polls those real paths and copies changes back into the staged
-  // directory as they happen. Only that staging directory is a bind mount
-  // now, and only ever as a *directory* — nothing renames over the mount
-  // point itself, so the single-file rename problem above doesn't apply to
-  // it. The tradeoff: a change made inside the container isn't folded back
-  // onto the host file until the *next* time this project's container
-  // starts (there's no devcontainer hook that runs on the host at
-  // container stop to do it any sooner).
+  // Replacement: agent-config-files.txt lists every one of these paths,
+  // almost all of them whole directories. A *directory* bind mount doesn't
+  // have the single-file problem above — a rename inside a mounted
+  // directory only replaces that entry, never the mount point itself — so
+  // each tool's directory is bind-mounted read-write straight from this
+  // project's own backup onto its real container path (see "mounts"
+  // below). seedHostAgentConfig.sh (initializeCommand, host-side) seeds
+  // that backup once, ever, from whatever the host has at that path the
+  // very first time this project's container starts; after that, the live
+  // mount is the only thing anyone reads or writes, forever — no copying,
+  // no polling, and (deliberately) no folding container changes back onto
+  // the host's own copy or any other project's. A prior version of this
+  // did fold every change back onto the host on each rebuild — a
+  // whole-file replace with no way to merge, so it was last-write-wins
+  // against whatever the host or another project had changed since,
+  // verified in practice to silently discard host edits, not just a
+  // theoretical risk. See seedHostAgentConfig.sh for the full story.
+  //
+  // .claude.json is the one exception: a bare file at $HOME root, not
+  // inside its own directory, so it can't be bind-mounted the way the rest
+  // are — same single-file rename problem as above. It still gets the old
+  // file-by-file treatment (seeded once by seedHostAgentConfig.sh, copied
+  // in by postCreate.sh, polled back out by syncAgentConfigOut.sh's
+  // postStartCommand below), just scoped to this one file now instead of
+  // every path.
   //
   // Each tool also has its own native per-project override mechanism, which
   // needs no mount at all — it's just a file committed in this repo that
@@ -68,20 +87,35 @@
   //   Copilot CLI   -> .github/mcp.json, .github/lsp.json, .github/hooks/
   //   Antigravity   -> .gemini/settings.json in the repo root (shares Gemini CLI's settings engine)
   //   GitHub CLI    -> no native project-level override; global-only
+  // Every source below lives under this same per-project root — keyed on
+  // ${localWorkspaceFolder} (this project's absolute path), not its
+  // basename, so two checkouts of differently-located repos that happen to
+  // share a folder name can't collide on one sync directory. Kept in sync
+  // manually with the equivalent computation in seedHostAgentConfig.sh
+  // ("$home/.devcontainer-agent-sync$PWD"), since one runs in a JSON string
+  // and the other in a shell script.
   "mounts": [
-    // Staging directory for every file in agent-config-files.txt (Claude
-    // Code, Codex, OpenCode, Kilocode CLI, GitHub CLI, Antigravity/Gemini).
-    // ${localWorkspaceFolderBasename} scopes it per project; kept in sync
-    // manually with the same computation in seedHostAgentConfig.sh (basename
-    // of $PWD there), since one runs in a JSON string and the other in a
-    // shell script.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync/${localWorkspaceFolderBasename},target=/home/vscode/.agent-sync,type=bind",
-    // GitHub Copilot CLI: whole directory, not staged file-by-file — its
-    // login lives inside session-store.db (SQLite) alongside everything
-    // else it stores, so auth can't be isolated from the rest here. Still a
-    // plain bind mount: it's a directory, so the single-file rename problem
-    // above doesn't apply to it the same way.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.copilot,target=/home/vscode/.copilot,type=bind"
+    // Staging directory for .claude.json, the one path in
+    // agent-config-files.txt that isn't bind-mounted directly (see the
+    // "initializeCommand" comment above for why).
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder},target=/home/vscode/.agent-sync,type=bind",
+    // Everything else in agent-config-files.txt: a live, read-write,
+    // whole-directory bind mount straight from this project's own backup
+    // onto the tool's real container path. No copying, no polling — see
+    // the "initializeCommand" comment above.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.claude,target=/home/vscode/.claude,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.codex,target=/home/vscode/.codex,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.gemini,target=/home/vscode/.gemini,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/opencode,target=/home/vscode/.config/opencode,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/share/opencode,target=/home/vscode/.local/share/opencode,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/kilo,target=/home/vscode/.config/kilo,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/gh,target=/home/vscode/.config/gh,type=bind",
+    // GitHub Copilot CLI: its login lives inside session-store.db (SQLite)
+    // alongside everything else it stores, so auth can't be isolated to a
+    // single file here either — same whole-directory treatment as the rest
+    // above, now scoped per-project like everything else instead of one
+    // mount shared globally across every project and the host.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.copilot,target=/home/vscode/.copilot,type=bind"
   ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`
   // but applies to non-interactive shells and VS Code's integrated terminal too). This must be
@@ -92,12 +126,21 @@
     "PATH": "/home/vscode/.venv/bin:/usr/local/share/nvm/current/bin:${containerEnv:PATH}"
   },
   "postCreateCommand": "bash .devcontainer/postCreate.sh",
-  // Backgrounded (the trailing &) so this returns immediately instead of
-  // blocking startup on syncAgentConfigOut.sh's infinite poll loop — see
-  // that script and the "mounts" comment above for what it's syncing and why.
-  // Runs on every start, not just creation, since a plain restart of an
-  // existing container still needs the poller relaunched.
-  "postStartCommand": "bash .devcontainer/syncAgentConfigOut.sh &",
+  // nohup'd and backgrounded so this returns immediately instead of blocking
+  // startup on syncAgentConfigOut.sh's infinite inotifywait loop — see that
+  // script and the "mounts" comment above for what it's syncing and why.
+  // Plain `&` isn't enough here (confirmed in practice: the watcher was
+  // found dead with no pidfile shortly after startup, stale configs behind)
+  // — the Dev Containers CLI runs postStartCommand as its own exec session,
+  // and whatever ends that session can take a bare backgrounded child down
+  // with it. nohup detaches the process from that session so it survives
+  // past the command "finishing"; see
+  // https://code.visualstudio.com/remote/advancedcontainers/start-processes
+  // for the same guidance. Runs on every start, not just creation, since a
+  // plain restart of an existing container still needs the watcher
+  // relaunched; the pidfile check inside the script itself is what stops
+  // that from stacking a second watcher on top of one still running.
+  "postStartCommand": "nohup bash .devcontainer/syncAgentConfigOut.sh > /tmp/sync-agent-config-out.log 2>&1 &",
   // Default waitFor is "updateContentCommand", so VS Code attaches and reads
   // python.defaultInterpreterPath before postCreateCommand has created the venv, causing
   // a spurious "no interpreter at path" warning on every fresh container. Block on it instead.

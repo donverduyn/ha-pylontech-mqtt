@@ -12,61 +12,53 @@
 # and with the host's own Claude Code and a devcontainer's both able to hold
 # the same file open at once, that's a race, not a corner case.
 #
-# Replacement: nothing here is a live mount. Each container gets its own
-# plain copy (see postCreate.sh) and stages every change it makes into a
-# directory synced out by syncAgentConfigOut.sh — a *directory* bind mount,
-# which doesn't have the single-file rename problem since nothing ever
-# renames over the mount point itself, only creates fresh files inside it.
-# This script is where that staged state gets folded back onto the host
-# files, once, before the next container starts (there's no devcontainer
-# lifecycle hook that runs on the host when a container stops, so "next
-# start" is the earliest safe point to do this).
+# Replacement: agent-config-files.txt lists every one of these paths, most
+# of them whole directories (kind "dir"). A *directory* bind mount doesn't
+# have the single-file problem above — renaming a file inside a mounted
+# directory only replaces that entry, never the mount point itself — so
+# this project's own backup directory ($sync_dir below) gets bind-mounted
+# straight onto the container's real path for each tool (see
+# devcontainer.json's "mounts"). This script's only job for those is to
+# seed $sync_dir once, ever, the very first time this project's container
+# starts, from whatever the host happens to have at that moment.
 #
-# $sync_dir is this project's own persisted backup, not a mirror of
-# whatever's currently authoritative on the host: it's seeded once (the
-# first time this project's container ever starts) and after that is only
-# ever updated by that project's own container session
-# (syncAgentConfigOut.sh) — never overwritten here with the host's current
-# state. That matters because the fold-forward below is a whole-file
-# replace, not a field-level merge (these JSON blobs mix unrelated concerns —
-# OAuth token, project list, MCP registry, trust decisions, startup
-# counters — with no way to reconcile field-by-field), so it's inherently
-# last-write-wins: if the host, or another project's container, changed the
-# shared file since this project's own backup was last updated, that change
-# is silently gone from the shared file the moment this fold-forward runs.
-# Keeping $sync_dir untouched by anyone else's writes is what bounds that
-# loss to "not merged into the live file" rather than "gone" — the discarded
-# state still exists, intact, in whichever project's or host's own history
-# last had it, and a rebuild always reproduces from *this* project's own
-# backup rather than from whatever the shared file happened to look like at
-# that moment.
+# A prior version of this script instead folded $sync_dir back onto the
+# host's file on every rebuild. That was a whole-file replace, not a
+# field-level merge (these JSON blobs mix unrelated concerns — OAuth token,
+# project list, MCP registry, trust decisions, startup counters — with no
+# way to reconcile field-by-field), so it was inherently last-write-wins:
+# confirmed in practice, not just in theory, to silently discard a host-side
+# edit made between two of this project's container starts. That
+# fold-forward is gone. After the first seed, this script never reads from
+# or writes to the host's own copy of a "dir" path again — the live bind
+# mount is the only thing anyone reads or writes from that point on, so
+# there's nothing left to fold forward, and no way for this project's
+# container or another project's to stomp on the host's or each other's
+# state.
 #
-# basename of $PWD, not a devcontainer variable: initializeCommand runs with
-# cwd set to the local workspace folder, same value
-# `${localWorkspaceFolderBasename}` resolves to in devcontainer.json's mounts
-# entry for this same sync directory — kept in sync manually, not shared,
-# since one runs in a JSON string and the other in a shell script. Two
-# checkouts of this repo under the same basename will share (and race for)
-# one sync directory; not handled here.
+# .claude.json is the one exception: it's a bare file at $HOME root, not
+# inside its own directory, so it can't be bind-mounted the way the "dir"
+# paths are — same single-file rename problem as the very first paragraph
+# above. It still gets the old file-by-file treatment (seeded here once;
+# see postCreate.sh and syncAgentConfigOut.sh for the copy-in/poll-out
+# around it), just scoped to this one file instead of every path.
 #
-# Every path in agent-config-files.txt is global (one copy under $HOME, not
-# per-project), so two *different* projects' containers restarting at the
-# same moment run this script concurrently against the same host files —
-# unlike the container side, this isn't a corner case worth ignoring, since
-# it's the same host machine running everything. Two defenses below:
-# every write is temp-file-then-rename (rename is atomic on the same
-# filesystem, so a concurrent writer can never leave a torn/half-written
-# file, only a clean last-write-wins), and the whole run is wrapped in a
-# mkdir-based mutex (mkdir is atomic on any POSIX filesystem — used instead
-# of flock(1), which macOS doesn't ship) so two concurrent runs serialize
-# instead of interleaving their flush/reseed/restage steps at all.
+# $sync_dir is keyed on this project's absolute path, not its basename —
+# initializeCommand runs with cwd set to the local workspace folder, the
+# same value ${localWorkspaceFolder} resolves to in devcontainer.json's
+# mounts entries for this same tree (kept in sync manually, not shared,
+# since one runs in a JSON string and the other in a shell script). Basename
+# alone would let two checkouts of differently-located repos that happen to
+# share a folder name collide on one sync directory; the absolute path
+# can't collide that way. (Existing per-project backups seeded under the
+# old basename-keyed path are simply orphaned by this change — the next
+# build re-seeds fresh from whatever the host has, same as any first-ever
+# build.)
 set -e
 
 home="${HOME:-$USERPROFILE}"
 list_file="$(dirname "$0")/agent-config-files.txt"
-project="$(basename "$PWD")"
-sync_dir="$home/.devcontainer-agent-sync/$project"
-lock_dir="$home/.devcontainer-agent-sync/.lock"
+sync_dir="$home/.devcontainer-agent-sync$PWD"
 
 mkdir -p "$sync_dir"
 
@@ -84,26 +76,11 @@ seed_json() {
   [ -f "$1" ] || { mkdir -p "$(dirname "$1")" && tmp="$1.tmp.$$" && printf '{}' > "$tmp" && mv -f "$tmp" "$1"; }
 }
 
-seed_empty() {
-  [ -f "$1" ] || { mkdir -p "$(dirname "$1")" && tmp="$1.tmp.$$" && : > "$tmp" && mv -f "$tmp" "$1"; }
-}
-
-# Wait for any other project's concurrent run to finish rather than race it.
-# A run here only ever does a handful of small file copies, so a genuinely
-# held lock clears in well under a second; ~15s of retries is purely to
-# recover from a lock left behind by a run that got SIGKILLed (the EXIT trap
-# below can't fire for that), not a realistic wait time.
-tries=0
-while ! mkdir "$lock_dir" 2>/dev/null; do
-  tries=$((tries + 1))
-  if [ "$tries" -ge 15 ]; then
-    rm -rf "$lock_dir"
-    continue
-  fi
-  sleep 1
-done
-trap 'rmdir "$lock_dir" 2>/dev/null' EXIT
-
+# Two *different* projects' containers starting at the same moment could
+# both see .claude.json missing on the host and both create the {}
+# placeholder for it. No lock needed: seed_json and atomic_cp both write via
+# a per-process-unique temp file + atomic mv, so both concurrent runs land
+# the same content without ever producing a torn file.
 while IFS='|' read -r relpath kind; do
   case "$relpath" in
     ''|'#'*) continue ;;
@@ -112,24 +89,18 @@ while IFS='|' read -r relpath kind; do
   host_path="$home/$relpath"
   sync_path="$sync_dir/$relpath"
 
-  # Fold this project's own backup onto the shared host file — last-write-wins,
-  # see the header comment for exactly what this can and can't lose.
-  [ -f "$sync_path" ] && atomic_cp "$sync_path" "$host_path"
+  # Already seeded for this project on a prior run — leave it alone from
+  # here on, whichever kind it is.
+  [ -e "$sync_path" ] && continue
 
   case "$kind" in
-    json) seed_json "$host_path" ;;
-    empty) seed_empty "$host_path" ;;
+    dir)
+      mkdir -p "$sync_path"
+      [ -d "$host_path" ] && cp -a "$host_path/." "$sync_path/"
+      ;;
+    json)
+      seed_json "$host_path"
+      atomic_cp "$host_path" "$sync_path"
+      ;;
   esac
-
-  # Seed this project's own backup once, only if it has never existed —
-  # after this first time, it's only ever updated by this project's own
-  # container session, never refreshed from the shared file here.
-  [ -f "$sync_path" ] || atomic_cp "$host_path" "$sync_path"
 done < "$list_file"
-
-# GitHub Copilot CLI: whole directory, not staged file-by-file (see
-# agent-config-files.txt) — still a plain bind mount since its login lives
-# inside session-store.db (SQLite) alongside its own cache/session state, so
-# there's no single "the auth file" to isolate and rename-over-mount doesn't
-# apply the same way to a directory mount.
-mkdir -p "$home/.copilot"

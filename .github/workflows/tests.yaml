@@ -108,9 +108,14 @@ jobs:
       - name: actionlint
         run: /tmp/actionlint -color .github/workflows/*.yaml
       - name: ShellCheck
-        # Preinstalled on ubuntu-latest runners; scoped to the repo's only two
-        # shell scripts (docker/Dockerfile has no other shell to lint).
-        run: shellcheck scripts/clean.sh .devcontainer/postCreate.sh
+        # Preinstalled on ubuntu-latest runners; covers every shell script in
+        # the repo (docker/Dockerfile has no other shell to lint).
+        run: |
+          shellcheck scripts/clean.sh \
+            .devcontainer/postCreate.sh \
+            .devcontainer/seedHostAgentConfig.sh \
+            .devcontainer/syncAgentConfigOut.sh \
+            .devcontainer/verifyHostAgentConfig.sh
       - name: Install Hadolint
         run: |
           curl -sSfLo /tmp/hadolint \

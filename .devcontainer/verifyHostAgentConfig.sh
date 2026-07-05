@@ -1,11 +1,17 @@
 #!/bin/sh
-# Run on the HOST (not inside the devcontainer) to confirm every file
-# .devcontainer/devcontainer.json's `mounts` expects is actually present
-# under $HOME before rebuilding — a missing file here means that CLI will
-# come up logged out / unconfigured after the rebuild, same as a fresh
-# install. Companion to seedHostAgentConfig.sh, which only guarantees a
-# file *exists* (possibly as an empty placeholder); this checks whether it
-# actually has real content in it.
+# Run on the HOST (not inside the devcontainer) to confirm every path in
+# agent-config-files.txt is actually present and populated under $HOME
+# before rebuilding.
+#
+# This only reflects what a *fresh* per-project seed would pull in — for a
+# project whose backup already exists under
+# ~/.devcontainer-agent-sync/<absolute-path>, seedHostAgentConfig.sh never
+# looks at these host paths again (see that script), so an existing
+# project's container may already have newer or different content than
+# what's checked here. This script is most useful before a project's very
+# first build, or after intentionally deleting its backup to force a
+# re-seed — a missing/empty path here means that CLI will come up logged
+# out / unconfigured the next time either of those happens.
 set -e
 
 home="${HOME:-$USERPROFILE}"
@@ -42,23 +48,15 @@ check() {
   fi
 }
 
-check "$home/.claude/settings.json" "claude"
-check "$home/.claude/.credentials.json" "claude"
+check "$home/.claude" "claude"
 check "$home/.claude.json" "claude"
-check "$home/.codex/auth.json" "codex"
-check "$home/.codex/config.toml" "codex"
-check "$home/.config/opencode/opencode.jsonc" "opencode"
-check "$home/.local/share/opencode/auth.json" "opencode"
-check "$home/.config/kilo/kilo.jsonc" "kilo"
-check "$home/.config/gh/hosts.yml" "gh"
-check "$home/.config/gh/config.yml" "gh"
+check "$home/.codex" "codex"
+check "$home/.config/opencode" "opencode"
+check "$home/.local/share/opencode" "opencode"
+check "$home/.config/kilo" "kilo"
+check "$home/.config/gh" "gh"
+check "$home/.gemini" "gemini"
 check "$home/.copilot" "copilot"
-check "$home/.gemini/oauth_creds.json" "gemini"
-check "$home/.gemini/google_accounts.json" "gemini"
-check "$home/.gemini/settings.json" "gemini"
-check "$home/.gemini/trustedFolders.json" "gemini"
-check "$home/.gemini/antigravity-cli/settings.json" "antigrav"
-check "$home/.gemini/antigravity-cli/antigravity-oauth-token" "antigrav"
 
 echo
 echo "$ok ok, $empty empty/placeholder, $missing missing"

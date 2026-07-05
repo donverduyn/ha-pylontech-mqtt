@@ -36,10 +36,17 @@ automatically on every commit — the same checks CI enforces in
 
 ### AI CLI config persistence
 
-The devcontainer bind-mounts each AI CLI's (Claude Code, Codex, OpenCode,
-Kilocode, GitHub CLI, Copilot CLI, Antigravity CLI) login/config from your
-host so it survives container rebuilds — see the `mounts` comment in
-`.devcontainer/devcontainer.json` for exactly what's mounted and why.
+The devcontainer persists each AI CLI's (Claude Code, Codex, OpenCode,
+Kilocode, GitHub CLI, Copilot CLI, Antigravity CLI) login/config across
+rebuilds. None of these are bind-mounted from your host directly — each
+tool's config directory is seeded once, ever, into a project-scoped backup
+(the very first time this project's container starts), then bind-mounted
+read-write straight from that backup onto the container's real path.
+Changes made inside the container land directly on the backup with no
+copying or polling involved, and never touch your host's own copy of that
+config or any other project's. See the `mounts` comment in
+`.devcontainer/devcontainer.json` and `.devcontainer/seedHostAgentConfig.sh`
+for exactly how that works and why.
 
 To override any of these for this project specifically (without touching
 your global config), add the tool's own project-config file to the repo
