@@ -1,29 +1,30 @@
 #!/bin/sh
 set -e
 
-# devcontainer.json bind-mounts individual files (not whole directories) into
-# several of these paths. When a mount's parent directory doesn't already
-# exist in the base image, Docker auto-creates it before this script ever
-# runs — and it does so as root, leaving the vscode user unable to write
-# anything else alongside the mounted file (seen in practice: Antigravity
-# CLI failing with "creating log directory: permission denied" and
-# "installation_id: permission denied", because it can't create files next
-# to its read-only-mounted settings.json). ~/.claude is unaffected because
-# the claude-code feature creates it (vscode-owned) at image build time, so
-# its mount never needed an auto-created parent. `|| true` throughout since
-# this is best-effort hardening, not something that should abort provisioning
-# if a path is already correctly owned or a mount layout changes.
-for d in \
-  "$HOME/.gemini" \
-  "$HOME/.gemini/antigravity-cli" \
-  "$HOME/.codex" \
-  "$HOME/.config/opencode" \
-  "$HOME/.config/kilo" \
-  "$HOME/.config/gh" \
-  "$HOME/.local/share/opencode"; do
-  sudo mkdir -p "$d" || true
-  sudo chown vscode:vscode "$d" || true
-done
+# /home/vscode/.agent-sync is the one remaining bind mount (a directory, not
+# a file — see seedHostAgentConfig.sh for why that distinction matters).
+# Docker auto-creates its target as root before this script runs if it
+# doesn't already exist in the base image, so it needs its ownership fixed
+# before anything below can write into it.
+sudo mkdir -p "$HOME/.agent-sync"
+sudo chown vscode:vscode "$HOME/.agent-sync"
+
+# Copy each AI CLI's staged config from the sync mount into its real
+# container-local path. Plain copies, not mounts, into paths nothing else
+# ever bind-mounts — so unlike the old per-file bind mounts, there's no
+# Docker-auto-created-as-root parent dir to fix here; mkdir -p below creates
+# each one as the vscode user directly.
+while IFS='|' read -r relpath _kind; do
+  case "$relpath" in
+    ''|'#'*) continue ;;
+  esac
+  src="$HOME/.agent-sync/$relpath"
+  dest="$HOME/$relpath"
+  [ -f "$src" ] || continue
+  mkdir -p "$(dirname "$dest")"
+  cp -p "$src" "$dest"
+done < "$(dirname "$0")/agent-config-files.txt"
+
 # Whole-directory mount (not per-file), so its contents need to be usable too.
 sudo chown -R vscode:vscode "$HOME/.copilot" || true
 

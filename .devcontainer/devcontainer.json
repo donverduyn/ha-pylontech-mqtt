@@ -29,26 +29,38 @@
   // exist by the time the mounts try to attach to them — see the script for
   // why that ordering matters.
   "initializeCommand": "bash .devcontainer/seedHostAgentConfig.sh",
-  // Bind-mounts so every AI CLI's login and hand-set preferences survive a
+  // Every AI CLI's login and hand-set preferences need to survive a
   // container rebuild instead of re-provisioning from scratch each time.
-  // These started out read-only wherever a file looked like pure hand-set
-  // preference, on the theory that only auth needs write access — but in
-  // practice every one of these "preference" files turned out to also be
-  // rewritten by its tool at runtime (trust prompts, first-run settings,
-  // `config set`-style commands), and read-only broke each one with an
-  // opaque disk-write error the first time that happened. So all of the
-  // mounts below are read-write now; see the failure this caused for each,
-  // inline. Deliberately file-level (not whole tool directories) except where noted:
-  // several of these tools keep an actively-written SQLite WAL database
-  // right next to their config (Codex/OpenCode/Copilot), and bind-mounting
-  // that is a known source of slowness/flakiness, especially on non-Linux
-  // Docker hosts — safer to mount only the identity/prefs file and let
-  // caches, sessions, logs, and (for Kilocode) host-arch-specific native
-  // node_modules regenerate per rebuild.
+  // This used to be one bind mount per file, read-write (every one of them
+  // turned out to be rewritten by its tool at runtime — trust prompts,
+  // first-run settings, `config set`-style commands — not just hand-edited,
+  // so read-only broke each one with an opaque disk-write error the first
+  // time that happened). That design had a worse problem than the
+  // read-only one it fixed: a bind-mounted *single file* is bound to an
+  // inode, not a path, and these tools save via write-temp-then-rename,
+  // which replaces the inode at the mount point instead of updating it in
+  // place. With the host's own copy of a CLI and a devcontainer's both able
+  // to hold the same mounted file open at once, that's a live race, and
+  // closing a container mid-write could leave a torn/truncated file on the
+  // host — see this repo's history for the incident that surfaced it.
+  //
+  // Replacement: agent-config-files.txt lists every one of these files.
+  // Nothing in that list is bind-mounted anymore — seedHostAgentConfig.sh
+  // (initializeCommand, host-side) stages the host's current copy of each
+  // into a directory, postCreate.sh copies that staged directory into the
+  // container's real paths, and syncAgentConfigOut.sh (postStartCommand)
+  // polls those real paths and copies changes back into the staged
+  // directory as they happen. Only that staging directory is a bind mount
+  // now, and only ever as a *directory* — nothing renames over the mount
+  // point itself, so the single-file rename problem above doesn't apply to
+  // it. The tradeoff: a change made inside the container isn't folded back
+  // onto the host file until the *next* time this project's container
+  // starts (there's no devcontainer hook that runs on the host at
+  // container stop to do it any sooner).
   //
   // Each tool also has its own native per-project override mechanism, which
   // needs no mount at all — it's just a file committed in this repo that
-  // the tool itself merges on top of the mounted global config:
+  // the tool itself merges on top of the synced global config:
   //   Claude Code   -> .claude/settings.json (or .claude/settings.local.json, gitignored)
   //   Codex         -> .codex/config.toml (walks up the tree; closest wins)
   //   OpenCode      -> opencode.json(c) in the repo root
@@ -57,71 +69,19 @@
   //   Antigravity   -> .gemini/settings.json in the repo root (shares Gemini CLI's settings engine)
   //   GitHub CLI    -> no native project-level override; global-only
   "mounts": [
-    // Claude Code: auto memory now lives in-project (see .claude/settings.json's
-    // autoMemoryDirectory), so ~/.claude no longer needs a whole-directory
-    // mount. daemon/, sessions/, cache/, plugins/, file-history/, etc. are
-    // therefore deliberately NOT mounted — they're operational state, not
-    // auth or a hand-set preference, so they just live/die with the container.
-    //
-    // Not hand-edited only, though — approving a permission prompt and
-    // choosing "user" scope writes the allow rule straight into this file,
-    // same class of runtime write as everything else below that turned out
-    // to need read-write.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude/settings.json,target=/home/vscode/.claude/settings.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude/.credentials.json,target=/home/vscode/.claude/.credentials.json,type=bind",
-    // Mixes an OAuth session token with MCP config and per-project trust
-    // state in one file — can't split those apart, so the auth requirement
-    // wins and the whole file stays writable.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude.json,target=/home/vscode/.claude.json,type=bind",
-    // Codex
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/auth.json,target=/home/vscode/.codex/auth.json,type=bind",
-    // Not hand-edited only — Codex also writes directory-trust decisions
-    // into this file at runtime ("Yes, continue" at its trust prompt).
-    // Read-only makes that fail with "failed to persist config.toml", so
-    // this has to stay writable despite being a native per-project config.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.codex/config.toml,target=/home/vscode/.codex/config.toml,type=bind",
-    // OpenCode
-    // Not hand-edited only — confirmed via `opencode mcp add` (when no
-    // project-level opencode.json exists to take precedence): it falls back
-    // to writing this global file and fails with "EROFS: read-only file
-    // system" if it can't.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/opencode/opencode.jsonc,target=/home/vscode/.config/opencode/opencode.jsonc,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.local/share/opencode/auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind",
-    // Kilocode CLI (its node_modules dir is a build artifact with
-    // host-arch-specific native binaries — deliberately not mounted).
-    // kilo.jsonc is documented as the *one* config file shared across the
-    // CLI/extension/cloud agent, and we couldn't confirm auth lives
-    // elsewhere — kept writable rather than risking a broken login on an
-    // unverified assumption that it's pure preference.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/kilo/kilo.jsonc,target=/home/vscode/.config/kilo/kilo.jsonc,type=bind",
-    // GitHub CLI
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/hosts.yml,target=/home/vscode/.config/gh/hosts.yml,type=bind",
-    // Not hand-edited only — confirmed via `gh config set`, which fails with
-    // "failed to write config to disk: ... read-only file system".
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh/config.yml,target=/home/vscode/.config/gh/config.yml,type=bind",
-    // GitHub Copilot CLI: whole directory, not a file, and read-write — its
+    // Staging directory for every file in agent-config-files.txt (Claude
+    // Code, Codex, OpenCode, Kilocode CLI, GitHub CLI, Antigravity/Gemini).
+    // ${localWorkspaceFolderBasename} scopes it per project; kept in sync
+    // manually with the same computation in seedHostAgentConfig.sh (basename
+    // of $PWD there), since one runs in a JSON string and the other in a
+    // shell script.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync/${localWorkspaceFolderBasename},target=/home/vscode/.agent-sync,type=bind",
+    // GitHub Copilot CLI: whole directory, not staged file-by-file — its
     // login lives inside session-store.db (SQLite) alongside everything
-    // else it stores, so auth can't be isolated from the rest here.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.copilot,target=/home/vscode/.copilot,type=bind",
-    // Antigravity CLI / Gemini CLI (they share the ~/.gemini tree)
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/oauth_creds.json,target=/home/vscode/.gemini/oauth_creds.json,type=bind",
-    // Written by the login flow itself, not hand-edited — treated as auth-adjacent.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/google_accounts.json,target=/home/vscode/.gemini/google_accounts.json,type=bind",
-    // Not hand-edited only — its own content is runtime-written state (e.g.
-    // "ide": {"hasSeenNudge": true}, "security": {"auth": {"selectedType":
-    // ...}}), not something a user hand-types, so this needs to stay
-    // writable for the same reason as everything else here.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/settings.json,target=/home/vscode/.gemini/settings.json,type=bind",
-    // Auto-written when you accept a trust prompt — was read-only, which
-    // meant re-accepting that prompt after every rebuild; now writable so it
-    // persists like every other trust/config file above.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/trustedFolders.json,target=/home/vscode/.gemini/trustedFolders.json,type=bind",
-    // Not hand-edited, but Antigravity writes to this at runtime (e.g. saving
-    // settings on first run) — read-only makes that fail with "Failed to
-    // save settings: atomic...", so unlike Gemini's own settings.json above,
-    // this one has to stay writable.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/settings.json,target=/home/vscode/.gemini/antigravity-cli/settings.json,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gemini/antigravity-cli/antigravity-oauth-token,target=/home/vscode/.gemini/antigravity-cli/antigravity-oauth-token,type=bind"
+    // else it stores, so auth can't be isolated from the rest here. Still a
+    // plain bind mount: it's a directory, so the single-file rename problem
+    // above doesn't apply to it the same way.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.copilot,target=/home/vscode/.copilot,type=bind"
   ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`
   // but applies to non-interactive shells and VS Code's integrated terminal too). This must be
@@ -132,6 +92,12 @@
     "PATH": "/home/vscode/.venv/bin:/usr/local/share/nvm/current/bin:${containerEnv:PATH}"
   },
   "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  // Backgrounded (the trailing &) so this returns immediately instead of
+  // blocking startup on syncAgentConfigOut.sh's infinite poll loop — see
+  // that script and the "mounts" comment above for what it's syncing and why.
+  // Runs on every start, not just creation, since a plain restart of an
+  // existing container still needs the poller relaunched.
+  "postStartCommand": "bash .devcontainer/syncAgentConfigOut.sh &",
   // Default waitFor is "updateContentCommand", so VS Code attaches and reads
   // python.defaultInterpreterPath before postCreateCommand has created the venv, causing
   // a spurious "no interpreter at path" warning on every fresh container. Block on it instead.

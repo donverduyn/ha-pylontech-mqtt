@@ -1,0 +1,39 @@
+# Single source of truth for every AI CLI config/auth file that needs to
+# survive a container rebuild, read by three scripts (host-side
+# seedHostAgentConfig.sh, and container-side postCreate.sh + syncAgentConfigOut.sh)
+# so the list of files is never duplicated. Format: "<path relative to
+# $HOME>|<seed kind>", where seed kind is:
+#   json  - missing file is created as an empty JSON object: {}
+#   empty - missing file is created zero-length (YAML/TOML/plain-token files,
+#           where an empty file parses the same as "no config")
+# GitHub Copilot CLI's ~/.copilot is deliberately not here: it's a whole
+# directory (session-store.db + friends), mounted directly rather than
+# staged through this file-by-file sync.
+
+# Claude Code
+.claude/settings.json|json
+.claude/.credentials.json|json
+.claude.json|json
+
+# Codex
+.codex/auth.json|json
+.codex/config.toml|empty
+
+# OpenCode
+.config/opencode/opencode.jsonc|json
+.local/share/opencode/auth.json|json
+
+# Kilocode CLI
+.config/kilo/kilo.jsonc|json
+
+# GitHub CLI
+.config/gh/hosts.yml|empty
+.config/gh/config.yml|empty
+
+# Antigravity CLI / Gemini CLI (shared ~/.gemini tree)
+.gemini/oauth_creds.json|json
+.gemini/google_accounts.json|json
+.gemini/settings.json|json
+.gemini/trustedFolders.json|json
+.gemini/antigravity-cli/settings.json|json
+.gemini/antigravity-cli/antigravity-oauth-token|empty
