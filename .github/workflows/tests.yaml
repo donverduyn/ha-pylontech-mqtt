@@ -1,15 +1,11 @@
 name: Tests
 
 on:
-  pull_request:
-  workflow_dispatch:
   # No push:master trigger: master commits are already covered by the
   # pull_request run on the PR that merged them (required by branch
-  # protection). autorelease.yaml calls this suite as its `test` job, but
-  # only when a push is actually about to release, as a second gate
-  # against that same commit right before release.yaml is invoked — not
-  # a re-run of every ordinary merge.
-  workflow_call:
+  # protection).
+  pull_request:
+  workflow_dispatch:
 
 permissions: {}
 
