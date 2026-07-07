@@ -1,16 +1,30 @@
 name: Release
 
-# Triggered by pushing a tag like v2.0.0 or v2.0.0-rc1. Builds the sidecar
-# image with the tag baked in as SIDECAR_VERSION and the triggering commit as
-# GIT_SHA (see docker/Dockerfile's ARGs and docker/main.py's diagnostics
-# fields), pushes it to GHCR under that version, and publishes a matching
-# GitHub Release — this is what lets a user pair a specific HACS release
-# with a specific, reproducible sidecar image instead of both floating on an
-# unversioned "2.0.0" that every commit shares.
+# Runs for a version tag either pushed by hand (v2.0.0-rc1 style
+# prereleases stay a manual act) or created by autorelease.yaml when a
+# manifest.json version bump lands on master. The two entry points exist
+# because tags created with the built-in GITHUB_TOKEN deliberately do not
+# trigger other workflows — autorelease must call this one directly
+# (workflow_call, passing the tag as an input) rather than relying on its
+# just-created tag firing the push trigger below.
+#
+# Builds the sidecar image with the tag baked in as SIDECAR_VERSION and the
+# triggering commit as GIT_SHA (see docker/Dockerfile's ARGs and
+# docker/main.py's diagnostics fields), e2e-gates that exact image, pushes
+# it to GHCR under that version, and publishes a matching GitHub Release —
+# this is what lets a user pair a specific HACS release with a specific,
+# reproducible sidecar image instead of both floating on an unversioned
+# "2.0.0" that every commit shares.
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "The v-prefixed release tag to build and publish (must already exist)"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -22,6 +36,12 @@ jobs:
       packages: write
     steps:
       - uses: "actions/checkout@v4"
+        with:
+          # On a tag push, inputs.tag is empty and this resolves to the tag
+          # ref itself; via workflow_call it pins the checkout to the tag
+          # the caller just created, so a master that has already moved on
+          # can't leak newer commits into the release build.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Derive version from tag
         id: version
@@ -30,22 +50,29 @@ jobs:
         # release until that's been done (see CONTRIBUTING.md). base_version
         # strips that suffix for comparison against manifest.json, which only
         # ever carries the plain release number a prerelease is a candidate for.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          version="${tag#v}"
           base_version="${version%%-*}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "base_version=${base_version}" >> "$GITHUB_OUTPUT"
           if [[ "${version}" == *-* ]]; then
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            is_prerelease=true
           else
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            is_prerelease=false
           fi
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "base_version=${base_version}"
+            echo "is_prerelease=${is_prerelease}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches manifest version
         run: |
           manifest_version="$(jq -r .version custom_components/pylontech_mqtt/manifest.json)"
           if [ "${{ steps.version.outputs.base_version }}" != "$manifest_version" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} (base version ${{ steps.version.outputs.base_version }}) does not match manifest.json version ${manifest_version}"
+            echo "::error::Tag ${{ steps.version.outputs.tag }} (base version ${{ steps.version.outputs.base_version }}) does not match manifest.json version ${manifest_version}"
             exit 1
           fi
 
@@ -108,5 +135,9 @@ jobs:
 
       - uses: "softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b" # v3.0.1
         with:
+          # Explicit rather than inferred from the run's ref: under
+          # workflow_call the ref is the master push that triggered
+          # autorelease, not the tag being released.
+          tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.is_prerelease }}

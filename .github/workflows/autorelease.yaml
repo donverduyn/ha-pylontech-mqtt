@@ -1,0 +1,83 @@
+name: Auto-release
+
+# Turns a manifest.json version bump, once it lands on master, into a real
+# release: creates the matching v<version> tag and runs the same e2e-gated
+# release pipeline (release.yaml) a manual tag push would.
+#
+# The trigger is "the version *changed in this push*", deliberately not
+# "no tag exists for the current version": manifest.json already carries
+# the *next* planned version long before it's ready to ship (it says 2.0.0
+# today while the hardware-validation gate still holds it to rc
+# prereleases — see CONTRIBUTING.md), so a tag-absence check would have
+# cut a final release on the first merge after this workflow landed.
+# Releasing therefore stays a deliberate act — a PR that bumps the version
+# — with only the tag/build/gate/publish mechanics automated. Prereleases
+# (v2.0.0-rc1 style) remain manual tag pushes; manifest.json never carries
+# a prerelease suffix.
+on:
+  push:
+    branches:
+      - master
+
+permissions: {}
+
+# Serialize runs: two quick merges where the second bumps the version could
+# otherwise race on the version-diff and tag creation.
+concurrency:
+  group: autorelease
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: "actions/checkout@v4"
+        with:
+          # The parent commit is needed to diff the version against what
+          # master said before this push.
+          fetch-depth: 2
+      - name: Create the tag if this push bumped the manifest version
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manifest="custom_components/pylontech_mqtt/manifest.json"
+          new="$(jq -r .version "$manifest")"
+          old="$(git show "HEAD^:$manifest" 2>/dev/null | jq -r .version || echo "")"
+          if [ "$new" = "$old" ]; then
+            echo "Version unchanged ($new) — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="v$new"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::warning::Version bumped to $new but tag $tag already exists — not releasing."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Version bumped $old -> $new; creating tag $tag at $GITHUB_SHA"
+          # Created via the API with the built-in GITHUB_TOKEN. Such tags
+          # intentionally do not fire other workflows' tag-push triggers,
+          # which is exactly right here: the release job below calls
+          # release.yaml explicitly, so nothing runs twice.
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.release == 'true'
+    # The called workflow's own permission needs; a reusable workflow can
+    # never exceed what the calling job grants.
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/release.yaml
+    with:
+      tag: ${{ needs.detect.outputs.tag }}
