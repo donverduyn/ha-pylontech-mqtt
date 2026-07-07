@@ -55,16 +55,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build → e2e → push, in that order: the image is loaded into the local
+      # daemon (push: false) so the exact bytes that will be published get
+      # e2e-tested first, and a red e2e means nothing reaches the registry at
+      # all. Previously this step pushed directly, so a tagged release
+      # shipped an untested build — one that wasn't even the same artifact CI
+      # had e2e-tested on the merge commit.
       - uses: "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a" # v7.3.0
         with:
           context: .
           file: docker/Dockerfile
-          push: true
+          push: false
+          load: true
           build-args: |
             GIT_SHA=${{ github.sha }}
             SIDECAR_VERSION=${{ steps.version.outputs.version }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+
+      - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
+        with:
+          python-version: "3.13"
+          activate-environment: true
+          cache-dependency-glob: requirements_dev.lock.txt
+      - name: Install dependencies (for the e2e gate)
+        run: uv pip install --require-hashes -r requirements_dev.lock.txt
+      - name: Run e2e against the release image (gate)
+        # Same harness as tests.yaml's e2e job: E2E_SIDECAR_IMAGE makes the
+        # compose stack (docker/docker-compose.test.yml) run the loaded
+        # release image as-is instead of rebuilding it.
+        env:
+          E2E_SIDECAR_IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+        run: pytest -m e2e
+
+      - name: Push the tested image
+        # Plain `docker push` of the already-loaded tag, not a second
+        # build-push-action pass: what lands in GHCR is byte-for-byte the
+        # image the e2e gate just ran, not a cache-assisted rebuild of it.
+        run: docker push "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
 
       # Separate, conditional step rather than a second line in the tags list
       # above: retagging the already-pushed digest is enough, no rebuild
