@@ -13,6 +13,10 @@ services:
       BAUD_RATE: "115200"
 
       # TCP mode (only used when CONNECTION_TYPE=tcp)
+      # If you switch to TCP, also comment out (or delete) the `devices:`
+      # block below — it maps a fixed host path unconditionally, so on a
+      # host without that device it fails container creation before the app
+      # ever starts, even though TCP mode never uses it.
       # CONNECTION_TYPE: tcp
       # TCP_HOST: 192.168.1.100
       # TCP_PORT: "23"
@@ -28,7 +32,10 @@ services:
       POLL_INTERVAL: "15"        # seconds between polls
       AUTO_SYNC_TIME: "false"    # set "true" to sync BMS clock on startup
 
-    # Only needed for serial mode — map the USB device into the container
+    # Only needed for serial mode — maps the USB device into the container.
+    # Comment this out (or delete it) if using TCP mode: docker-compose maps
+    # this unconditionally regardless of CONNECTION_TYPE, so on a host
+    # without /dev/ttyUSB0 it fails container creation before the app starts.
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
 

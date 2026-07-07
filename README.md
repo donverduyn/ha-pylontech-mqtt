@@ -76,6 +76,9 @@ services:
       BAUD_RATE: "115200"
 
       # TCP mode (serial-over-TCP bridge)
+      # If you switch to TCP, also comment out the `devices:` block below —
+      # it's unconditional, so on a host without /dev/ttyUSB0 it fails
+      # container creation before the app starts.
       # CONNECTION_TYPE: tcp
       # TCP_HOST: 192.168.1.100
       # TCP_PORT: "23"
@@ -92,8 +95,9 @@ services:
       POLL_INTERVAL: "15"       # seconds between polls
       AUTO_SYNC_TIME: "false"   # "true" to sync BMS clock on startup
 
+    # Only needed for serial mode — comment out (or delete) when using TCP.
     devices:
-      - /dev/ttyUSB0:/dev/ttyUSB0   # serial mode only
+      - /dev/ttyUSB0:/dev/ttyUSB0
 
     # Persists cumulative energy_in/energy_out across container recreation
     volumes:
