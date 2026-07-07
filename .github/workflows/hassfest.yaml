@@ -1,9 +1,11 @@
 name: Hassfest
 
 on:
-  push:
-    branches:
-      - master
+  # No push:master trigger: master commits are already covered by the
+  # pull_request run on the PR that merged them (required by branch
+  # protection). The daily schedule catches drift from upstream HA core
+  # (this action clones it live — see the validate job), independent of
+  # any push here.
   pull_request:
   schedule:
     - cron: '0 0 * * *'

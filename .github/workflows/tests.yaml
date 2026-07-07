@@ -3,12 +3,12 @@ name: Tests
 on:
   pull_request:
   workflow_dispatch:
-  # No push:master trigger: autorelease.yaml calls this suite as its `test`
-  # job on every push to master instead, so the commit gets tested exactly
-  # once post-merge rather than once from a direct trigger here and again
-  # from that workflow_call. That job runs before release.yaml is invoked —
-  # a second, in-pipeline gate that doesn't depend on branch protection
-  # having been configured correctly for every required context.
+  # No push:master trigger: master commits are already covered by the
+  # pull_request run on the PR that merged them (required by branch
+  # protection). autorelease.yaml calls this suite as its `test` job, but
+  # only when a push is actually about to release, as a second gate
+  # against that same commit right before release.yaml is invoked — not
+  # a re-run of every ordinary merge.
   workflow_call:
 
 permissions: {}

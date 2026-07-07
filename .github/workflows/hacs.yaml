@@ -1,9 +1,10 @@
 name: HACS
 
 on:
-  push:
-    branches:
-      - master
+  # No push:master trigger: master commits are already covered by the
+  # pull_request run on the PR that merged them (required by branch
+  # protection). The daily schedule catches drift from HACS's own
+  # validation rules changing, independent of any push here.
   pull_request:
   schedule:
     - cron: "0 0 * * *"
