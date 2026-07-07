@@ -39,7 +39,21 @@ jobs:
           python-version: "3.13"
           activate-environment: true
           cache-dependency-glob: ${{ matrix.lockfile }}
+      - name: Cache installed venv
+        # setup-uv's cache-dependency-glob above only caches downloaded
+        # packages; `uv pip install` still has to link/hash-verify every one
+        # of them into the venv it just created (--require-hashes re-checks
+        # a sha256 per package) on every run. This caches that *result* —
+        # keyed on the exact lockfile content, so it's only ever wrong if
+        # the lockfile changes, in which case it's a miss, not a staleness
+        # bug — so a hit skips the install step below entirely.
+        id: venv-cache
+        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles(matrix.lockfile) }}
       - name: Install dependencies (HA ${{ matrix.ha-version }})
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         run: uv pip install --require-hashes -r ${{ matrix.lockfile }}
       - name: Run test suite
         # --cov-fail-under is a non-regression floor (current combined coverage is
@@ -61,7 +75,15 @@ jobs:
           python-version: "3.13"
           activate-environment: true
           cache-dependency-glob: requirements_dev.lock.txt
+      - name: Cache installed venv
+        # See the pytest job's identically-named step for why this exists.
+        id: venv-cache
+        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('requirements_dev.lock.txt') }}
       - name: Install dependencies
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         run: uv pip install --require-hashes -r requirements_dev.lock.txt
       - name: Ruff check
         run: ruff check .
@@ -123,12 +145,15 @@ jobs:
         run: /tmp/hadolint docker/Dockerfile docker/Dockerfile.stub
 
   docker-build:
-    # Gated on the unit suite so the pipeline reads unit → build → e2e:
-    # there's no point producing (or e2e-testing) an image of a commit whose
-    # fast tests already fail, and the ordering keeps the feedback cheap-
-    # first. No trivy/SBOM here — those describe shipped artifacts, so they
-    # live in release.yaml against the image actually being published.
-    needs: pytest
+    # Runs concurrently with pytest rather than gated behind it: pytest
+    # (~40s) is slower than this job (~20s), so waiting for it serially
+    # would only lengthen the critical path on the common (green) path
+    # without pytest's fast-fail ever actually saving time here. e2e (below)
+    # still requires *both* pytest and this job to succeed before it runs,
+    # so a failing unit suite still short-circuits before the expensive e2e
+    # stage — it just no longer blocks this cheap build+smoke-test from
+    # starting. No trivy/SBOM here — those describe shipped artifacts, so
+    # they live in release.yaml against the image actually being published.
     runs-on: "ubuntu-latest"
     steps:
       - uses: "actions/checkout@v4"
@@ -185,7 +210,10 @@ jobs:
     # coverage the old pre-build e2e had without giving up artifact fidelity.
     name: "e2e (${{ matrix.ha-version }})"
     runs-on: "ubuntu-latest"
-    needs: docker-build
+    # Needs pytest explicitly, not just transitively through docker-build:
+    # docker-build no longer depends on pytest (see that job's comment), so
+    # without this a failing unit suite wouldn't stop e2e from running.
+    needs: [pytest, docker-build]
     strategy:
       fail-fast: false
       matrix:
@@ -207,7 +235,15 @@ jobs:
           python-version: "3.13"
           activate-environment: true
           cache-dependency-glob: ${{ matrix.lockfile }}
+      - name: Cache installed venv
+        # See the pytest job's identically-named step for why this exists.
+        id: venv-cache
+        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles(matrix.lockfile) }}
       - name: Install dependencies (HA ${{ matrix.ha-version }})
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         run: uv pip install --require-hashes -r ${{ matrix.lockfile }}
       - name: Run e2e tests against the built image
         # E2E_SIDECAR_IMAGE makes the compose stack (docker/
