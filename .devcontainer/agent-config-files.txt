@@ -1,7 +1,7 @@
 # Single source of truth for every AI CLI config path that needs to survive
-# a container rebuild, read by four scripts (host-side seedHostAgentConfig.sh
-# and verifyHostAgentConfig.sh, container-side postCreate.sh and
-# syncAgentConfigOut.sh) so the list is never duplicated. Format: "<path
+# a container rebuild, read by three scripts (host-side seedHostAgentConfig.sh,
+# container-side postCreate.sh and syncAgentConfigOut.sh) so the list is never
+# duplicated. Format: "<path
 # relative to $HOME>|<kind>", where kind is:
 #   dir   - a whole directory, bind-mounted read-write directly from this
 #           project's backup onto the container's real path for it (see
@@ -24,9 +24,12 @@
 # OpenCode
 .config/opencode|dir
 .local/share/opencode|dir
+.local/state/opencode|dir
 
 # Kilocode CLI
 .config/kilo|dir
+.local/share/kilo|dir
+.local/state/kilo|dir
 
 # GitHub CLI
 .config/gh|dir

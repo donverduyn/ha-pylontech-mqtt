@@ -77,16 +77,9 @@
   // postStartCommand below), just scoped to this one file now instead of
   // every path.
   //
-  // Each tool also has its own native per-project override mechanism, which
-  // needs no mount at all — it's just a file committed in this repo that
-  // the tool itself merges on top of the synced global config:
-  //   Claude Code   -> .claude/settings.json (or .claude/settings.local.json, gitignored)
-  //   Codex         -> .codex/config.toml (walks up the tree; closest wins)
-  //   OpenCode      -> opencode.json(c) in the repo root
-  //   Kilocode CLI  -> .kilo/kilo.jsonc (wins) or kilo.jsonc in the repo root
-  //   Copilot CLI   -> .github/mcp.json, .github/lsp.json, .github/hooks/
-  //   Antigravity   -> .gemini/settings.json in the repo root (shares Gemini CLI's settings engine)
-  //   GitHub CLI    -> no native project-level override; global-only
+  // Project-local AI CLI override files are intentionally not used here.
+  // Settings belong under $HOME in the container, where these mounts persist
+  // them across rebuilds; workspace-local agent config is ignored.
   // Every source below lives under this same per-project root — keyed on
   // ${localWorkspaceFolder} (this project's absolute path), not its
   // basename, so two checkouts of differently-located repos that happen to
@@ -108,7 +101,10 @@
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.gemini,target=/home/vscode/.gemini,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/opencode,target=/home/vscode/.config/opencode,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/share/opencode,target=/home/vscode/.local/share/opencode,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/state/opencode,target=/home/vscode/.local/state/opencode,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/kilo,target=/home/vscode/.config/kilo,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/share/kilo,target=/home/vscode/.local/share/kilo,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/state/kilo,target=/home/vscode/.local/state/kilo,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/gh,target=/home/vscode/.config/gh,type=bind",
     // GitHub Copilot CLI: its login lives inside session-store.db (SQLite)
     // alongside everything else it stores, so auth can't be isolated to a
