@@ -1,8 +1,12 @@
 # Pinned to a specific patch release, by digest, for reproducible builds.
 # Bump deliberately; check https://hub.docker.com/_/python/tags for updates,
 # then re-resolve the digest (e.g. `docker buildx imagetools inspect
-# python:3.11.15-slim` or via the registry API) — do not just edit the tag.
-FROM python:3.11.15-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a240f443b368ddb6
+# python:3.13.14-slim` or via the registry API) — do not just edit the tag.
+# Kept on the same minor version (3.13) as everything that exercises this
+# code: CI's pytest/e2e jobs, the devcontainer, and pyproject.toml's
+# ruff/mypy/pyright targets all run 3.13, so shipping a different
+# interpreter would leave the production runtime effectively untested.
+FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280
 
 # Set by the release workflow (.github/workflows/release.yaml) from the tag
 # and commit being built; left as placeholders for a manual `docker build`
