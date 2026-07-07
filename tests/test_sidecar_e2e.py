@@ -29,6 +29,7 @@ from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import pytest
+from conftest import StubProcess, start_stub
 from paho.mqtt.enums import CallbackAPIVersion
 
 pytestmark = [
@@ -41,13 +42,34 @@ pytestmark = [
 
 _ROOT = Path(__file__).parent.parent
 _HOST = "127.0.0.1"
-_BROKER_PORT = 18830
-_STUB_PORT = 12400
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> None:
+def _free_port() -> int:
+    """Reserve an OS-assigned free port and release it for immediate reuse.
+
+    For subprocesses that can't report a self-chosen port the way
+    pylon_stub.py does (mosquitto needs its listener port written into its
+    config file up front). Racy in principle between close and reuse, but
+    an OS-assigned ephemeral port is not handed out again until the pool
+    wraps around — unlike a hardcoded port, which collides with a parallel
+    test session picking the same constant every time.
+    """
+    with socket.socket() as s:
+        s.bind((_HOST, 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_port(
+    host: str, port: int, proc: subprocess.Popen, timeout: float = 15.0
+) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            out = proc.stdout.read() if proc.stdout else b""
+            raise RuntimeError(
+                f"process exited with code {proc.returncode} before opening "
+                f"{host}:{port}. Output:\n{out.decode(errors='replace')}"
+            )
         try:
             with socket.create_connection((host, port), timeout=0.2):
                 return
@@ -59,40 +81,25 @@ def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> None:
 @pytest.fixture
 def mosquitto_broker(tmp_path: Path) -> Generator[int]:
     """A real, unauthenticated local Mosquitto broker for the sidecar to publish to."""
+    broker_port = _free_port()
     conf = tmp_path / "mosquitto.conf"
-    conf.write_text(f"listener {_BROKER_PORT} {_HOST}\nallow_anonymous true\n")
+    conf.write_text(f"listener {broker_port} {_HOST}\nallow_anonymous true\n")
     proc = subprocess.Popen(
         ["mosquitto", "-c", str(conf)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
     try:
-        _wait_for_port(_HOST, _BROKER_PORT)
-        yield _BROKER_PORT
+        _wait_for_port(_HOST, broker_port, proc)
+        yield broker_port
     finally:
         proc.terminate()
         proc.wait(timeout=5)
 
 
-def _spawn_stub(port: int) -> subprocess.Popen:
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            str(_ROOT / "scripts" / "pylon_stub.py"),
-            "--host",
-            _HOST,
-            "--port",
-            str(port),
-            "--batteries",
-            "2",
-            "--model",
-            "US5000",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    _wait_for_port(_HOST, port)
-    return proc
+def _spawn_stub(port: int = 0) -> StubProcess:
+    """Start the BMS stub; port 0 (default) lets the OS assign a free one."""
+    return start_stub("--batteries", "2", "--model", "US5000", port=port)
 
 
 def _spawn_sidecar(
@@ -165,7 +172,8 @@ def test_happy_path_publishes_valid_state_and_shuts_down_cleanly(
     online, then a SIGTERM (as sent by `docker stop`) drives the
     _clean_shutdown path and publishes 'offline' before exiting 0."""
     topic_prefix = "pylontech/e2e-happy"
-    stub = _spawn_stub(_STUB_PORT)
+    stub = _spawn_stub()
+    assert stub.port is not None
     sidecar = None
     sub = _Subscriber(
         mosquitto_broker, [f"{topic_prefix}/state", f"{topic_prefix}/availability"]
@@ -173,7 +181,7 @@ def test_happy_path_publishes_valid_state_and_shuts_down_cleanly(
     try:
         sidecar = _spawn_sidecar(
             broker_port=mosquitto_broker,
-            stub_port=_STUB_PORT,
+            stub_port=stub.port,
             topic_prefix=topic_prefix,
             energy_state_file=str(tmp_path / "energy.json"),
         )
@@ -198,8 +206,7 @@ def test_happy_path_publishes_valid_state_and_shuts_down_cleanly(
         if sidecar is not None and sidecar.poll() is None:
             sidecar.terminate()
             sidecar.wait(timeout=5)
-        stub.terminate()
-        stub.wait(timeout=5)
+        stub.stop()
 
 
 def test_bms_disconnect_marks_offline_then_recovers_on_reconnect(
@@ -210,8 +217,11 @@ def test_bms_disconnect_marks_offline_then_recovers_on_reconnect(
     sidecar publishes 'offline', keeps retrying, and resumes publishing
     'online' + valid state once the BMS is reachable again."""
     topic_prefix = "pylontech/e2e-reconnect"
-    stub_port = _STUB_PORT + 1
-    stub = _spawn_stub(stub_port)
+    stub = _spawn_stub()
+    # Remember the OS-assigned port: the revived stub below must come back on
+    # this exact port, since it's baked into the running sidecar's TCP_PORT.
+    stub_port = stub.port
+    assert stub_port is not None
     sidecar = None
     sub = _Subscriber(
         mosquitto_broker, [f"{topic_prefix}/state", f"{topic_prefix}/availability"]
@@ -226,8 +236,7 @@ def test_bms_disconnect_marks_offline_then_recovers_on_reconnect(
         sub.wait_for(f"{topic_prefix}/availability", "online")
 
         # Simulate the BMS disappearing (cable unplugged / device power loss).
-        stub.terminate()
-        stub.wait(timeout=5)
+        stub.stop()
         sub.received.pop(f"{topic_prefix}/availability", None)
         sub.wait_for(f"{topic_prefix}/availability", "offline", timeout=20)
 
@@ -243,5 +252,4 @@ def test_bms_disconnect_marks_offline_then_recovers_on_reconnect(
         if sidecar is not None and sidecar.poll() is None:
             sidecar.terminate()
             sidecar.wait(timeout=5)
-        stub.terminate()
-        stub.wait(timeout=5)
+        stub.stop()

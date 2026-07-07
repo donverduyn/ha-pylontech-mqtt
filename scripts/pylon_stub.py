@@ -1175,7 +1175,13 @@ def main() -> None:
     ap.add_argument(
         "--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)"
     )
-    ap.add_argument("--port", default=12300, type=int, help="TCP port (default: 12300)")
+    ap.add_argument(
+        "--port",
+        default=12300,
+        type=int,
+        help="TCP port; 0 picks a free one — read it from the "
+        '"[stub] listening on" line (default: 12300)',
+    )
     ap.add_argument(
         "--batteries",
         default=2,
@@ -1256,17 +1262,26 @@ def main() -> None:
     m = MODELS[args.model]
     total_present = args.batteries * args.groups
     total_slots = args.slots * args.groups
-    print("[stub] Pylontech BMS stub")
-    print(f"[stub]   address  : {args.host}:{args.port}")
-    print(f"[stub]   model    : {args.model}  ({m['device_name']}, {m['spec']})")
-    print(f"[stub]   groups   : {args.groups}")
-    print(f"[stub]   batteries: {total_present} present / {total_slots} slots total")
-    print(f"[stub]   firmware : {args.firmware}")
-    print(f"[stub]   SOC start: {args.soc}%")
-    print(f"[stub]   HA config: TCP Socket  {args.host}:{args.port}")
-    print()
-
+    # Bind before printing so --port 0 (OS-assigned) reports the real port.
     with _StubServer((args.host, args.port), _BmsHandler) as server:
+        port = server.server_address[1]
+        print("[stub] Pylontech BMS stub")
+        print(f"[stub]   address  : {args.host}:{port}")
+        print(f"[stub]   model    : {args.model}  ({m['device_name']}, {m['spec']})")
+        print(f"[stub]   groups   : {args.groups}")
+        print(
+            f"[stub]   batteries: {total_present} present / {total_slots} slots total"
+        )
+        print(f"[stub]   firmware : {args.firmware}")
+        print(f"[stub]   SOC start: {args.soc}%")
+        print(f"[stub]   HA config: TCP Socket  {args.host}:{port}")
+        print()
+        # Machine-readable startup handshake: tests/conftest.py's start_stub()
+        # blocks on this exact line to learn the bound port instead of racing
+        # a connect loop against a fixed port number. Keep the format in sync
+        # with its _STUB_READY_RE. flush=True pushes the whole banner through
+        # the pipe even when stdout is block-buffered (a subprocess pipe).
+        print(f"[stub] listening on {args.host}:{port}", flush=True)
         server.serve_forever()
 
 

@@ -15,61 +15,34 @@ Isolation strategy
 
 import re
 import socket
-import subprocess
-import sys
-import time
-from pathlib import Path
 
 import pytest
 from conftest import (
     STUB_HOST,
     STUB_SOC_START,
+    StubProcess,
     _drain_prompt,
     _raw_command,
+    start_stub,
 )
-
-_ROOT = Path(__file__).parent.parent
-_NEW_FW_PORT = 12400
-_MULTI_GRP_PORT = 12401
-
 
 # ---------------------------------------------------------------------------
 # Helpers: spin up extra stub instances for variant configurations
 # ---------------------------------------------------------------------------
 
 
-def _spawn_stub(port: int, *extra_args: str) -> subprocess.Popen:
-    """Start pylon_stub.py on *port* with fixed base config + *extra_args*."""
-    return subprocess.Popen(
-        [
-            sys.executable,
-            str(_ROOT / "scripts" / "pylon_stub.py"),
-            "--host",
-            STUB_HOST,
-            "--port",
-            str(port),
-            "--batteries",
-            "2",
-            "--model",
-            "US5000",
-            "--soc",
-            "75",
-            *extra_args,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+def _start_variant_stub(*extra_args: str) -> StubProcess:
+    """Start pylon_stub.py (on an OS-assigned port) with fixed base config
+    + *extra_args*."""
+    return start_stub(
+        "--batteries",
+        "2",
+        "--model",
+        "US5000",
+        "--soc",
+        "75",
+        *extra_args,
     )
-
-
-def _wait_port(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(0.1)
-    raise RuntimeError(f"Stub did not start on {host}:{port} within {timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +56,11 @@ def new_fw_stub():
     from conftest import _enable_sockets
 
     _enable_sockets()
-    proc = _spawn_stub(_NEW_FW_PORT, "--firmware", "new")
+    stub = _start_variant_stub("--firmware", "new")
     try:
-        _wait_port(STUB_HOST, _NEW_FW_PORT)
-        yield _NEW_FW_PORT
+        yield stub.port
     finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+        stub.stop()
 
 
 @pytest.fixture(scope="module")
@@ -98,13 +69,11 @@ def multi_grp_stub():
     from conftest import _enable_sockets
 
     _enable_sockets()
-    proc = _spawn_stub(_MULTI_GRP_PORT, "--groups", "2", "--firmware", "old")
+    stub = _start_variant_stub("--groups", "2", "--firmware", "old")
     try:
-        _wait_port(STUB_HOST, _MULTI_GRP_PORT)
-        yield _MULTI_GRP_PORT
+        yield stub.port
     finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+        stub.stop()
 
 
 @pytest.fixture

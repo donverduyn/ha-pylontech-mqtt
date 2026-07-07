@@ -7,9 +7,11 @@ Shared pytest fixtures and import bootstrap for ha-pylontech-mqtt tests.
 `structs` modules import normally with no manual sys.modules wiring needed.
 """
 
+import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Generator
 from pathlib import Path
@@ -121,7 +123,6 @@ async def create_config_entry(hass, entry_data: dict):
 # Stub server lifecycle
 # ---------------------------------------------------------------------------
 STUB_HOST = "127.0.0.1"
-STUB_PORT = 12399  # dedicated port, unlikely to clash
 STUB_BATTERIES = 2
 STUB_MODEL = "US5000"  # most capable model → most field coverage
 STUB_SOC_START = 75
@@ -132,15 +133,115 @@ STUB_CELLS = 15  # all current models (US2000/US3000/US5000) have 15 cells
 STUB_FIRMWARE = "old"
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+# The startup handshake line pylon_stub.py prints once its listening socket
+# is bound (with the OS-assigned port when spawned with --port 0). Keep in
+# sync with the matching print() at the bottom of scripts/pylon_stub.py.
+_STUB_READY_RE = re.compile(r"\[stub\] listening on [^:]+:(\d+)")
+
+
+class StubProcess:
+    """A pylon_stub.py subprocess with its stdout continuously drained.
+
+    Wraps the raw Popen to fix three failure modes the previous
+    fixed-port + connect-poll approach had:
+
+    * Port collisions: the stub is spawned with --port 0 so the OS picks a
+      free port, and .port is parsed from the stub's own "listening on"
+      handshake line — two test sessions running concurrently (parallel CI
+      jobs, two checkouts, an agent and a human) can no longer race each
+      other for a hardcoded port, with the loser's tests failing in
+      ConnectionRefusedError long after the wrong stub answered the
+      port-open probe.
+    * Pipe deadlock: the stub logs a line per connect/disconnect and its
+      stdout was a PIPE nothing ever read, so a long enough session would
+      eventually fill the 64 KiB pipe buffer and block the stub mid-print.
+      A daemon reader thread drains it for the process's whole lifetime.
+    * Silent death: waiting on the handshake line (instead of polling the
+      port) means a stub that crashes at startup or mid-session surfaces as
+      one RuntimeError carrying everything it printed, not as opaque
+      per-test ConnectionRefusedErrors with the traceback discarded.
+    """
+
+    def __init__(self, proc: "subprocess.Popen[str]") -> None:
+        self.proc = proc
+        self.port: int | None = None
+        self._lines: list[str] = []
+        self._ready = threading.Event()
+        self._reader = threading.Thread(target=self._drain_stdout, daemon=True)
+        self._reader.start()
+
+    def _drain_stdout(self) -> None:
+        assert self.proc.stdout is not None
+        for line in self.proc.stdout:
+            self._lines.append(line)
+            if not self._ready.is_set():
+                match = _STUB_READY_RE.search(line)
+                if match:
+                    self.port = int(match.group(1))
+                    self._ready.set()
+        # EOF (process exited): unblock wait_ready() even if the handshake
+        # line never came, so it can report the failure instead of hanging.
+        self._ready.set()
+
+    @property
+    def output(self) -> str:
+        """Everything the stub has printed so far (stdout+stderr merged)."""
+        return "".join(self._lines)
+
+    def wait_ready(self, timeout: float = 10.0) -> int:
+        """Block until the stub reports its bound port; return that port."""
+        if not self._ready.wait(timeout) or self.port is None:
+            exit_code = self.proc.poll()
+            self.stop()
+            reason = (
+                f"exited with code {exit_code}"
+                if exit_code is not None
+                else f"did not report a listening port within {timeout}s"
+            )
+            raise RuntimeError(
+                f"pylon_stub.py {reason}. Output:\n{self.output or '<no output>'}"
+            )
+        return self.port
+
+    def stop(self) -> None:
+        """Terminate the stub (escalating to SIGKILL) and reap it."""
+        if self.proc.poll() is None:
+            self.proc.terminate()
         try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(0.1)
-    raise RuntimeError(f"Stub server did not start on {host}:{port} within {timeout}s")
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+        self._reader.join(timeout=5)
+
+
+def start_stub(*extra_args: str, port: int = 0) -> StubProcess:
+    """Spawn scripts/pylon_stub.py and wait until it is accepting connections.
+
+    Binds an OS-assigned free port by default; pass ``port=`` only when a
+    test must revive a stub on the exact port a previous one used (e.g. the
+    sidecar-reconnect e2e test). ``-u`` keeps the stub's later per-connection
+    log lines unbuffered so the drain thread (and a post-mortem .output read)
+    sees them promptly, not only at exit.
+    """
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-u",
+            str(_ROOT / "scripts" / "pylon_stub.py"),
+            "--host",
+            STUB_HOST,
+            "--port",
+            str(port),
+            *extra_args,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    stub = StubProcess(proc)
+    stub.wait_ready()
+    return stub
 
 
 @pytest.fixture(scope="session")
@@ -148,41 +249,29 @@ def stub_server():
     """Start pylon_stub.py once for the whole test session; yield the port."""
     # session fixture runs after pytest_runtest_setup() blocks sockets
     _enable_sockets()
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            str(_ROOT / "scripts" / "pylon_stub.py"),
-            "--host",
-            STUB_HOST,
-            "--port",
-            str(STUB_PORT),
-            "--batteries",
-            str(STUB_BATTERIES),
-            "--model",
-            STUB_MODEL,
-            "--firmware",
-            STUB_FIRMWARE,
-            "--soc",
-            str(STUB_SOC_START),
-            # Well past any realistic suite runtime: session-scoped fixtures
-            # like pwr_system capture their values once, lazily, whenever a
-            # test first needs them — with the stub's real default 30s tick,
-            # a slow run (or one where many prior tests delay that first
-            # capture) could have the stub's background updater fire before
-            # the capture happens, flipping soc/current away from the exact
-            # values tests assert. See scripts/pylon_stub.py's _state_updater.
-            "--tick-interval",
-            "3600",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    stub = start_stub(
+        "--batteries",
+        str(STUB_BATTERIES),
+        "--model",
+        STUB_MODEL,
+        "--firmware",
+        STUB_FIRMWARE,
+        "--soc",
+        str(STUB_SOC_START),
+        # Well past any realistic suite runtime: session-scoped fixtures
+        # like pwr_system capture their values once, lazily, whenever a
+        # test first needs them — with the stub's real default 30s tick,
+        # a slow run (or one where many prior tests delay that first
+        # capture) could have the stub's background updater fire before
+        # the capture happens, flipping soc/current away from the exact
+        # values tests assert. See scripts/pylon_stub.py's _state_updater.
+        "--tick-interval",
+        "3600",
     )
     try:
-        _wait_for_port(STUB_HOST, STUB_PORT)
-        yield STUB_PORT
+        yield stub.port
     finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+        stub.stop()
 
 
 # ---------------------------------------------------------------------------
