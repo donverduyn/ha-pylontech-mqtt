@@ -1,11 +1,15 @@
 name: Tests
 
 on:
-  push:
-    branches:
-      - master
   pull_request:
   workflow_dispatch:
+  # No push:master trigger: autorelease.yaml calls this suite as its `test`
+  # job on every push to master instead, so the commit gets tested exactly
+  # once post-merge rather than once from a direct trigger here and again
+  # from that workflow_call. That job runs before release.yaml is invoked —
+  # a second, in-pipeline gate that doesn't depend on branch protection
+  # having been configured correctly for every required context.
+  workflow_call:
 
 permissions: {}
 

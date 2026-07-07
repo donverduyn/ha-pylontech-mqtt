@@ -22,9 +22,15 @@ name: Auto-release
 # prereleases (see CONTRIBUTING.md) — a tag-absence check would have cut
 # that final on the first merge after this workflow landed. Releasing
 # therefore stays a deliberate act — a PR that bumps the version — with
-# only the build/publish mechanics automated. No tests run downstream of
-# here: every commit on master already passed the full unit → build → e2e
-# pipeline on its PR (see tests.yaml).
+# only the build/publish mechanics automated. Every commit on master
+# already passed the full unit → build → e2e pipeline on its PR (see
+# tests.yaml), enforced by branch protection's required status checks —
+# but the `test` job below re-runs that same suite against the exact
+# commit on every push to master, release or not, and `release` needs it
+# too. That's a second, in-pipeline gate that doesn't depend on branch
+# protection having been configured correctly, and it's also why
+# tests.yaml itself carries no push:master trigger any more — this job
+# is that trigger now, so the commit gets tested once, not twice.
 on:
   push:
     branches:
@@ -73,8 +79,12 @@ jobs:
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
-  release:
+  test:
     needs: detect
+    uses: ./.github/workflows/tests.yaml
+
+  release:
+    needs: [detect, test]
     if: needs.detect.outputs.release == 'true'
     # The called workflow's own permission needs; a reusable workflow can
     # never exceed what the calling job grants.
