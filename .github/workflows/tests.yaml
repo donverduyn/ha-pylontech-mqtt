@@ -114,8 +114,7 @@ jobs:
           shellcheck scripts/clean.sh \
             .devcontainer/postCreate.sh \
             .devcontainer/seedHostAgentConfig.sh \
-            .devcontainer/syncAgentConfigOut.sh \
-            .devcontainer/verifyHostAgentConfig.sh
+            .devcontainer/syncAgentConfigOut.sh
       - name: Install Hadolint
         run: |
           curl -sSfLo /tmp/hadolint \

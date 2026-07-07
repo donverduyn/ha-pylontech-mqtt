@@ -48,20 +48,12 @@ config or any other project's. See the `mounts` comment in
 `.devcontainer/devcontainer.json` and `.devcontainer/seedHostAgentConfig.sh`
 for exactly how that works and why.
 
-To override any of these for this project specifically (without touching
-your global config), add the tool's own project-config file to the repo
-root — each tool merges it on top of the mounted global config itself, no
-devcontainer changes needed:
-
-| Tool | Project override file |
-| ---- | ---------------------- |
-| Claude Code | `.claude/settings.json` (shared) or `.claude/settings.local.json` (gitignored) |
-| Codex | `.codex/config.toml` |
-| OpenCode | `opencode.json` / `opencode.jsonc` |
-| Kilocode CLI | `.kilo/kilo.jsonc` (wins) or `kilo.jsonc` |
-| Copilot CLI | `.github/mcp.json`, `.github/lsp.json`, `.github/hooks/` |
-| Antigravity CLI | `.gemini/settings.json` |
-| GitHub CLI | not supported — global config only |
+Do not commit AI CLI config or state under the workspace. Settings belong
+under `$HOME` inside the container, where the devcontainer mounts persist
+them across rebuilds. If a tool creates project-local files such as
+`.claude/`, `.codex/`, `.kilo/`, `.gemini/`, `opencode.json(c)`,
+`kilo.jsonc`, or `.github/mcp.json`, move any setting you need into that
+tool's home-directory config and leave the workspace-local file ignored.
 
 ## Adding Translations
 

@@ -45,6 +45,48 @@ sudo apt-get install -y xdg-utils inotify-tools
 
 npm install -g @openai/codex @kilocode/cli
 
+# Keep OpenCode/Kilo plugin installs in their home-backed global config.
+# Both CLIs already use XDG home paths for normal config/data/state, but their
+# plugin command defaults to project-local config unless --global is supplied.
+mkdir -p /home/vscode/.local/bin
+cat > /home/vscode/.local/bin/opencode <<'EOF'
+#!/bin/sh
+if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
+  command_name="$1"
+  shift
+  has_global=0
+  for arg in "$@"; do
+    case "$arg" in
+      -g|--global) has_global=1 ;;
+    esac
+  done
+  if [ "$has_global" -eq 0 ]; then
+    exec /usr/local/bin/opencode "$command_name" --global "$@"
+  fi
+  exec /usr/local/bin/opencode "$command_name" "$@"
+fi
+exec /usr/local/bin/opencode "$@"
+EOF
+cat > /home/vscode/.local/bin/kilo <<'EOF'
+#!/bin/sh
+if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
+  command_name="$1"
+  shift
+  has_global=0
+  for arg in "$@"; do
+    case "$arg" in
+      -g|--global) has_global=1 ;;
+    esac
+  done
+  if [ "$has_global" -eq 0 ]; then
+    exec /usr/local/share/nvm/current/bin/kilo "$command_name" --global "$@"
+  fi
+  exec /usr/local/share/nvm/current/bin/kilo "$command_name" "$@"
+fi
+exec /usr/local/share/nvm/current/bin/kilo "$@"
+EOF
+chmod +x /home/vscode/.local/bin/opencode /home/vscode/.local/bin/kilo
+
 # /usr/local's site-packages is root-owned, so deps can't install into the base image's
 # system Python as the vscode user. Use a uv-managed venv instead: uv is fast enough that
 # recreating it on every container create isn't the bottleneck a plain pip venv was.
@@ -87,13 +129,31 @@ EOF
 grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_modules/.bin:$PATH"' >> /home/vscode/.bashrc
 
 # Auto mode ("--permission-mode auto") biases Claude Code toward acting
-# without stopping for clarifying questions. settings.json's
-# permissions.defaultMode is the documented way to default into a mode, but
-# it's user-scoped only (project settings are ignored for this key) and has
-# a known bug where it doesn't reliably activate on session start
-# (anthropics/claude-code#49273) — an alias is the reliable way to make this
-# devcontainer's Claude Code sessions start in auto mode by default.
-grep -qF 'alias claude=' /home/vscode/.bashrc || echo "alias claude='claude --permission-mode auto'" >> /home/vscode/.bashrc
+# without stopping for clarifying questions. Default MCP additions to user
+# scope so they stay under ~/.claude instead of the workspace.
+grep -qF '# Devcontainer AI CLI home-config defaults' /home/vscode/.bashrc || cat >> /home/vscode/.bashrc <<'EOF'
+
+# Devcontainer AI CLI home-config defaults
+unalias claude 2>/dev/null || true
+function claude {
+  local real_claude=/home/vscode/.local/bin/claude
+  if [ "$1" = "mcp" ] && { [ "$2" = "add" ] || [ "$2" = "add-json" ]; }; then
+    local arg has_scope=0 subcommand
+    for arg in "$@"; do
+      case "$arg" in
+        -s|--scope|--scope=*) has_scope=1 ;;
+      esac
+    done
+    if [ "$has_scope" -eq 0 ]; then
+      subcommand="$2"
+      shift 2
+      "$real_claude" --permission-mode auto mcp "$subcommand" --scope user "$@"
+      return
+    fi
+  fi
+  "$real_claude" --permission-mode auto "$@"
+}
+EOF
 
 # Same idea for the Antigravity CLI (agy): --dangerously-skip-permissions
 # auto-approves every tool permission request instead of prompting. A plain
