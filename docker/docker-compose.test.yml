@@ -1,0 +1,54 @@
+# E2E test stack: the *built* sidecar image polling a containerized BMS stub
+# and publishing to a real Mosquitto broker. Driven by
+# tests/test_sidecar_e2e.py (pytest -m e2e), which brings this up under a
+# unique project name per test, subscribes via the broker's published port,
+# and asserts on what actually crosses the wire.
+#
+# The sidecar deliberately runs from docker/Dockerfile — not `python main.py`
+# on a dev interpreter — so the e2e suite covers the shipped artifact:
+# the pinned runtime, the Dockerfile's COPY list, the non-root user's /data
+# write access, and PID-1 SIGTERM handling. A subprocess-based run can't
+# prove any of those (it once let the image sit on Python 3.11 while every
+# check ran 3.13).
+#
+# No bind mounts anywhere, by design: under docker-outside-of-docker (the
+# devcontainer) mount sources resolve on the host daemon's filesystem, so
+# anything the stack needs is either baked into an image (Dockerfile.stub)
+# or already shipped in one (mosquitto's bundled no-auth config).
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c
+    # The image ships this listener-1883/allow_anonymous config; using it
+    # beats mounting our own (see the no-bind-mounts note above).
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      # Ephemeral host port (no fixed number to collide on — same policy as
+      # the unit suite's OS-assigned stub ports). The test driver discovers
+      # it via `docker compose port mosquitto 1883`.
+      - "1883"
+
+  stub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.stub
+
+  sidecar:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      CONNECTION_TYPE: tcp
+      TCP_HOST: stub
+      TCP_PORT: "12300"
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_TOPIC_PREFIX: pylontech/e2e
+      POLL_INTERVAL: "1"
+      MONITORING_LEVEL: low
+      # ENERGY_STATE_FILE stays at its /data default on purpose: writing it
+      # exercises the image's non-root /data ownership setup.
+    depends_on:
+      # Start order only, not readiness — the sidecar's own MQTT/BMS retry
+      # loops are the readiness handling, and exercising them is the point.
+      - mosquitto
+      - stub

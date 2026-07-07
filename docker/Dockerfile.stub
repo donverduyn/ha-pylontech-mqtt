@@ -1,0 +1,22 @@
+# Test-only image wrapping scripts/pylon_stub.py, consumed by
+# docker-compose.test.yml (the post-build e2e stack — see
+# tests/test_sidecar_e2e.py). Built with COPY rather than bind-mounting the
+# script because the e2e suite must also run from inside a devcontainer
+# using docker-outside-of-docker, where a bind mount's source path resolves
+# on the *host* daemon's filesystem, not the devcontainer's — a build
+# context, by contrast, is streamed to the daemon and works from anywhere.
+#
+# Same digest-pinned base as the sidecar image (docker/Dockerfile) so the
+# emulator and the code under test can never drift onto different
+# interpreters. Bump both FROM lines together.
+FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280
+
+WORKDIR /app
+COPY scripts/pylon_stub.py .
+
+USER nobody
+
+# -u so the "[stub] listening on" handshake and per-connection log lines
+# show up in `docker compose logs` as they happen, not on buffer flush.
+# Stack shape (2x US5000) matches what the e2e assertions expect.
+CMD ["python", "-u", "pylon_stub.py", "--host", "0.0.0.0", "--port", "12300", "--batteries", "2", "--model", "US5000"]

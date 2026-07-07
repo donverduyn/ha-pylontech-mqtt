@@ -2,8 +2,12 @@
 testpaths   = ["tests"]
 pythonpath  = ["tests", ".", "docker"]     # "." makes custom_components importable; "docker" exposes pylontech_parser and structs
 # "-m 'not e2e'" keeps a bare `pytest` fast and deterministic (no
-# subprocesses, no real broker, no waiting out real timeouts/retries); run
+# containers, no real broker, no waiting out real timeouts/retries); run
 # the e2e suite explicitly with `pytest -m e2e`.
+# NB: --allow-hosts is effectively decorative — pytest-homeassistant-
+# custom-component's pytest_runtest_setup hook unconditionally resets the
+# connect allowlist to ["127.0.0.1"] before every test. Tests needing more
+# must re-widen it in a fixture (see test_sidecar_e2e's autouse fixture).
 addopts     = "-v --tb=short --allow-hosts=127.0.0.1,localhost -m 'not e2e' -p no:sugar"
 asyncio_mode = "auto"
 # Silences pytest-asyncio's "unset" deprecation warning; "function" matches
@@ -11,7 +15,7 @@ asyncio_mode = "auto"
 # against the default changing out from under us later.
 asyncio_default_fixture_loop_scope = "function"
 markers = [
-    "e2e: spawns real subprocesses (sidecar, Mosquitto, BMS stub) and/or exercises real timeout/retry/grace-window timing — excluded from the default run, see addopts",
+    "e2e: runs the built sidecar image against real Mosquitto/BMS-stub containers via docker compose (test_sidecar_e2e.py) and/or exercises real timeout/retry/grace-window timing — excluded from the default run (see addopts); CI runs it only after the image build",
 ]
 
 [tool.ruff]

@@ -1,145 +1,141 @@
-"""End-to-end tests for the sidecar's real poll loop (docker/main.py).
+"""End-to-end tests for the *built* sidecar image (docker/Dockerfile).
 
 Every other test in this suite either drives BmsConnection/PylontechParser
-directly or unit-tests coordinator logic with hand-built payloads — main()'s
-poll loop itself (MQTT connect/publish, the BMS reconnect path, clean
-shutdown) is never actually executed. These tests run the real
-``docker/main.py`` entry point as a subprocess against a real (local)
-Mosquitto broker and the existing ``scripts/pylon_stub.py`` BMS emulator,
+directly or unit-tests coordinator logic with hand-built payloads. These
+tests bring up docker/docker-compose.test.yml — the sidecar image, a
+containerized BMS stub, and a real Mosquitto broker on one Docker network —
 and verify what actually crosses the wire.
 
-Requires a local ``mosquitto`` binary (``apt install mosquitto`` /
-``brew install mosquitto``); skipped automatically if it isn't on PATH.
+Running the image rather than `python main.py` on a dev interpreter is the
+entire point: it is the only place the shipped artifact is executed, so it
+is what catches packaging bugs a subprocess run structurally cannot — a
+module missing from the Dockerfile's COPY list, dependency versions
+hardcoded in the image drifting from the tested lockfile, the pinned
+runtime drifting from the tested interpreter (this image once sat on
+Python 3.11 while every check ran 3.13), /data write failures for the
+non-root user, and PID-1 signal handling.
+
+Requires a Docker daemon with the compose plugin; skipped automatically if
+`docker` isn't on PATH. Works both on a plain host (CI) and from inside a
+devcontainer using docker-outside-of-docker — see _broker_host() for the
+one place that difference leaks in.
 
 Marked "e2e" and excluded from the default `pytest` run (see addopts in
-pyproject.toml) since it spawns real subprocesses and takes several seconds,
-unlike the rest of the suite. Run explicitly with `pytest -m e2e`.
+pyproject.toml). CI runs this after building the image, in tests.yaml's
+docker job; run locally with `pytest -m e2e` (first run builds the images).
 """
 
 import json
-import os
 import shutil
-import signal
 import socket
 import subprocess
-import sys
 import time
+import uuid
 from collections.abc import Generator
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import pytest
-from conftest import StubProcess, start_stub
+import pytest_socket
 from paho.mqtt.enums import CallbackAPIVersion
 
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.skipif(
-        shutil.which("mosquitto") is None,
-        reason="requires the 'mosquitto' broker binary on PATH",
+        shutil.which("docker") is None,
+        reason="requires the 'docker' CLI (with the compose plugin) on PATH",
     ),
 ]
 
-_ROOT = Path(__file__).parent.parent
-_HOST = "127.0.0.1"
 
+@pytest.fixture(autouse=True)
+def _allow_compose_stack_hosts() -> None:
+    """Widen pytest-socket's connect allowlist for these tests.
 
-def _free_port() -> int:
-    """Reserve an OS-assigned free port and release it for immediate reuse.
-
-    For subprocesses that can't report a self-chosen port the way
-    pylon_stub.py does (mosquitto needs its listener port written into its
-    config file up front). Racy in principle between close and reuse, but
-    an OS-assigned ephemeral port is not handed out again until the pool
-    wraps around — unlike a hardcoded port, which collides with a parallel
-    test session picking the same constant every time.
+    pytest-homeassistant-custom-component's pytest_runtest_setup hook
+    unconditionally resets the allowlist to ["127.0.0.1"] before every test
+    (any --allow-hosts in addopts is overridden), which blocks reaching the
+    compose stack's published broker port at host.docker.internal under
+    docker-outside-of-docker. Fixtures run after that hook, so re-widening
+    here wins; unresolvable names (host.docker.internal on CI/plain hosts)
+    are silently dropped by pytest-socket, and its own per-test teardown
+    removes the widened restriction again.
     """
-    with socket.socket() as s:
-        s.bind((_HOST, 0))
-        return s.getsockname()[1]
+    pytest_socket.socket_allow_hosts(
+        ["127.0.0.1", "localhost", "host.docker.internal"],
+        allow_unix_socket=True,
+    )
 
 
-def _wait_for_port(
-    host: str, port: int, proc: subprocess.Popen, timeout: float = 15.0
-) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            out = proc.stdout.read() if proc.stdout else b""
-            raise RuntimeError(
-                f"process exited with code {proc.returncode} before opening "
-                f"{host}:{port}. Output:\n{out.decode(errors='replace')}"
-            )
+_COMPOSE_FILE = Path(__file__).parent.parent / "docker" / "docker-compose.test.yml"
+_TOPIC_PREFIX = "pylontech/e2e"  # fixed in docker-compose.test.yml
+
+
+def _compose(
+    project: str, *args: str, check: bool = True
+) -> "subprocess.CompletedProcess[str]":
+    """Run `docker compose` against the test stack under *project*'s namespace."""
+    return subprocess.run(
+        ["docker", "compose", "-f", str(_COMPOSE_FILE), "-p", project, *args],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _broker_host(port: int) -> str:
+    """Return the address where mosquitto's published port is reachable.
+
+    On a plain host (CI) a published port binds on localhost. From inside a
+    devcontainer using docker-outside-of-docker, the port is published on
+    the *host* VM instead — reachable as host.docker.internal — because the
+    compose stack runs as sibling containers on the host daemon, not
+    children of the devcontainer. Probing beats configuration: the same
+    test file works in both places with no environment flag to forget.
+    """
+    for host in ("127.0.0.1", "host.docker.internal"):
         try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
+            with socket.create_connection((host, port), timeout=1.0):
+                return host
         except OSError:
-            time.sleep(0.1)
-    raise RuntimeError(f"{host}:{port} did not open within {timeout}s")
+            continue
+    raise RuntimeError(
+        f"mosquitto's published port {port} is not reachable via localhost "
+        "or host.docker.internal"
+    )
 
 
 @pytest.fixture
-def mosquitto_broker(tmp_path: Path) -> Generator[int]:
-    """A real, unauthenticated local Mosquitto broker for the sidecar to publish to."""
-    broker_port = _free_port()
-    conf = tmp_path / "mosquitto.conf"
-    conf.write_text(f"listener {broker_port} {_HOST}\nallow_anonymous true\n")
-    proc = subprocess.Popen(
-        ["mosquitto", "-c", str(conf)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    try:
-        _wait_for_port(_HOST, broker_port, proc)
-        yield broker_port
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+def stack() -> Generator[tuple[str, str, int]]:
+    """Bring up the compose stack under a unique project; yield (project, host, port).
 
-
-def _spawn_stub(port: int = 0) -> StubProcess:
-    """Start the BMS stub; port 0 (default) lets the OS assign a free one."""
-    return start_stub("--batteries", "2", "--model", "US5000", port=port)
-
-
-def _spawn_sidecar(
-    *, broker_port: int, stub_port: int, topic_prefix: str, energy_state_file: str
-) -> subprocess.Popen:
-    """Launch the real docker/main.py entry point as a subprocess.
-
-    Run directly (not imported) so its module-level env-var reads pick up
-    this test's configuration fresh, and so it exercises the exact code path
-    that runs in production, including __main__ dispatch.
+    A fresh uuid-suffixed project name per test gives each one its own
+    network, broker, and containers — no retained-message bleed between
+    tests and no port/name collisions with a concurrently running session
+    (the same isolation policy as the unit suite's OS-assigned stub ports).
     """
-    env = {
-        **os.environ,
-        "CONNECTION_TYPE": "tcp",
-        "TCP_HOST": _HOST,
-        "TCP_PORT": str(stub_port),
-        "MQTT_BROKER": _HOST,
-        "MQTT_PORT": str(broker_port),
-        "MQTT_TOPIC_PREFIX": topic_prefix,
-        "POLL_INTERVAL": "1",
-        "MONITORING_LEVEL": "low",
-        "ENERGY_STATE_FILE": energy_state_file,
-    }
-    return subprocess.Popen(
-        [sys.executable, str(_ROOT / "docker" / "main.py")],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    project = f"pylon-e2e-{uuid.uuid4().hex[:8]}"
+    try:
+        _compose(project, "up", "--build", "--detach")
+        port_line = _compose(project, "port", "mosquitto", "1883").stdout.strip()
+        port = int(port_line.rsplit(":", 1)[1])
+        yield project, _broker_host(port), port
+    finally:
+        # Captured by pytest; shown only when the test fails, where the
+        # sidecar/stub/broker logs are usually the whole diagnosis.
+        logs = _compose(project, "logs", "--no-color", check=False)
+        print(logs.stdout)
+        _compose(project, "down", "--volumes", "--remove-orphans", "-t", "5")
 
 
 class _Subscriber:
     """Collects the latest retained payload per topic over a real MQTT connection."""
 
-    def __init__(self, broker_port: int, topics: list[str]) -> None:
+    def __init__(self, host: str, port: int, topics: list[str]) -> None:
         self.received: dict[str, str] = {}
         self._client = mqtt.Client(CallbackAPIVersion.VERSION2)
         self._client.on_message = self._on_message
-        self._client.connect(_HOST, broker_port, 60)
+        self._client.connect(host, port, 60)
         for topic in topics:
             self._client.subscribe(topic)
         self._client.loop_start()
@@ -147,7 +143,7 @@ class _Subscriber:
     def _on_message(self, client, userdata, msg) -> None:
         self.received[msg.topic] = msg.payload.decode()
 
-    def wait_for(self, topic: str, value: str | None, timeout: float = 30.0) -> None:
+    def wait_for(self, topic: str, value: str | None, timeout: float = 60.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if value is None:
@@ -165,91 +161,80 @@ class _Subscriber:
         self._client.disconnect()
 
 
-def test_happy_path_publishes_valid_state_and_shuts_down_cleanly(
-    mosquitto_broker: int, tmp_path: Path
+def test_image_publishes_valid_state_and_shuts_down_cleanly(
+    stack: tuple[str, str, int],
 ) -> None:
-    """Sidecar connects, publishes a schema-valid state payload and comes
-    online, then a SIGTERM (as sent by `docker stop`) drives the
-    _clean_shutdown path and publishes 'offline' before exiting 0."""
-    topic_prefix = "pylontech/e2e-happy"
-    stub = _spawn_stub()
-    assert stub.port is not None
-    sidecar = None
+    """The built image connects, publishes a schema-valid state payload and
+    comes online; `docker stop` (SIGTERM to PID 1) drives the
+    _clean_shutdown path, publishes 'offline', and exits 0."""
+    project, host, port = stack
     sub = _Subscriber(
-        mosquitto_broker, [f"{topic_prefix}/state", f"{topic_prefix}/availability"]
+        host, port, [f"{_TOPIC_PREFIX}/state", f"{_TOPIC_PREFIX}/availability"]
     )
     try:
-        sidecar = _spawn_sidecar(
-            broker_port=mosquitto_broker,
-            stub_port=stub.port,
-            topic_prefix=topic_prefix,
-            energy_state_file=str(tmp_path / "energy.json"),
-        )
+        sub.wait_for(f"{_TOPIC_PREFIX}/availability", "online")
+        sub.wait_for(f"{_TOPIC_PREFIX}/state", None)
 
-        sub.wait_for(f"{topic_prefix}/availability", "online")
-        sub.wait_for(f"{topic_prefix}/state", None)
-
-        state = json.loads(sub.received[f"{topic_prefix}/state"])
+        state = json.loads(sub.received[f"{_TOPIC_PREFIX}/state"])
         assert state["schema_version"] == 1
         assert state["sidecar_version"]
         assert len(state["batteries"]) == 2
         assert state["voltage"] > 0
+        # energy_in/out present means the non-root user's /data write path
+        # (EnergyTracker persistence) didn't blow up inside the container.
+        assert state["energy_in"] >= 0
+        assert state["energy_out"] >= 0
 
-        sub.received.pop(f"{topic_prefix}/availability", None)
-        sidecar.send_signal(signal.SIGTERM)
-        exit_code = sidecar.wait(timeout=15)
-        assert exit_code == 0
+        # Resolve the container id before stopping — `compose ps -q` only
+        # lists running containers.
+        sidecar_id = _compose(project, "ps", "-q", "sidecar").stdout.strip()
+        assert sidecar_id, "sidecar container not found"
 
-        sub.wait_for(f"{topic_prefix}/availability", "offline")
+        sub.received.pop(f"{_TOPIC_PREFIX}/availability", None)
+        # `docker stop` sends SIGTERM to PID 1 — the exact signal `docker
+        # stop`/compose shutdown delivers in production — then SIGKILL after
+        # the timeout. Exit code 0 therefore proves the SIGTERM handler ran
+        # a clean shutdown as PID 1; 137 would mean it hung and was killed.
+        _compose(project, "stop", "-t", "15", "sidecar")
+        exit_code = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.ExitCode}}", sidecar_id],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert exit_code == "0"
+
+        sub.wait_for(f"{_TOPIC_PREFIX}/availability", "offline")
     finally:
         sub.close()
-        if sidecar is not None and sidecar.poll() is None:
-            sidecar.terminate()
-            sidecar.wait(timeout=5)
-        stub.stop()
 
 
 def test_bms_disconnect_marks_offline_then_recovers_on_reconnect(
-    mosquitto_broker: int, tmp_path: Path
+    stack: tuple[str, str, int],
 ) -> None:
-    """Killing the BMS stub mid-poll must drive the
-    `except (serial.SerialException, OSError, IOError)` reconnect path: the
-    sidecar publishes 'offline', keeps retrying, and resumes publishing
-    'online' + valid state once the BMS is reachable again."""
-    topic_prefix = "pylontech/e2e-reconnect"
-    stub = _spawn_stub()
-    # Remember the OS-assigned port: the revived stub below must come back on
-    # this exact port, since it's baked into the running sidecar's TCP_PORT.
-    stub_port = stub.port
-    assert stub_port is not None
-    sidecar = None
+    """Stopping the BMS stub container mid-poll must drive the
+    `except (serial.SerialException, OSError)` reconnect path: the sidecar
+    publishes 'offline', keeps retrying, and resumes publishing 'online' +
+    valid state once the BMS is reachable again."""
+    project, host, port = stack
     sub = _Subscriber(
-        mosquitto_broker, [f"{topic_prefix}/state", f"{topic_prefix}/availability"]
+        host, port, [f"{_TOPIC_PREFIX}/state", f"{_TOPIC_PREFIX}/availability"]
     )
     try:
-        sidecar = _spawn_sidecar(
-            broker_port=mosquitto_broker,
-            stub_port=stub_port,
-            topic_prefix=topic_prefix,
-            energy_state_file=str(tmp_path / "energy.json"),
-        )
-        sub.wait_for(f"{topic_prefix}/availability", "online")
+        sub.wait_for(f"{_TOPIC_PREFIX}/availability", "online")
 
         # Simulate the BMS disappearing (cable unplugged / device power loss).
-        stub.stop()
-        sub.received.pop(f"{topic_prefix}/availability", None)
-        sub.wait_for(f"{topic_prefix}/availability", "offline", timeout=20)
+        _compose(project, "stop", "-t", "5", "stub")
+        sub.received.pop(f"{_TOPIC_PREFIX}/availability", None)
+        sub.wait_for(f"{_TOPIC_PREFIX}/availability", "offline")
 
-        # Bring it back on the same port; the sidecar's own retry loop
-        # (no restart needed) should pick it back up.
-        stub = _spawn_stub(stub_port)
-        sub.received.pop(f"{topic_prefix}/availability", None)
-        sub.received.pop(f"{topic_prefix}/state", None)
-        sub.wait_for(f"{topic_prefix}/availability", "online", timeout=20)
-        sub.wait_for(f"{topic_prefix}/state", None)
+        # Bring the same container back: it keeps its network alias and
+        # port, so the sidecar's own retry loop (no restart needed) picks it
+        # back up — the container equivalent of plugging the cable back in.
+        _compose(project, "start", "stub")
+        sub.received.pop(f"{_TOPIC_PREFIX}/availability", None)
+        sub.received.pop(f"{_TOPIC_PREFIX}/state", None)
+        sub.wait_for(f"{_TOPIC_PREFIX}/availability", "online")
+        sub.wait_for(f"{_TOPIC_PREFIX}/state", None)
     finally:
         sub.close()
-        if sidecar is not None and sidecar.poll() is None:
-            sidecar.terminate()
-            sidecar.wait(timeout=5)
-        stub.stop()

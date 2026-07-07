@@ -13,7 +13,9 @@ setup:
 test:
 	pytest
 
-# Spawns real subprocesses (sidecar, Mosquitto, BMS stub); slower, run separately.
+# Runs the built sidecar image against real Mosquitto/BMS-stub containers
+# (docker/docker-compose.test.yml) plus the real-timing tests; needs a Docker
+# daemon with the compose plugin. First run builds the images.
 test-e2e:
 	pytest -m e2e
 
