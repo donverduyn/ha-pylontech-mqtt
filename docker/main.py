@@ -82,6 +82,25 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _invalid_topic_prefix(topic: str) -> bool:
+    """Return True if *topic* would break MQTT subscribe/publish at runtime.
+
+    Mirrors custom_components/pylontech_mqtt/config_flow.py's
+    _invalid_topic_prefix — the HA config flow rejects these same shapes, but
+    a MQTT_TOPIC_PREFIX set directly on the sidecar (Docker env var) never
+    goes through that form, so it must be checked again here rather than
+    failing deep inside paho-mqtt at publish time.
+    """
+    return (
+        not topic
+        or topic != topic.strip()
+        or "#" in topic
+        or "+" in topic
+        or topic.startswith("/")
+        or topic.endswith("/")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Configuration from environment variables
 # ---------------------------------------------------------------------------
@@ -624,6 +643,30 @@ def _publish_succeeded(*infos: _PublishResult) -> bool:
     return all(info.rc == MQTTErrorCode.MQTT_ERR_SUCCESS for info in infos)
 
 
+def _warn_if_cycle_too_slow(cycle_elapsed: float) -> None:
+    """Log a warning if this poll cycle risks tripping the HA staleness watchdog.
+
+    POLL_INTERVAL is validated at startup to leave a safety margin below the
+    HA integration's 300s staleness watchdog, but that only bounds the
+    configured sleep — not how long fetching and publishing this cycle's
+    data actually took. A slow round trip (e.g. MONITORING_LEVEL=high walking
+    many batteries/cells, or a BMS responding sluggishly) can erode or blow
+    through that margin even with a compliant POLL_INTERVAL, so measure it
+    and warn rather than let availability flap with no explanation.
+    """
+    if cycle_elapsed + POLL_INTERVAL > _MAX_POLL_INTERVAL:
+        _LOGGER.warning(
+            "This poll cycle took %.1fs to fetch and publish — combined "
+            "with POLL_INTERVAL=%ds that exceeds the %ds safety margin "
+            "below the HA integration's 300s staleness watchdog. Consider a "
+            "lower MONITORING_LEVEL, fewer MAX_BATTERIES, or a shorter "
+            "POLL_INTERVAL",
+            cycle_elapsed,
+            POLL_INTERVAL,
+            _MAX_POLL_INTERVAL,
+        )
+
+
 def _clean_shutdown(
     client: mqtt.Client, bms: "BmsConnection", energy: "EnergyTracker"
 ) -> None:
@@ -663,11 +706,22 @@ def main() -> None:
     if CONNECTION_TYPE == "tcp" and not TCP_HOST:
         _LOGGER.error("TCP_HOST is required when CONNECTION_TYPE=tcp")
         sys.exit(1)
+    if CONNECTION_TYPE == "tcp" and not (1 <= TCP_PORT <= 65535):
+        _LOGGER.error("TCP_PORT must be between 1 and 65535 (got %d)", TCP_PORT)
+        sys.exit(1)
     if CONNECTION_TYPE == "serial" and not SERIAL_PORT:
         _LOGGER.error("SERIAL_PORT must not be empty")
         sys.exit(1)
     if not (1 <= MQTT_PORT_ENV <= 65535):
         _LOGGER.error("MQTT_PORT must be between 1 and 65535 (got %d)", MQTT_PORT_ENV)
+        sys.exit(1)
+    if _invalid_topic_prefix(MQTT_TOPIC_PREFIX):
+        _LOGGER.error(
+            "MQTT_TOPIC_PREFIX %r is invalid — must be non-empty, contain no "
+            "leading/trailing whitespace or slashes, and not contain the MQTT "
+            "wildcard characters '#' or '+'",
+            MQTT_TOPIC_PREFIX,
+        )
         sys.exit(1)
     if BAUD_RATE <= 0:
         _LOGGER.error("BAUD_RATE must be a positive integer (got %d)", BAUD_RATE)
@@ -761,6 +815,7 @@ def main() -> None:
     info_fetched = False
 
     while True:
+        cycle_start = time.monotonic()
         try:
             if not info_fetched:
                 _LOGGER.info("Fetching device info...")
@@ -863,6 +918,8 @@ def main() -> None:
                     len(system.batteries),
                     sum(len(b.cells) for b in system.batteries),
                 )
+
+            _warn_if_cycle_too_slow(time.monotonic() - cycle_start)
 
         except (serial.SerialException, OSError) as err:
             _LOGGER.error("BMS connection error: %s — reconnecting in 5 s", err)

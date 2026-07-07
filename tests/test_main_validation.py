@@ -109,3 +109,101 @@ def test_poll_interval_above_max_exits_before_connecting(monkeypatch, caplog) ->
 
     assert exc_info.value.code == 1
     assert "POLL_INTERVAL must be at most" in caplog.text
+
+
+@pytest.mark.parametrize("bad_port", [0, -1, 65536, 100000])
+def test_tcp_port_out_of_range_exits_before_connecting(
+    monkeypatch, caplog, bad_port
+) -> None:
+    """An out-of-range TCP_PORT (e.g. copy-pasted with a stray digit) must
+    fail fast rather than reaching socket.connect() and failing with an
+    opaque OSError."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "CONNECTION_TYPE", "tcp")
+    monkeypatch.setattr(main, "TCP_HOST", "192.168.1.100")
+    monkeypatch.setattr(main, "TCP_PORT", bad_port)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "TCP_PORT must be between 1 and 65535" in caplog.text
+
+
+def test_tcp_port_out_of_range_ignored_in_serial_mode(monkeypatch, caplog) -> None:
+    """TCP_PORT is only meaningful in tcp mode — an out-of-range value must
+    not block a serial-mode setup that never uses it."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "CONNECTION_TYPE", "serial")
+    monkeypatch.setattr(main, "TCP_PORT", 0)
+    monkeypatch.setattr(main, "POLL_INTERVAL", 0)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "POLL_INTERVAL must be" in caplog.text
+    assert "TCP_PORT must be" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "bad_prefix",
+    [
+        "",
+        " pylontech/stack",
+        "pylontech/stack ",
+        "/pylontech/stack",
+        "pylontech/stack/",
+        "pylontech/#",
+        "pylontech/+/stack",
+    ],
+)
+def test_invalid_topic_prefix_exits_before_connecting(
+    monkeypatch, caplog, bad_prefix
+) -> None:
+    """A MQTT_TOPIC_PREFIX set directly on the sidecar (bypassing the HA
+    config flow's own _invalid_topic_prefix check) must be rejected up front
+    rather than raising deep inside paho-mqtt at publish time."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "MQTT_TOPIC_PREFIX", bad_prefix)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "MQTT_TOPIC_PREFIX" in caplog.text
+    assert "is invalid" in caplog.text
+
+
+def test_valid_topic_prefix_passes_this_check(monkeypatch, caplog) -> None:
+    """A well-formed prefix must not be rejected by the new guard itself."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "MQTT_TOPIC_PREFIX", "pylontech/stack")
+    monkeypatch.setattr(main, "POLL_INTERVAL", 0)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "POLL_INTERVAL must be" in caplog.text
+    assert "MQTT_TOPIC_PREFIX" not in caplog.text
