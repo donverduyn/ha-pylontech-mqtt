@@ -79,17 +79,20 @@ jobs:
   validate:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
-    # always() unconditionally, then step-level `if:`s below decide what
-    # actually happens — see hacs.yaml's identical job for the full
+    # !cancelled() unconditionally, then step-level `if:`s below decide
+    # what actually happens — see hacs.yaml's identical job for the full
     # reasoning: this job is branch protection's actual required context
     # ("validate"), so it needs to be dispatched in every case (a
-    # confirmed release, to hit its own bail step; detect-release failing
-    # outright, to still fail closed to running the real steps below)
-    # rather than relying on job-level `if:` filtering. A job-level `if:`
-    # here — even one that logically evaluates true — doesn't override
-    # GitHub's implicit "skip if needs failed" default unless it itself
-    # calls always()/success()/failure()/cancelled().
-    if: always()
+    # confirmed release, to hit its own bail step; detect-release
+    # genuinely failing, to still fail closed to running the real steps
+    # below) rather than relying on job-level `if:` filtering. A
+    # job-level `if:` here — even one that logically evaluates true —
+    # doesn't override GitHub's implicit "skip if needs failed" default
+    # unless it itself calls always()/success()/failure()/cancelled().
+    # !cancelled() specifically rather than always(): always() would keep
+    # this job racing to completion even when detect-release was itself
+    # cancelled by a second triggering event superseding this whole run.
+    if: "!cancelled()"
     steps:
       - name: Refuse skip-ci on a release PR
         # Duplicates detect-release's identical step (which only gives an

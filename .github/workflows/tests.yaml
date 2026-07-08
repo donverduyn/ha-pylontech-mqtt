@@ -116,16 +116,22 @@ jobs:
     # *confirmed* release — still dispatches this job. See the top-of-file
     # comment and tests-status below for why a confirmed release doesn't
     # just skip quietly.
-    # The leading always() matters even though this job doesn't want to
-    # unconditionally run: a job's `if:` is implicitly ANDed with success()
-    # of its `needs` unless the condition itself calls always()/success()/
-    # failure()/cancelled() — without it, this job would silently be
-    # skipped by GitHub outright whenever detect-release fails for *any*
-    # reason (including its own explicit bail step above, but just as
-    # much a plain network flake), which is the opposite of "fails closed
-    # to running the checks". always() disables that implicit gating so
-    # the boolean logic here is what actually decides, in every case.
-    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    # The leading !cancelled() matters even though this job doesn't want
+    # to unconditionally run: a job's `if:` is implicitly ANDed with
+    # success() of its `needs` unless the condition itself calls
+    # always()/success()/failure()/cancelled() — without it, this job
+    # would silently be skipped by GitHub outright whenever detect-release
+    # fails for *any* reason (including a plain network flake), which is
+    # the opposite of "fails closed to running the checks".
+    # !cancelled() specifically rather than always(): always() would also
+    # keep this job racing to completion even when detect-release was
+    # itself cancelled — which happens when a second triggering event
+    # (e.g. a skip-ci label landing right after the PR opened) supersedes
+    # this whole run via the concurrency group above. In that case the run
+    # is already being torn down; !cancelled() correctly backs this job
+    # off too instead of burning several minutes running pytest for real
+    # just to have the result discarded a moment later.
+    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     strategy:
       fail-fast: false
       matrix:
@@ -187,7 +193,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
@@ -237,7 +243,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - name: Install actionlint
@@ -282,7 +288,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - name: Build the sidecar image
@@ -410,20 +416,25 @@ jobs:
     # hacs.yaml/hassfest.yaml's jobs) so this doesn't display as "Tests /
     # Tests" against the workflow's own name.
     #
-    # Runs unconditionally (always()) so it still reports even when
-    # something upstream was skipped or failed, and does two things:
-    # first, an explicit bail — identical to detect-release's own step —
-    # for skip-ci on a *confirmed* release, since none of the five jobs
-    # above self-check that (they just skip quietly; see their shared
-    # comment), and this is branch protection's actual required context,
-    # so it's the one place that has to fail loudly. Second, once past
-    # that, confirms every real job's result was success or skipped —
-    # needs.e2e.result (and pytest's) already collapses both matrix legs
-    # into one verdict automatically. Branch protection requires *this*
-    # single name instead of the seven individual ones above.
+    # Runs whenever this run itself hasn't been cancelled (!cancelled(),
+    # not always() — see pytest's comment above for why: always() would
+    # keep evaluating and reporting even when a second triggering event
+    # has superseded this whole run, which produced a spurious FAILURE
+    # here once from a run that was already being discarded) so it still
+    # reports even when something upstream was skipped or genuinely
+    # failed, and does two things: first, an explicit bail — identical to
+    # detect-release's own step — for skip-ci on a *confirmed* release,
+    # since none of the five jobs above self-check that (they just skip
+    # quietly; see their shared comment), and this is branch protection's
+    # actual required context, so it's the one place that has to fail
+    # loudly. Second, once past that, confirms every real job's result
+    # was success or skipped — needs.e2e.result (and pytest's) already
+    # collapses both matrix legs into one verdict automatically. Branch
+    # protection requires *this* single name instead of the seven
+    # individual ones above.
     runs-on: "ubuntu-latest"
     needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e]
-    if: always()
+    if: "!cancelled()"
     steps:
       - name: Refuse skip-ci on a release PR
         if: needs.detect-release.outputs.is_release == 'true' && needs.detect-release.outputs.skip_ci == 'true'
