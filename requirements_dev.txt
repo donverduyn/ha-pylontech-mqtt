@@ -15,6 +15,12 @@ pyright
 mypy
 # Runs the .pre-commit-config.yaml hooks; see CONTRIBUTING.md.
 pre-commit
+# Wheel-bundled shellcheck binary. Pinned only here, not separately in
+# .pre-commit-config.yaml: that hook calls this package's console script as a
+# local hook (language: system) instead of pulling its own copy via the
+# shellcheck-py mirror repo, so there's one version of truth instead of two
+# pins that can drift out of sync.
+shellcheck-py
 # Stubs for pyserial, imported by docker/main.py; mypy's strict mode requires
 # an explicit stub package rather than falling back to untyped/Any.
 types-pyserial

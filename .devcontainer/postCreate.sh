@@ -1,47 +1,6 @@
 #!/bin/sh
 set -e
 
-log() {
-  printf '[devcontainer:%s] %s\n' "$(date '+%H:%M:%S')" "$*"
-}
-
-elapsed_since() {
-  now=$(date +%s)
-  printf '%ss' "$((now - $1))"
-}
-
-run_with_heartbeat() {
-  step_label=$1
-  shift
-  step_start=$(date +%s)
-  heartbeat_interval="${DEVCONTAINER_STEP_HEARTBEAT_SECONDS:-30}"
-
-  log "START: $step_label"
-  (
-    while :; do
-      sleep "$heartbeat_interval"
-      log "STILL RUNNING: $step_label ($(elapsed_since "$step_start"))"
-    done
-  ) &
-  heartbeat_pid=$!
-
-  set +e
-  "$@"
-  step_status=$?
-  set -e
-
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
-
-  step_elapsed=$(elapsed_since "$step_start")
-  if [ "$step_status" -eq 0 ]; then
-    log "DONE: $step_label ($step_elapsed)"
-  else
-    log "FAILED: $step_label ($step_elapsed, exit $step_status)"
-  fi
-  return "$step_status"
-}
-
 prepare_agent_sync() {
   sudo mkdir -p "$HOME/.agent-sync" || return $?
   sudo chown vscode:vscode "$HOME/.agent-sync"
@@ -51,9 +10,6 @@ disable_copilot_cli_auto_update() {
   marker=/etc/devcontainer-copilot-cli/auto-update
   if [ -f "$marker" ]; then
     sudo rm -f "$marker"
-    log "Disabled Copilot CLI feature auto-update"
-  else
-    log "Copilot CLI feature auto-update already disabled"
   fi
 }
 
@@ -97,7 +53,6 @@ prepare_config_dir() {
   # time the walk is worth paying for at all (see below).
   fresh_marker="$HOME/$config_relpath/.devcontainer-freshly-seeded"
   if [ -e "$fresh_marker" ]; then
-    log "First seed of $config_relpath -- running full ownership walk"
     full_ownership_walk "$config_relpath"
     sudo rm -f "$fresh_marker"
     return 0
@@ -135,14 +90,11 @@ prepare_config_dir() {
   fi
 
   if [ ! -w "$HOME/$config_relpath" ]; then
-    log "Fixing top-level ownership for $config_relpath"
-    sudo chown -h vscode:vscode "$HOME/$config_relpath" || \
-      log "CONTINUE: top-level ownership fix failed for $config_relpath"
+    sudo chown -h vscode:vscode "$HOME/$config_relpath" || true
   fi
   auth_path="$HOME/$config_relpath/$auth_relpath"
   if [ -e "$auth_path" ]; then
-    sudo chown -h vscode:vscode "$auth_path" || \
-      log "CONTINUE: credential ownership fix failed for $auth_path"
+    sudo chown -h vscode:vscode "$auth_path" || true
   fi
 }
 
@@ -151,7 +103,6 @@ copy_staged_json_config() {
   json_src="$HOME/.agent-sync/$json_relpath"
   json_dest="$HOME/$json_relpath"
   if [ ! -f "$json_src" ]; then
-    log "SKIP: staged JSON config missing $json_relpath"
     return 0
   fi
   mkdir -p "$(dirname "$json_dest")" || return $?
@@ -160,11 +111,8 @@ copy_staged_json_config() {
 
 script_dir=$(dirname "$0")
 tool_versions_file="$script_dir/tool-versions.env"
-script_start=$(date +%s)
-log "postCreate starting"
 
 if [ ! -f "$tool_versions_file" ]; then
-  log "FAILED: missing tool version pins at $tool_versions_file"
   exit 1
 fi
 # shellcheck disable=SC1090 # path is repo-local and checked above
@@ -177,7 +125,7 @@ fi
 # creation, then pays a postStart `copilot update` check on every start when
 # this marker exists. Remove it here; intentional latest refreshes are handled
 # by `make update-deps` and a rebuild.
-run_with_heartbeat "disable Copilot CLI feature auto-update" disable_copilot_cli_auto_update
+disable_copilot_cli_auto_update
 
 # /home/vscode/.agent-sync is a directory bind mount, staging just
 # .claude.json (see config-files.txt and seedHostConfig.sh for
@@ -185,7 +133,7 @@ run_with_heartbeat "disable Copilot CLI feature auto-update" disable_copilot_cli
 # target as root before this script runs if it doesn't already exist in the
 # base image, so it needs its ownership fixed before anything below can
 # write into it.
-run_with_heartbeat "prepare .agent-sync staging directory" prepare_agent_sync
+prepare_agent_sync
 
 # Start the sync-out watcher as early as this script can possibly manage --
 # its only prerequisites are $HOME/.agent-sync existing and writable (just
@@ -205,10 +153,7 @@ run_with_heartbeat "prepare .agent-sync staging directory" prepare_agent_sync
 # syncConfigOut.sh guards itself with a pidfile, so postStartCommand's later
 # invocation of the same script is just a no-op once this one is already
 # running.
-log "Launching config sync-out watcher"
 nohup bash "$script_dir/syncConfigOut.sh" > /tmp/sync-agent-config-out.log 2>&1 &
-watcher_pid=$!
-log "Config sync-out watcher launch requested (pid $watcher_pid)"
 
 # Bind-mounted (see devcontainer.json's "mounts") to a path outside
 # .vscode-server so Docker never has to auto-create .vscode-server itself as
@@ -234,10 +179,10 @@ while IFS='|' read -r relpath kind; do
   esac
   case "$kind" in
     dir)
-      run_with_heartbeat "prepare config dir $relpath" prepare_config_dir "$relpath"
+      prepare_config_dir "$relpath"
       ;;
     json)
-      run_with_heartbeat "copy staged JSON config $relpath" copy_staged_json_config "$relpath"
+      copy_staged_json_config "$relpath"
       ;;
   esac
 done < "$script_dir/config-files.txt"
@@ -263,18 +208,16 @@ done < "$script_dir/config-files.txt"
 # (`allowBuilds: {'a,b': true}`). @openai/codex has no gated postinstall so
 # it installs fine either way, which is why only @kilocode/cli's build
 # picker was ever seen hanging.
-run_with_heartbeat "install global npm CLIs with pnpm" \
-  pnpm add -g \
-    --config.minimumReleaseAge=0 \
-    --allow-build=@openai/codex \
-    --allow-build=@kilocode/cli \
-    "@openai/codex@$CODEX_VERSION" \
-    "@kilocode/cli@$KILO_VERSION"
+pnpm add -g \
+  --config.minimumReleaseAge=0 \
+  --allow-build=@openai/codex \
+  --allow-build=@kilocode/cli \
+  "@openai/codex@$CODEX_VERSION" \
+  "@kilocode/cli@$KILO_VERSION"
 
 # Keep OpenCode/Kilo plugin installs in their home-backed global config.
 # Both CLIs already use XDG home paths for normal config/data/state, but their
 # plugin command defaults to project-local config unless --global is supplied.
-log "Installing CLI wrapper scripts"
 mkdir -p /home/vscode/.local/bin
 cat > /home/vscode/.local/bin/opencode <<'EOF'
 #!/bin/sh
@@ -337,16 +280,13 @@ chmod +x /home/vscode/.local/bin/opencode /home/vscode/.local/bin/kilo
 # under --require-hashes and install an unpinned newer one instead, same drift
 # as above but for the interpreter and a dependency at once. This must track
 # the base image tag and CI's actions/setup-python version above.
-run_with_heartbeat "create Python 3.14 venv" \
-  uv venv --python 3.14 /home/vscode/.venv
-run_with_heartbeat "install Python dev dependencies" \
-  uv pip install --python /home/vscode/.venv/bin/python --require-hashes -r requirements_dev.lock.txt
+uv venv --python 3.14 /home/vscode/.venv
+uv pip install --python /home/vscode/.venv/bin/python --require-hashes -r requirements_dev.lock.txt
 
 # containerEnv/remoteEnv set PATH for processes VS Code itself launches, but a login shell
 # (bash -l) re-sources /etc/profile, which unconditionally resets PATH and wipes that out.
 # Debian sources /etc/profile.d/*.sh at the very end of /etc/profile, after that reset, so
 # dropping the venv PATH there is what makes it survive in a plain terminal too.
-log "Writing shell profile defaults"
 sudo tee /etc/profile.d/00-venv.sh > /dev/null <<'EOF'
 export VIRTUAL_ENV=/home/vscode/.venv
 export PATH="$VIRTUAL_ENV/bin:$PATH"
@@ -401,5 +341,3 @@ EOF
 # alias still lets any extra arguments you type pass through untouched
 # (`agy foo` expands to `agy --dangerously-skip-permissions foo`).
 grep -qF 'alias agy=' /home/vscode/.bashrc || echo "alias agy='agy --dangerously-skip-permissions'" >> /home/vscode/.bashrc
-
-log "postCreate complete ($(elapsed_since "$script_start"))"

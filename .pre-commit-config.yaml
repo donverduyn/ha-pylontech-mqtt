@@ -7,16 +7,30 @@
 #
 # Install with: pre-commit install
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20 # keep in sync with ruff's version in requirements_dev.txt
+  # ruff and shellcheck-py are both pinned once, in requirements_dev.txt, not
+  # duplicated here as a mirror-repo `rev` — language: system runs the
+  # console script the project's own venv already has installed instead of
+  # pre-commit pulling a second, separately-versioned copy, so there's one
+  # source of truth per tool instead of two pins that can drift out of sync.
+  - repo: local
     hooks:
       - id: ruff-check
+        name: ruff check
+        entry: ruff check --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
       - id: ruff-format
-
-  - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.11.0.1
-    hooks:
+        name: ruff format
+        entry: ruff format --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
       - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
 
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12

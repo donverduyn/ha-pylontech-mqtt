@@ -56,53 +56,9 @@
 # build.)
 set -e
 
-log() {
-  printf '[devcontainer:%s] %s\n' "$(date '+%H:%M:%S')" "$*"
-}
-
-elapsed_since() {
-  now=$(date +%s)
-  printf '%ss' "$((now - $1))"
-}
-
-run_with_heartbeat() {
-  step_label=$1
-  shift
-  step_start=$(date +%s)
-  heartbeat_interval="${DEVCONTAINER_STEP_HEARTBEAT_SECONDS:-30}"
-
-  log "START: $step_label"
-  (
-    while :; do
-      sleep "$heartbeat_interval"
-      log "STILL RUNNING: $step_label ($(elapsed_since "$step_start"))"
-    done
-  ) &
-  heartbeat_pid=$!
-
-  set +e
-  "$@"
-  step_status=$?
-  set -e
-
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
-
-  step_elapsed=$(elapsed_since "$step_start")
-  if [ "$step_status" -eq 0 ]; then
-    log "DONE: $step_label ($step_elapsed)"
-  else
-    log "FAILED: $step_label ($step_elapsed, exit $step_status)"
-  fi
-  return "$step_status"
-}
-
 home="${HOME:-$USERPROFILE}"
 list_file="$(dirname "$0")/config-files.txt"
 sync_dir="$home/.devcontainer-agent-sync$PWD"
-script_start=$(date +%s)
-
-log "Host config seed starting: $sync_dir"
 
 mkdir -p "$sync_dir"
 
@@ -141,7 +97,6 @@ while IFS='|' read -r relpath kind; do
   # Already seeded for this project on a prior run — leave it alone from
   # here on, whichever kind it is.
   if [ -e "$sync_path" ]; then
-    log "SKIP: $relpath already seeded"
     continue
   fi
 
@@ -149,9 +104,7 @@ while IFS='|' read -r relpath kind; do
     dir)
       mkdir -p "$sync_path"
       if [ -d "$host_path" ]; then
-        run_with_heartbeat "seed directory $relpath" cp -a "$host_path/." "$sync_path/"
-      else
-        log "CREATE: empty seed directory for missing host path $relpath"
+        cp -a "$host_path/." "$sync_path/"
       fi
       # Dropped inside $sync_path itself (not next to it) so it rides the
       # same bind mount into the container: postCreate.sh's prepare_config_dir
@@ -162,11 +115,8 @@ while IFS='|' read -r relpath kind; do
       touch "$sync_path/.devcontainer-freshly-seeded"
       ;;
     json)
-      log "SEED: json file $relpath"
       seed_json "$host_path"
       atomic_cp "$host_path" "$sync_path"
       ;;
   esac
 done < "$list_file"
-
-log "Host config seed complete ($(elapsed_since "$script_start"))"
