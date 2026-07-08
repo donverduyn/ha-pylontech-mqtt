@@ -10,7 +10,7 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/donverduyn/ha-pylontech-mqtt/issues",
   "requirements": [
-    "paho-mqtt>=2.0.0"
+    "paho-mqtt>=2.0.0,<3.0.0"
   ],
   "version": "2.0.0"
 }

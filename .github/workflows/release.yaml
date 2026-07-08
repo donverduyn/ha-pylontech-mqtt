@@ -45,15 +45,37 @@ jobs:
       # No ref override: under workflow_call this is the master push that
       # bumped the version; under workflow_dispatch it's the head of the
       # ref the dispatcher chose. The tag doesn't exist yet either way.
+      # fetch-depth: 0 (full history) so the merge-base check below can
+      # actually walk back to origin/master instead of hitting a shallow
+      # clone's history boundary.
       - uses: "actions/checkout@v4"
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit is reachable from master
+        # workflow_call always releases a commit already on master (the
+        # push that bumped the version), which trivially passes this. The
+        # workflow_dispatch escape hatch can target any ref, though: this
+        # guards against publishing a commit that never went through the
+        # required-checks gauntlet a PR-merged commit gets in tests.yaml
+        # (unit suite, image build + smoke test, e2e on both HA legs).
+        run: |
+          git fetch origin master
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "::error::HEAD ($(git rev-parse HEAD)) is not reachable from origin/master, so it hasn't been through the required PR checks in tests.yaml. Refusing to release it."
+            exit 1
+          fi
 
       - name: Derive version from tag
         id: version
         # Anything with a hyphen (e.g. v2.0.0-rc1) is a pre-release: it
         # skips the ":latest" retag below and its GitHub Release is marked
         # prerelease, so HACS only offers it to users who opted into betas.
-        # Real-hardware validation gaps mean nothing ships as a final
-        # release until that's been done (see CONTRIBUTING.md).
+        # Final releases *should* wait for real-hardware validation (see
+        # CONTRIBUTING.md's "Contributing a real-hardware transcript"
+        # section) — the warning step below flags it, but doesn't block,
+        # since there's currently no way to force hardware access into
+        # existence.
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
@@ -68,6 +90,18 @@ jobs:
             echo "version=${version}"
             echo "is_prerelease=${is_prerelease}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Warn if publishing final without a real-hardware transcript
+        # Non-blocking: flags the gap on the run summary rather than
+        # failing the release, since there's no way to force hardware
+        # access into existence. See tests/fixtures/transcripts/README.md
+        # and CONTRIBUTING.md's "Contributing a real-hardware transcript"
+        # section for closing it.
+        if: steps.version.outputs.is_prerelease == 'false'
+        run: |
+          if ! ls tests/fixtures/transcripts/*.json >/dev/null 2>&1; then
+            echo "::warning::Publishing final release ${{ steps.version.outputs.version }} with zero real-hardware transcripts in tests/fixtures/transcripts/. Parser changes have only ever been validated against the hand-authored stub (scripts/pylon_stub.py), not real US2000/3000/5000/Pytes firmware."
+          fi
 
       - name: Verify tag matches manifest version
         # Exact match, rc suffix included: manifest.json carries precisely

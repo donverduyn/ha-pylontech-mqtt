@@ -4,8 +4,12 @@
 # old homeassistant pin that never ships and would otherwise make pip-audit
 # permanently red for CVEs no user is ever exposed to).
 
-# Mirrors custom_components/pylontech_mqtt/manifest.json "requirements"
-paho-mqtt>=2.0.0
+# Mirrors custom_components/pylontech_mqtt/manifest.json "requirements".
+# Upper-bounded: docker/Dockerfile and both dev lockfiles only ever pin/test
+# 2.1.0, so a 3.x release landing here would be installed by users without
+# ever having been exercised by CI.
+paho-mqtt>=2.0.0,<3.0.0
 
-# Mirrors docker/Dockerfile's pinned sidecar dependency
-pyserial>=3.5
+# Mirrors docker/Dockerfile's pinned sidecar dependency. Same reasoning as
+# paho-mqtt above: only 3.5 is ever actually tested.
+pyserial>=3.5,<4.0.0
