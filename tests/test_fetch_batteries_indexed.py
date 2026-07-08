@@ -122,9 +122,7 @@ def test_no_batteries_zeroes_metrics(monkeypatch):
     assert system.power == 0.0
 
 
-# ===========================================================================
 # main._enrich_batteries_indexed — MONITORING_LEVEL medium/high detail walk
-# ===========================================================================
 def _battery(sys_id: int, **overrides) -> PylontechBattery:
     bat = PylontechBattery(
         sys_id=sys_id,

@@ -55,9 +55,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
-# ---------------------------------------------------------------------------
 # Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,9 +99,7 @@ def _invalid_topic_prefix(topic: str) -> bool:
     )
 
 
-# ---------------------------------------------------------------------------
 # Configuration from environment variables
-# ---------------------------------------------------------------------------
 
 CONNECTION_TYPE = os.getenv("CONNECTION_TYPE", "serial").lower()
 SERIAL_PORT = os.getenv("SERIAL_PORT", "/dev/ttyUSB0")
@@ -154,9 +150,7 @@ SCHEMA_VERSION = 1
 SIDECAR_VERSION = os.getenv("SIDECAR_VERSION", "0.0.0-dev")
 GIT_SHA = os.getenv("GIT_SHA", "unknown")
 
-# ---------------------------------------------------------------------------
 # BMS connection
-# ---------------------------------------------------------------------------
 
 
 PROMPT = b"pylon>"
@@ -360,9 +354,7 @@ class BmsConnection:
         self._stray_prompt_pending = False
 
 
-# ---------------------------------------------------------------------------
 # Energy tracker
-# ---------------------------------------------------------------------------
 
 
 class EnergyTracker:
@@ -534,9 +526,7 @@ class EnergyTracker:
         self._last_power = None
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 
 class _CommandSender(Protocol):

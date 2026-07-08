@@ -1,4 +1,3 @@
-# tests/conftest.py
 """
 Shared pytest fixtures and import bootstrap for ha-pylontech-mqtt tests.
 
@@ -22,25 +21,13 @@ import pytest
 _ROOT = Path(__file__).parent.parent
 
 
-# ---------------------------------------------------------------------------
 # Socket access helpers
 #
 # pytest-homeassistant-custom-component blocks all TCP sockets in its
 # pytest_runtest_setup() hook.  The stub-based tests need real TCP connections
 # to 127.0.0.1; HA integration tests mock their connections and are unaffected.
-#
-# This is deliberately global/autouse rather than scoped to only the
-# stub-based test files. It was tried: scoping it down (opt-in per file via
-# a local autouse fixture) is *not* actually needed for correctness —
-# pytest-homeassistant-custom-component's own setup hook already permanently
-# allowlists 127.0.0.1 regardless of enable/disable state — but measured
-# ~2-4x slower full-suite wall time in a clean back-to-back A/B comparison
-# (block-by-default clearly costs something elsewhere in the HA test
-# fixture chain for the non-stub tests, even though nothing in those tests
-# knowingly opens a real socket). Global enable avoids that cost and
-# doesn't meaningfully weaken isolation given the host is already pinned to
-# 127.0.0.1 either way.
-# ---------------------------------------------------------------------------
+# Keeping this global avoids repeatedly paying the HA socket-blocking setup
+# cost while still limiting real traffic to loopback.
 def _enable_sockets() -> None:
     """Re-enable real TCP sockets (no-op when pytest-socket is not installed)."""
     try:
@@ -59,24 +46,20 @@ def _restore_sockets_per_test() -> Generator[None]:
     yield
 
 
-# ---------------------------------------------------------------------------
 # HA test infrastructure: point the config dir at the project root so that
 # homeassistant's integration loader finds custom_components/pylontech_mqtt.
 # This fixture only takes effect for tests that use the ``hass`` fixture.
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def hass_config_dir() -> str:
     """Return the project root as HA's config directory."""
     return str(_ROOT)
 
 
-# ---------------------------------------------------------------------------
 # Shared config-flow patch targets
 #
 # Every test that drives the config/options flow without a real MQTT broker
 # patches these same two boundaries. Defined once here so a future rename of
 # either target can't drift out of sync across test files.
-# ---------------------------------------------------------------------------
 PATCH_CONN = "custom_components.pylontech_mqtt.config_flow._test_mqtt_connection"
 PATCH_SETUP = "custom_components.pylontech_mqtt.coordinator.PylontechCoordinator.setup"
 
@@ -119,9 +102,7 @@ async def create_config_entry(hass, entry_data: dict):
     return entry, hass.data[DOMAIN][entry.entry_id]
 
 
-# ---------------------------------------------------------------------------
 # Stub server lifecycle
-# ---------------------------------------------------------------------------
 STUB_HOST = "127.0.0.1"
 STUB_BATTERIES = 2
 STUB_MODEL = "US5000"  # most capable model → most field coverage
@@ -274,9 +255,7 @@ def stub_server():
         stub.stop()
 
 
-# ---------------------------------------------------------------------------
 # Per-test TCP connection helpers
-# ---------------------------------------------------------------------------
 def _drain_prompt(sock: socket.socket) -> None:
     """Read and discard the initial 'pylon>' banner sent on new connections."""
     data = b""
@@ -346,9 +325,7 @@ def stub_conn(stub_server):
     s.close()
 
 
-# ---------------------------------------------------------------------------
 # Convenience: parsed objects ready for assertions
-# ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def pwr_system(_session_conn):
     from pylontech_parser import PylontechParser

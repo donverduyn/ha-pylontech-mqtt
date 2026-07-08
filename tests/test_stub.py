@@ -1,4 +1,3 @@
-# tests/test_stub.py
 """
 Full-coverage tests for pylon_stub.py — every command handler, admin-mode
 path, fault-injection flow, firmware variant, and multi-group topology.
@@ -26,9 +25,7 @@ from conftest import (
     start_stub,
 )
 
-# ---------------------------------------------------------------------------
 # Helpers: spin up extra stub instances for variant configurations
-# ---------------------------------------------------------------------------
 
 
 def _start_variant_stub(*extra_args: str) -> StubProcess:
@@ -45,9 +42,7 @@ def _start_variant_stub(*extra_args: str) -> StubProcess:
     )
 
 
-# ---------------------------------------------------------------------------
 # Module-scoped fixtures for variant stubs
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -92,9 +87,7 @@ def multi_grp_conn(multi_grp_stub):
     s.close()
 
 
-# ===========================================================================
 # 1. Additional simple commands not covered by test_parser.py
-# ===========================================================================
 
 
 class TestStubAdditionalCommands:
@@ -174,9 +167,7 @@ class TestStubAdditionalCommands:
         assert "Group 1" not in resp
 
 
-# ===========================================================================
 # 2. cmdquit — connection teardown
-# ===========================================================================
 
 
 class TestStubCmdquit:
@@ -221,9 +212,7 @@ class TestStubCmdquit:
         assert len(received) > 0
 
 
-# ===========================================================================
 # 3. pwr N — indexed (vertical key:value) format
-# ===========================================================================
 
 
 class TestStubPwrIndexed:
@@ -279,9 +268,7 @@ class TestStubPwrIndexed:
         assert "Pwr Protect ENA" in resp
 
 
-# ===========================================================================
 # 4. bat N — per-cell data
-# ===========================================================================
 
 
 class TestStubBatCommand:
@@ -328,9 +315,7 @@ class TestStubBatCommand:
         assert "mAH" in resp
 
 
-# ===========================================================================
 # 5. soh N — per-cell state-of-health
-# ===========================================================================
 
 
 class TestStubSohCommand:
@@ -374,9 +359,7 @@ class TestStubSohCommand:
         assert "Command completed successfully" in resp
 
 
-# ===========================================================================
 # 6. login / logout
-# ===========================================================================
 
 
 class TestStubLoginLogout:
@@ -421,20 +404,18 @@ class TestStubLoginLogout:
         assert "Admin mode required" in resp
 
 
-# ===========================================================================
 # 7. stub admin controls
-# ===========================================================================
 
 
 class TestStubAdminControls:
-    # --- guard ---
+    # guard
 
     def test_stub_rejected_without_admin(self, stub_conn):
         _raw_command(stub_conn, "logout")  # guarantee clean state
         resp = _raw_command(stub_conn, "stub soc 50")
         assert "Admin mode required" in resp
 
-    # --- usage string ---
+    # usage string
 
     def test_stub_no_args_returns_usage(self, stub_conn):
         _raw_command(stub_conn, "login 000000")
@@ -452,7 +433,7 @@ class TestStubAdminControls:
         finally:
             _raw_command(stub_conn, "logout")
 
-    # --- stub soc ---
+    # stub soc
 
     def test_stub_soc_sets_value(self, stub_conn):
         _raw_command(stub_conn, "login 000000")
@@ -491,7 +472,7 @@ class TestStubAdminControls:
         finally:
             _raw_command(stub_conn, "logout")
 
-    # --- stub current ---
+    # stub current
 
     def test_stub_current_fixes_value(self, stub_conn):
         _raw_command(stub_conn, "login 000000")
@@ -521,7 +502,7 @@ class TestStubAdminControls:
         finally:
             _raw_command(stub_conn, "logout")
 
-    # --- stub fault injection error paths ---
+    # stub fault injection error paths
 
     def test_stub_fault_non_integer_bat_rejected(self, stub_conn):
         _raw_command(stub_conn, "login 000000")
@@ -558,7 +539,7 @@ class TestStubAdminControls:
             _raw_command(stub_conn, "stub clear 1")
             _raw_command(stub_conn, "logout")
 
-    # --- stub clear ---
+    # stub clear
 
     def test_stub_clear_no_existing_fault_reports_none_active(self, stub_conn):
         _raw_command(stub_conn, "login 000000")
@@ -588,9 +569,7 @@ class TestStubAdminControls:
             _raw_command(stub_conn, "logout")
 
 
-# ===========================================================================
 # 8. Fault propagation — inject fault, verify across all relevant views, clear
-# ===========================================================================
 
 
 class TestStubFaultPropagation:
@@ -607,7 +586,7 @@ class TestStubFaultPropagation:
         _raw_command(conn, f"stub clear {bat_id}")
         _raw_command(conn, "logout")
 
-    # --- OV ---
+    # OV
 
     def test_ov_appears_in_pwr_table(self, stub_conn):
         self._inject(stub_conn, 1, "ov")
@@ -637,7 +616,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- UV ---
+    # UV
 
     def test_uv_appears_in_pwr_table(self, stub_conn):
         self._inject(stub_conn, 1, "uv")
@@ -660,7 +639,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- OT ---
+    # OT
 
     def test_ot_appears_in_pwr_table(self, stub_conn):
         self._inject(stub_conn, 1, "ot")
@@ -683,7 +662,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- UT ---
+    # UT
 
     def test_ut_appears_in_pwr_table(self, stub_conn):
         self._inject(stub_conn, 1, "ut")
@@ -706,7 +685,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- OC ---
+    # OC
 
     def test_oc_appears_in_pwr_table(self, stub_conn):
         self._inject(stub_conn, 1, "oc")
@@ -729,7 +708,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- Absent fault ---
+    # Absent fault
 
     def test_absent_fault_increases_absent_count_in_pwr(self, stub_conn):
         """Injecting 'absent' on a present battery must add an Absent row."""
@@ -780,7 +759,7 @@ class TestStubFaultPropagation:
         finally:
             self._clear(stub_conn, 1)
 
-    # --- Clearing a fault restores Normal ---
+    # Clearing a fault restores Normal
 
     def test_clear_fault_removes_ov_from_pwr(self, stub_conn):
         self._inject(stub_conn, 1, "ov")
@@ -795,9 +774,7 @@ class TestStubFaultPropagation:
         assert "Normal" in _raw_command(stub_conn, "pwrsys")
 
 
-# ===========================================================================
 # 9. re — remote command forwarding
-# ===========================================================================
 
 
 class TestStubRemoteForward:
@@ -823,9 +800,7 @@ class TestStubRemoteForward:
         assert "Usage" in resp
 
 
-# ===========================================================================
 # 10. New firmware layout (--firmware new)
-# ===========================================================================
 
 
 class TestStubNewFirmware:
@@ -877,9 +852,7 @@ class TestStubNewFirmware:
         assert "SOHStatus" in resp
 
 
-# ===========================================================================
 # 11. Multi-group topology (--groups 2)
-# ===========================================================================
 
 
 class TestStubMultiGroup:
@@ -941,9 +914,7 @@ class TestStubMultiGroup:
         assert "Voltage" in resp
 
 
-# ===========================================================================
 # 12. bat_id < 1 — lower-bound OOB paths not covered by the > max tests
-# ===========================================================================
 
 
 class TestStubBatIdBelowOne:
@@ -962,9 +933,7 @@ class TestStubBatIdBelowOne:
         assert "not found" in resp.lower()
 
 
-# ===========================================================================
 # 13. pwr with non-integer argument — ValueError catch → tabular fallback
-# ===========================================================================
 
 
 class TestStubPwrNonIntegerArg:
@@ -980,9 +949,7 @@ class TestStubPwrNonIntegerArg:
         assert "not found" not in resp.lower()
 
 
-# ===========================================================================
 # 14. stub sub-command with missing required argument → usage
-# ===========================================================================
 
 
 class TestStubMissingArgUsage:
@@ -1014,9 +981,7 @@ class TestStubMissingArgUsage:
             _raw_command(stub_conn, "logout")
 
 
-# ===========================================================================
 # 15. _base_state "Idle" and "Dischg" paths
-# ===========================================================================
 
 
 class TestStubBaseState:
@@ -1095,9 +1060,7 @@ class TestStubBaseState:
             _raw_command(stub_conn, "logout")
 
 
-# ===========================================================================
 # 16. pwrsys charge/discharge current taper at SOC extremes
-# ===========================================================================
 
 
 class TestStubPwrsysTaper:
@@ -1142,9 +1105,7 @@ class TestStubPwrsysTaper:
         )
 
 
-# ===========================================================================
 # 17. New-firmware SysAlarm.St column shows "Alarm" on injected fault
-# ===========================================================================
 
 
 class TestStubNewFirmwareFaultInjection:

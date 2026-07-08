@@ -29,9 +29,7 @@ from custom_components.pylontech_mqtt.sensor import (
     PylontechSystemSensor,
 )
 
-# ---------------------------------------------------------------------------
 # Shared test data
-# ---------------------------------------------------------------------------
 
 _CELL0 = {
     "cell_id": 0,
@@ -67,9 +65,7 @@ _PAYLOAD = {
     "batteries": [_BAT1],
 }
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -83,9 +79,7 @@ async def coord_with_data(coord: PylontechCoordinator) -> PylontechCoordinator:
     return coord
 
 
-# ---------------------------------------------------------------------------
 # Entity factory helpers — create sensors without going through HA's loader.
-# ---------------------------------------------------------------------------
 
 
 def _sys(coord: PylontechCoordinator, key: str) -> PylontechSystemSensor:
@@ -110,9 +104,7 @@ def _cell(
     return PylontechCellSensor(coord, "entry_id", bat_id, cell_id, desc)
 
 
-# ===========================================================================
 # PylontechSystemSensor.native_value
-# ===========================================================================
 
 
 class TestSystemSensorNativeValue:
@@ -140,9 +132,7 @@ class TestSystemSensorNativeValue:
         assert _sys(coord_with_data, "cycles").native_value is None
 
 
-# ===========================================================================
 # PylontechBatterySensor.native_value
-# ===========================================================================
 
 
 class TestBatterySensorNativeValue:
@@ -172,9 +162,7 @@ class TestBatterySensorNativeValue:
         assert _bat(coord_with_data, "voltage", bat_id=99).native_value is None
 
 
-# ===========================================================================
 # PylontechCellSensor.native_value
-# ===========================================================================
 
 
 class TestCellSensorNativeValue:
@@ -201,13 +189,11 @@ class TestCellSensorNativeValue:
         assert _cell(coord_with_data, "voltage", bat_id=99).native_value is None
 
 
-# ===========================================================================
 # device_info (entity base classes)
-# ===========================================================================
 
 
 class TestDeviceInfo:
-    # --- system-level device ---
+    # system-level device
 
     async def test_system_identifier(
         self, coord_with_data: PylontechCoordinator
@@ -241,7 +227,7 @@ class TestDeviceInfo:
         """System is the root device — no via_device link."""
         assert "via_device" not in _sys(coord_with_data, "voltage").device_info
 
-    # --- battery-module device ---
+    # battery-module device
 
     async def test_battery_identifier(
         self, coord_with_data: PylontechCoordinator
@@ -277,7 +263,7 @@ class TestDeviceInfo:
             "identifiers"
         )
 
-    # --- cell entity uses parent battery device ---
+    # cell entity uses parent battery device
 
     async def test_cell_uses_battery_identifiers(
         self, coord_with_data: PylontechCoordinator
@@ -293,10 +279,8 @@ class TestDeviceInfo:
         assert _cell(coord_with_data, "voltage").name == "Cell 0 Voltage"
 
 
-# ===========================================================================
 # Availability — a missing module/cell must report unavailable, not just
 # freeze on stale values (PylontechBatteryEntity/PylontechCellEntity.available)
-# ===========================================================================
 
 
 class TestAvailability:
@@ -356,14 +340,12 @@ class TestAvailability:
         assert _sys(coord_with_data, "voltage").available is True
 
 
-# ===========================================================================
 # Sensor metadata — unit_of_measurement, device_class, state_class
 # Protects the HA energy dashboard and device history from regressions.
-# ===========================================================================
 
 
 class TestSensorMetadata:
-    # --- System sensors ---
+    # System sensors
 
     def test_system_voltage_unit(self, coord: PylontechCoordinator) -> None:
         assert (
@@ -437,7 +419,7 @@ class TestSensorMetadata:
     ) -> None:
         assert _sys(coord, "energy_stored").state_class == SensorStateClass.MEASUREMENT
 
-    # --- Battery sensors ---
+    # Battery sensors
 
     def test_battery_voltage_unit(self, coord: PylontechCoordinator) -> None:
         assert (
@@ -477,7 +459,7 @@ class TestSensorMetadata:
     def test_battery_power_state_class(self, coord: PylontechCoordinator) -> None:
         assert _bat(coord, "power").state_class == SensorStateClass.MEASUREMENT
 
-    # --- Cell sensors ---
+    # Cell sensors
 
     def test_cell_voltage_unit(self, coord: PylontechCoordinator) -> None:
         assert (

@@ -1,4 +1,3 @@
-# tests/test_parser.py
 """
 Parser tests against the live TCP stub.
 
@@ -21,9 +20,7 @@ from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
 
-# ===========================================================================
 # parse_pwr — power table
-# ===========================================================================
 class TestParsePwr:
     def test_returns_system(self, pwr_system):
         assert isinstance(pwr_system, PylontechSystem)
@@ -71,7 +68,7 @@ class TestParsePwr:
                 f"(got {bat.power}, expected {expected})"
             )
 
-    # --- Extended pwr columns (Tlow/Thigh/Vlow/Vhigh) ---
+    # Extended pwr columns (Tlow/Thigh/Vlow/Vhigh)
 
     def test_cell_temp_low_present(self, pwr_system):
         for bat in pwr_system.batteries:
@@ -113,7 +110,7 @@ class TestParsePwr:
                 f"bat {bat.sys_id}: volt_high {bat.volt_high} outside 2.5-3.8 V"
             )
 
-    # --- Status string columns (Volt.St / Curr.St / Temp.St) ---
+    # Status string columns (Volt.St / Curr.St / Temp.St)
 
     def test_status_strings_are_normal(self, pwr_system):
         for bat in pwr_system.batteries:
@@ -121,14 +118,14 @@ class TestParsePwr:
             assert bat.curr_status == "Normal"
             assert bat.temp_status == "Normal"
 
-    # --- B.V.St / B.T.St (battery-level voltage/temperature state) ---
+    # B.V.St / B.T.St (battery-level voltage/temperature state)
 
     def test_batt_status_strings_are_normal(self, pwr_system):
         for bat in pwr_system.batteries:
             assert bat.batt_volt_status == "Normal"
             assert bat.batt_temp_status == "Normal"
 
-    # --- System-level aggregates ---
+    # System-level aggregates
 
     def test_system_voltage_is_average(self, pwr_system):
         avg = round(
@@ -153,7 +150,7 @@ class TestParsePwr:
         expected = round(sum(b.power for b in pwr_system.batteries), 1)
         assert pwr_system.power == expected
 
-    # --- Absent slot handling ---
+    # Absent slot handling
 
     def test_absent_rows_excluded(self, stub_conn):
         """Absent battery slots must never appear in the battery list."""
@@ -161,7 +158,7 @@ class TestParsePwr:
         system = PylontechParser.parse_pwr(raw)
         assert all(b.status != "Absent" for b in system.batteries)
 
-    # --- Header-based column detection (robustness) ---
+    # Header-based column detection (robustness)
 
     def test_reparse_stripped_header(self, stub_conn):
         """Parser must fall back to defaults when the header line is absent."""
@@ -176,9 +173,7 @@ class TestParsePwr:
         assert len(system.batteries) == STUB_BATTERIES
 
 
-# ===========================================================================
 # parse_pwr_indexed — vertical 'pwr N' block (fallback battery discovery)
-# ===========================================================================
 class TestParsePwrIndexed:
     def test_valid_battery_returns_battery(self, _session_conn):
         raw = _raw_command(_session_conn, "pwr 1")
@@ -236,9 +231,7 @@ class TestParsePwrIndexed:
         assert PylontechParser.parse_pwr_indexed(raw, 99) is None
 
 
-# ===========================================================================
 # parse_number — decimal/hex event value helper
-# ===========================================================================
 class TestParseNumber:
     def test_parses_decimal(self):
         assert PylontechParser.parse_number("42") == 42
@@ -259,9 +252,7 @@ class TestParseNumber:
         assert PylontechParser.parse_number("nope") is None
 
 
-# ===========================================================================
 # parse_info — device information
-# ===========================================================================
 class TestParseInfo:
     def test_manufacturer(self, info_system):
         assert info_system.manufacturer == "Pylon"
@@ -314,9 +305,7 @@ class TestParseInfo:
         assert info_system.max_dischg_curr == pytest.approx(dsg, rel=1e-3)
 
 
-# ===========================================================================
 # parse_stat — statistics and fault counters
-# ===========================================================================
 class TestParseStat:
     def test_discharge_cnt(self, stat_system):
         assert stat_system.discharge_cnt is not None
@@ -353,9 +342,7 @@ class TestParseStat:
         assert stat_system.life_alarm_times == 0
 
 
-# ===========================================================================
 # parse_time — BMS clock
-# ===========================================================================
 class TestParseTime:
     def test_bms_time_present(self, time_system):
         assert time_system.bms_time is not None
@@ -375,10 +362,8 @@ class TestParseTime:
         assert delta < 60, f"bms_time is {delta:.0f}s away from now"
 
 
-# ===========================================================================
 # parse_pwr  ×  parse_stat  ×  parse_info in combination
 # (simulates what the coordinator does on each full poll cycle)
-# ===========================================================================
 class TestFullPollCycle:
     @pytest.fixture(scope="class")
     @classmethod
@@ -450,9 +435,7 @@ class TestFullPollCycle:
             )
 
 
-# ===========================================================================
 # Stub protocol parity — raw response format checks
-# ===========================================================================
 class TestStubProtocolParity:
     """Verify that the stub responses contain the structural markers that the
     coordinator and parsers rely on, without going through the parser layer."""
@@ -553,18 +536,15 @@ class TestStubProtocolParity:
         assert "pylon>" in resp
 
 
-# ===========================================================================
 # Edge-case / error-path tests  (pure unit — no stub required)
-# ===========================================================================
 # These cover the defensive branches that the stub cannot trigger:
 #   • _mV() → None  (column absent or "-" placeholder)
 #   • _st() → None  (column out-of-bounds)
 #   • except block in parse_pwr data loop  (corrupt row)
 #   • except: pass blocks in parse_info   (non-numeric values)
 #   • generate_time_command               (never called via stub)
-# ===========================================================================
 class TestParsePwrEdgeCases:
-    # --- _mV returns None for "-" placeholder in extended columns ---
+    # _mV returns None for "-" placeholder in extended columns
 
     def test_mv_returns_none_for_dash_placeholder(self):
         """A present battery row where Tlow/Thigh/Vlow/Vhigh are "-" must still
@@ -589,7 +569,7 @@ class TestParsePwrEdgeCases:
         assert bat.volt_low is None, "Vlow '-' should yield None"
         assert bat.volt_high is None, "Vhigh '-' should yield None"
 
-    # --- _mV returns None when row is too short (column index out of bounds) ---
+    # _mV returns None when row is too short (column index out of bounds)
 
     def test_mv_returns_none_for_short_row(self):
         """A row that ends before the extended columns must leave them as None."""
@@ -610,7 +590,7 @@ class TestParsePwrEdgeCases:
         assert bat.batt_volt_status is None
         assert bat.batt_temp_status is None
 
-    # --- _st returns None when row is too short ---
+    # _st returns None when row is too short
 
     def test_st_returns_none_for_short_row(self):
         """Volt.St/Curr.St/Temp.St absent → None, mandatory fields still parsed."""
@@ -628,7 +608,7 @@ class TestParsePwrEdgeCases:
         # (our guard requires > 10 tokens)
         assert len(system.batteries) == 0
 
-    # --- except (ValueError, IndexError) block ---
+    # except (ValueError, IndexError) block
 
     def test_corrupt_row_is_skipped_with_error_log(self, caplog):
         """A row whose voltage field is non-numeric must be skipped, not crash."""
@@ -658,7 +638,7 @@ class TestParsePwrEdgeCases:
         # Error was logged
         assert any("Error parsing pwr line" in r.message for r in caplog.records)
 
-    # --- parse_pwr with no batteries at all ---
+    # parse_pwr with no batteries at all
 
     def test_empty_pwr_response(self):
         """All rows Absent → empty battery list, system defaults to zeros."""
@@ -675,7 +655,7 @@ class TestParsePwrEdgeCases:
         assert system.voltage == 0
         assert system.current == 0
 
-    # --- parse_pwr with existing system object ---
+    # parse_pwr with existing system object
 
     def test_parse_pwr_updates_existing_system(self):
         """Passing an existing PylontechSystem must update its batteries in-place."""
@@ -708,7 +688,7 @@ class TestParsePwrEdgeCases:
 
 
 class TestParseInfoEdgeCases:
-    # --- except: pass for non-numeric cell_count ---
+    # except: pass for non-numeric cell_count
 
     def test_non_numeric_cell_count_ignored(self):
         raw = (
@@ -722,7 +702,7 @@ class TestParseInfoEdgeCases:
         assert system.cell_count is None, "Non-numeric cell_count must remain None"
         assert system.manufacturer == "Pylon"
 
-    # --- except: pass for non-numeric max_dischg_curr ---
+    # except: pass for non-numeric max_dischg_curr
 
     def test_non_numeric_max_dischg_curr_ignored(self):
         raw = (
@@ -736,7 +716,7 @@ class TestParseInfoEdgeCases:
         assert system.max_dischg_curr is None
         assert system.max_charge_curr is None
 
-    # --- empty info response ---
+    # empty info response
 
     def test_empty_info_response(self):
         system = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -744,7 +724,7 @@ class TestParseInfoEdgeCases:
         assert system.manufacturer is None
         assert system.model is None
 
-    # --- info without colon lines (no key-value content) ---
+    # info without colon lines (no key-value content)
 
     def test_info_no_colon_lines(self):
         raw = "pylon>\r\nCommand completed successfully\r\n"
@@ -754,7 +734,7 @@ class TestParseInfoEdgeCases:
 
 
 class TestParseTimeEdgeCases:
-    # --- no datetime pattern in response → bms_time stays None ---
+    # no datetime pattern in response → bms_time stays None
 
     def test_no_match_leaves_bms_time_none(self):
         raw = "time\r\n@\r\nCommand completed successfully\r\npylon>"
@@ -762,7 +742,7 @@ class TestParseTimeEdgeCases:
         PylontechParser.parse_time(raw, system)
         assert system.bms_time is None
 
-    # --- generate_time_command produces correct format ---
+    # generate_time_command produces correct format
 
     def test_generate_time_command_format(self):
         dt = datetime(2025, 12, 21, 13, 5, 9)
@@ -776,7 +756,7 @@ class TestParseTimeEdgeCases:
 
 
 class TestParseStatEdgeCases:
-    # --- missing counters stay None ---
+    # missing counters stay None
 
     def test_missing_counter_stays_none(self):
         """Stat text that omits some counters → those fields must be None."""
@@ -788,7 +768,7 @@ class TestParseStatEdgeCases:
         assert system.sc_times is None
         assert system.pwr_coulomb is None
 
-    # --- empty stat response ---
+    # empty stat response
 
     def test_empty_stat_response(self):
         system = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
@@ -812,9 +792,7 @@ class TestParseStatEdgeCases:
         assert bat.cells == []
 
 
-# ===========================================================================
 # parse_bat — per-cell data
-# ===========================================================================
 class TestParseBat:
     def test_cell_count_matches_model(self, bat_battery):
         assert len(bat_battery.cells) == STUB_CELLS

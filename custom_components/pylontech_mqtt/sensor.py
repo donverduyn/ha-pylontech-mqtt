@@ -26,14 +26,12 @@ from .const import DOMAIN
 from .coordinator import PylontechCoordinator
 from .entity import PylontechBatteryEntity, PylontechCellEntity, PylontechSystemEntity
 
-# ---------------------------------------------------------------------------
 # Descriptor tables — one row per sensor, no entity subclass per sensor needed.
 # `key`             — attribute name on PylontechSystem / PylontechBattery.
 # `translation_key` — maps to entity.sensor.<key>.name in the translations file.
-# ---------------------------------------------------------------------------
 
 SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
-    # --- Live measurements ---
+    # Live measurements
     SensorEntityDescription(
         key="voltage",
         translation_key="sys_volt",
@@ -62,7 +60,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # --- Energy ---
+    # Energy
     # TOTAL_INCREASING (not TOTAL): the sidecar's energy_in/energy_out reset
     # to 0 on every container restart, and no last_reset attribute is set.
     # TOTAL_INCREASING auto-detects a value drop as the start of a new meter
@@ -90,7 +88,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY_STORAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # --- Health ---
+    # Health
     SensorEntityDescription(
         key="soh",
         translation_key="sys_soh",
@@ -102,7 +100,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
         translation_key="sys_cycles",
         state_class=SensorStateClass.TOTAL_INCREASING,
     ),
-    # --- Usage counters ---
+    # Usage counters
     SensorEntityDescription(
         key="charge_times",
         translation_key="sys_charge_times",
@@ -118,7 +116,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
         translation_key="sys_idle_times",
         state_class=SensorStateClass.TOTAL_INCREASING,
     ),
-    # --- Device info (diagnostic) ---
+    # Device info (diagnostic)
     SensorEntityDescription(
         key="cell_count",
         translation_key="sys_cell_count",
@@ -185,7 +183,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # --- Fault / event counters (diagnostic) ---
+    # Fault / event counters (diagnostic)
     SensorEntityDescription(
         key="sc_times",
         translation_key="sys_sc_times",
@@ -267,7 +265,7 @@ SYSTEM_SENSORS: tuple[SensorEntityDescription, ...] = (
 )
 
 BATTERY_SENSORS: tuple[SensorEntityDescription, ...] = (
-    # --- Live measurements ---
+    # Live measurements
     SensorEntityDescription(
         key="voltage",
         translation_key="bat_volt",
@@ -314,7 +312,7 @@ BATTERY_SENSORS: tuple[SensorEntityDescription, ...] = (
         key="status",
         translation_key="bat_status",
     ),
-    # --- Cell extremes (diagnostic) ---
+    # Cell extremes (diagnostic)
     SensorEntityDescription(
         key="temp_low",
         translation_key="bat_temp_low",
@@ -347,7 +345,7 @@ BATTERY_SENSORS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # --- Protection status strings (diagnostic) ---
+    # Protection status strings (diagnostic)
     SensorEntityDescription(
         key="volt_status",
         translation_key="bat_volt_status",
@@ -398,11 +396,9 @@ BATTERY_SENSORS: tuple[SensorEntityDescription, ...] = (
     ),
 )
 
-# ---------------------------------------------------------------------------
 # Cell-level sensors — one row per measurement, names set dynamically to
 # include the cell index (e.g. "Cell 0 Voltage").
 # No translation_key; _attr_name is set per-instance in PylontechCellSensor.
-# ---------------------------------------------------------------------------
 
 CELL_SENSORS: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -459,9 +455,7 @@ CELL_SENSORS: tuple[SensorEntityDescription, ...] = (
     ),
 )
 
-# ---------------------------------------------------------------------------
 # Platform setup
-# ---------------------------------------------------------------------------
 
 
 async def async_setup_entry(
@@ -523,9 +517,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
 
-# ---------------------------------------------------------------------------
 # Entity classes — one generic class per device tier
-# ---------------------------------------------------------------------------
 
 
 class PylontechSystemSensor(PylontechSystemEntity, SensorEntity):

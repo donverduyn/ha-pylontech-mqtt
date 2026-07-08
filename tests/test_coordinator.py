@@ -27,9 +27,7 @@ from custom_components.pylontech_mqtt.coordinator import PylontechCoordinator
 _FAKE_CLIENT = cast(mqtt.Client, None)
 _FAKE_NOW = cast(datetime, None)
 
-# ---------------------------------------------------------------------------
 # Shared test data
-# ---------------------------------------------------------------------------
 
 _BAT1: dict = {
     "sys_id": 1,
@@ -57,9 +55,7 @@ _PAYLOAD: dict = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -68,9 +64,7 @@ async def coordinator(hass: HomeAssistant) -> PylontechCoordinator:
     return make_coordinator(hass)
 
 
-# ---------------------------------------------------------------------------
 # _deserialize
-# ---------------------------------------------------------------------------
 
 
 class TestTlsSetup:
@@ -179,9 +173,7 @@ class TestDeserialize:
         assert s.get("sc_times") is None
 
 
-# ---------------------------------------------------------------------------
 # _compute_energy_stored
-# ---------------------------------------------------------------------------
 
 
 class TestComputeEnergyStored:
@@ -249,9 +241,7 @@ class TestComputeEnergyStored:
         assert s["energy_stored"] == pytest.approx(2.4 * 0.80, rel=1e-3)
 
 
-# ---------------------------------------------------------------------------
 # set_battery_capacity
-# ---------------------------------------------------------------------------
 
 
 class TestSetBatteryCapacity:
@@ -293,9 +283,7 @@ class TestSetBatteryCapacity:
         )
 
 
-# ---------------------------------------------------------------------------
 # is_battery_present / is_cell_present
-# ---------------------------------------------------------------------------
 
 
 class TestBatteryAndCellPresence:
@@ -363,9 +351,7 @@ class TestBatteryAndCellPresence:
         assert coordinator.is_cell_present(1, 0) is True
 
 
-# ---------------------------------------------------------------------------
 # Auto-capacity detection via _process_payload
-# ---------------------------------------------------------------------------
 
 
 class TestAutoCapacity:
@@ -422,9 +408,7 @@ class TestAutoCapacity:
         assert coordinator.data["energy_stored"] > 0
 
 
-# ---------------------------------------------------------------------------
 # Availability lifecycle (_mark_available / _mark_unavailable / _on_message)
-# ---------------------------------------------------------------------------
 
 
 def _msg(topic: str, payload: str | bytes) -> mqtt.MQTTMessage:
@@ -465,10 +449,8 @@ class TestAvailability:
         assert coordinator.last_update_success is False
 
 
-# ---------------------------------------------------------------------------
 # Staleness watchdog (_check_staleness) — catches a sidecar poll loop that
 # hangs while its MQTT connection stays up, so no LWT/disconnect ever fires.
-# ---------------------------------------------------------------------------
 
 
 class TestStalenessWatchdog:
@@ -674,9 +656,7 @@ class TestStalenessWatchdog:
         assert coordinator.last_update_success is True
 
 
-# ---------------------------------------------------------------------------
 # _on_message error handling — malformed payloads
-# ---------------------------------------------------------------------------
 
 
 class TestOnMessageErrors:
@@ -725,10 +705,8 @@ class TestOnMessageErrors:
         assert coordinator.data is None
 
 
-# ---------------------------------------------------------------------------
 # _process_payload schema validation — a partial/incompatible publisher must
 # never be allowed to overwrite good live data with zero-filled readings.
-# ---------------------------------------------------------------------------
 
 
 class TestPayloadSchemaValidation:

@@ -195,9 +195,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Start unavailable until the first MQTT message arrives.
         self.last_update_success = False
 
-    # ------------------------------------------------------------------
     # Setup / teardown
-    # ------------------------------------------------------------------
 
     def setup(self) -> None:
         """Connect to the MQTT broker and subscribe to topics.
@@ -255,9 +253,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("Error during MQTT client shutdown: %s", err)
             self._client = None
 
-    # ------------------------------------------------------------------
     # MQTT callbacks  (execute in paho's background thread)
-    # ------------------------------------------------------------------
 
     def _on_connect(
         self,
@@ -373,9 +369,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             _LOGGER.error("Error processing MQTT payload: %s", err, exc_info=True)
 
-    # ------------------------------------------------------------------
     # DataUpdateCoordinator override
-    # ------------------------------------------------------------------
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Re-compute derived values from last received data.
@@ -392,9 +386,7 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._compute_energy_stored(self.data)
         return self.data
 
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
 
     def _mark_available(self) -> None:
         self.last_update_success = True
@@ -462,7 +454,6 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Update the configured capacity for a specific battery module."""
         self.battery_capacities[bat_id] = capacity
 
-    # ------------------------------------------------------------------
     # Per-module / per-cell presence
     #
     # The sidecar's "pwr" parser drops "Absent" module rows from the
@@ -476,7 +467,6 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # entity.py). Instead, PylontechBatteryEntity/PylontechCellEntity use
     # these to report themselves unavailable while their module is absent,
     # rather than silently freezing on stale last-known values.
-    # ------------------------------------------------------------------
 
     def is_battery_present(self, bat_id: int) -> bool:
         """Return whether *bat_id* appears in the most recent payload."""

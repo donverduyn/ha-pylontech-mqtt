@@ -107,9 +107,7 @@ class _State(TypedDict):
     )  # mA; when set the updater skips current; clear with 'stub current auto'
 
 
-# ---------------------------------------------------------------------------
 # Model catalogue
-# ---------------------------------------------------------------------------
 MODELS: dict[str, _ModelSpec] = {
     "US2000": {
         "device_name": "US2KBPL",
@@ -137,9 +135,7 @@ MODELS: dict[str, _ModelSpec] = {
     },
 }
 
-# ---------------------------------------------------------------------------
 # Runtime configuration  (filled by main() before server starts)
-# ---------------------------------------------------------------------------
 _cfg: _Config = {
     "model": "US2000",
     "batteries": 2,
@@ -149,9 +145,7 @@ _cfg: _Config = {
     "tick_interval": 30,
 }
 
-# ---------------------------------------------------------------------------
 # Shared BMS state
-# ---------------------------------------------------------------------------
 _state: _State = {
     "soc": 85,
     "charging": True,
@@ -189,9 +183,7 @@ _faults: dict[
 ] = {}  # bat_id → fault type; populated by 'stub fault', cleared by 'stub clear'
 
 
-# ---------------------------------------------------------------------------
 # Background state updater
-# ---------------------------------------------------------------------------
 def _state_updater() -> None:
     while True:
         time.sleep(_cfg["tick_interval"])
@@ -235,9 +227,7 @@ def _state_updater() -> None:
                 s["dsg_cap"] += amp_secs
 
 
-# ---------------------------------------------------------------------------
 # Response envelope
-# ---------------------------------------------------------------------------
 _PROMPT = b"\r\npylon>"
 
 
@@ -255,9 +245,7 @@ def _unknown(cmd: str) -> bytes:
     return f"{cmd}\r\nUnknown command '{base}'\r\n\r$$\r\n\rpylon>".encode("ascii")
 
 
-# ---------------------------------------------------------------------------
 # pwr N (indexed) — vertical per-battery key:value block
-# ---------------------------------------------------------------------------
 # This is a completely different response shape from the tabular `pwr` output.
 # Real firmware returns this block when an index argument is given:
 #
@@ -395,9 +383,7 @@ def _resp_pwr_indexed(cmd: str, bat_id: int) -> bytes:
     return _wrap(cmd, body, kv=True)
 
 
-# ---------------------------------------------------------------------------
 # pwr
-# ---------------------------------------------------------------------------
 def _base_state(current_ma: int) -> str:
     if abs(current_ma) < 500:
         return "Idle"
@@ -536,9 +522,7 @@ def _resp_pwr(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # info
-# ---------------------------------------------------------------------------
 def _resp_info(cmd: str) -> bytes:
     m = MODELS[_cfg["model"]]
     body = (
@@ -563,9 +547,7 @@ def _resp_info(cmd: str) -> bytes:
     return _wrap(cmd, body, kv=True)
 
 
-# ---------------------------------------------------------------------------
 # stat
-# ---------------------------------------------------------------------------
 def _resp_stat(cmd: str) -> bytes:
     with _state_lock:
         s = _state.copy()
@@ -625,9 +607,7 @@ def _resp_stat(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # time
-# ---------------------------------------------------------------------------
 def _resp_time(cmd: str) -> bytes:
     parts = cmd.split()
     if len(parts) > 1:
@@ -639,9 +619,7 @@ def _resp_time(cmd: str) -> bytes:
     return _wrap(cmd, f"Ds3231 {now}", kv=True)
 
 
-# ---------------------------------------------------------------------------
 # bat [N]  — per-cell data with realistic variation
-# ---------------------------------------------------------------------------
 def _resp_bat(cmd: str) -> bytes:
     with _state_lock:
         s = _state.copy()
@@ -706,9 +684,7 @@ def _resp_bat(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # soh [N]  — per-cell SOH with realistic aging
-# ---------------------------------------------------------------------------
 def _resp_soh(cmd: str) -> bytes:
     with _state_lock:
         volt = _state["volt_low"]
@@ -748,9 +724,7 @@ def _resp_soh(cmd: str) -> bytes:
     return _wrap(cmd, "\r\r\n".join(rows))
 
 
-# ---------------------------------------------------------------------------
 # help
-# ---------------------------------------------------------------------------
 # Command set confirmed from real hardware dumps.  config / ctrl / prot /
 # pwrsys / re are NOT in any verified help listing; they are kept functional
 # as possible undocumented / admin-mode commands but omitted from help so
@@ -797,9 +771,7 @@ def _resp_help(cmd: str) -> bytes:
     return _wrap(cmd, _HELP_TEXT)
 
 
-# ---------------------------------------------------------------------------
 # login / logout
-# ---------------------------------------------------------------------------
 def _resp_login(cmd: str) -> bytes:
     global _admin_mode
     parts = cmd.split()
@@ -816,9 +788,7 @@ def _resp_logout(cmd: str) -> bytes:
     return _wrap(cmd, "Logout successfully", kv=True)
 
 
-# ---------------------------------------------------------------------------
 # log
-# ---------------------------------------------------------------------------
 def _resp_log(cmd: str) -> bytes:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     body = (
@@ -832,9 +802,7 @@ def _resp_log(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # data / datalist  — abbreviated history stubs
-# ---------------------------------------------------------------------------
 def _resp_data(cmd: str) -> bytes:
     body = "Data Items : 0\r\r\nNo history data available"
     return _wrap(cmd, body)
@@ -845,16 +813,12 @@ def _resp_datalist(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # disp  — single pwr snapshot (streaming not emulated)
-# ---------------------------------------------------------------------------
 def _resp_disp(cmd: str) -> bytes:
     return _resp_pwr("pwr")
 
 
-# ---------------------------------------------------------------------------
 # prot  — protection flags
-# ---------------------------------------------------------------------------
 def _resp_prot(cmd: str) -> bytes:
     body = (
         "Protection flags:\r\r\n"
@@ -866,9 +830,7 @@ def _resp_prot(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # pwrsys  — system power summary (LV-HUB)
-# ---------------------------------------------------------------------------
 def _resp_pwrsys(cmd: str) -> bytes:
     with _state_lock:
         s = _state.copy()
@@ -953,9 +915,7 @@ def _resp_pwrsys(cmd: str) -> bytes:
     return _wrap(cmd, body)
 
 
-# ---------------------------------------------------------------------------
 # stub  — runtime state injection (admin mode only)
-# ---------------------------------------------------------------------------
 def _resp_stub(cmd: str) -> bytes:
     """Admin-mode command for runtime state injection.
 
@@ -1035,9 +995,7 @@ def _resp_stub(cmd: str) -> bytes:
     )
 
 
-# ---------------------------------------------------------------------------
 # cmdquit  — close the console session
-# ---------------------------------------------------------------------------
 class _ClientQuit(Exception):
     """Raised by _resp_cmdquit; caught in _BmsHandler.handle to close session."""
 
@@ -1046,9 +1004,7 @@ def _resp_cmdquit(cmd: str) -> bytes:  # return type is nominal; always raises
     raise _ClientQuit()
 
 
-# ---------------------------------------------------------------------------
 # shut / trst / updata  — stubs
-# ---------------------------------------------------------------------------
 def _resp_shut(cmd: str) -> bytes:
     return _wrap(cmd, "System will shut down", kv=True)
 
@@ -1061,9 +1017,7 @@ def _resp_updata(cmd: str) -> bytes:
     return _wrap(cmd, "No update available", kv=True)
 
 
-# ---------------------------------------------------------------------------
 # re <addr> <cmd>  — remote command forwarding
-# ---------------------------------------------------------------------------
 def _resp_re(cmd: str) -> bytes:
     """Forward a command to a remote battery address."""
     parts = cmd.split(None, 2)
@@ -1076,9 +1030,7 @@ def _resp_re(cmd: str) -> bytes:
     return fwd_response
 
 
-# ---------------------------------------------------------------------------
 # Dispatch table
-# ---------------------------------------------------------------------------
 def _dispatch(raw_line: str) -> bytes:
     cmd = raw_line.strip()
     tokens = cmd.split()
@@ -1133,9 +1085,7 @@ def _dispatch(raw_line: str) -> bytes:
     return _unknown(cmd)
 
 
-# ---------------------------------------------------------------------------
 # TCP server
-# ---------------------------------------------------------------------------
 class _BmsHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         addr = f"{self.client_address[0]}:{self.client_address[1]}"
@@ -1163,9 +1113,7 @@ class _StubServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Pylontech BMS RS232 TCP Stub Server",

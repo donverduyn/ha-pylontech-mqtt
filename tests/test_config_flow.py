@@ -38,9 +38,7 @@ def _enable_custom_integrations(enable_custom_integrations) -> None:
     """Enable custom integration discovery for every test in this file."""
 
 
-# ---------------------------------------------------------------------------
 # Initial config flow (user step)
-# ---------------------------------------------------------------------------
 
 
 async def test_form_shown_on_user_step(hass: HomeAssistant) -> None:
@@ -212,7 +210,6 @@ async def test_timeout_treated_as_cannot_connect(hass: HomeAssistant) -> None:
     assert result["errors"]["base"] == "cannot_connect"
 
 
-# ---------------------------------------------------------------------------
 # Reconfigure flow
 #
 # Updates entry.data directly (via async_update_reload_and_abort) instead of
@@ -220,7 +217,6 @@ async def test_timeout_treated_as_cannot_connect(hass: HomeAssistant) -> None:
 # A successful reconfigure returns ABORT (reason="reconfigure_successful"),
 # not CREATE_ENTRY, since it updates the existing entry rather than creating
 # a new one.
-# ---------------------------------------------------------------------------
 
 
 async def _start_reconfigure(hass: HomeAssistant, entry_id: str):
@@ -357,9 +353,7 @@ async def test_reconfigure_rejects_duplicate_effective_settings(
     assert result["errors"]["base"] == "already_configured"
 
 
-# ---------------------------------------------------------------------------
 # _test_mqtt_connection unit tests
-# ---------------------------------------------------------------------------
 
 
 def _reason_code(name: str) -> ReasonCode:

@@ -13,9 +13,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.pylontech_mqtt.const import DOMAIN
 from custom_components.pylontech_mqtt.entity import stack_id_from_broker
 
-# ---------------------------------------------------------------------------
 # Shared test data
-# ---------------------------------------------------------------------------
 
 _ENTRY_DATA: dict[str, Any] = {
     "mqtt_host": "localhost",
@@ -65,9 +63,7 @@ _PAYLOAD: dict[str, Any] = {
     ],
 }
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -80,9 +76,7 @@ async def _create_entry(hass: HomeAssistant):
     return await create_config_entry(hass, _ENTRY_DATA)
 
 
-# ---------------------------------------------------------------------------
 # Tests
-# ---------------------------------------------------------------------------
 
 
 class TestIntegration:

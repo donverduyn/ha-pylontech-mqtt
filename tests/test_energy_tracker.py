@@ -183,9 +183,7 @@ class TestEnergyTrackerInvalidate:
         assert tracker.energy_out == 0.0
 
 
-# ===========================================================================
 # Persistence — state_file save / load
-# ===========================================================================
 
 
 class TestEnergyTrackerPersistence:

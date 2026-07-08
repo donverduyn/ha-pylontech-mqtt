@@ -23,9 +23,7 @@ from custom_components.pylontech_mqtt.coordinator import PylontechCoordinator
 from custom_components.pylontech_mqtt.entity import stack_id_from_broker
 from custom_components.pylontech_mqtt.number import PylontechBatteryCapacityNumber
 
-# ---------------------------------------------------------------------------
 # Shared test data
-# ---------------------------------------------------------------------------
 
 _BAT1: dict = {
     "sys_id": 1,
@@ -66,9 +64,7 @@ _STACK_ID = stack_id_from_broker(
     _ENTRY_DATA["mqtt_host"], _ENTRY_DATA["mqtt_port"], _ENTRY_DATA["mqtt_topic"]
 )
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -84,9 +80,7 @@ def _make_number(
     return PylontechBatteryCapacityNumber(coord, entry_prefix, bat_id)
 
 
-# ===========================================================================
 # Entity attributes — guaranteed contract for the HA dashboard
-# ===========================================================================
 
 
 class TestNumberEntityAttributes:
@@ -145,9 +139,7 @@ class TestNumberEntityAttributes:
         assert _make_number(coordinator, bat_id=2).available is False
 
 
-# ===========================================================================
 # async_set_native_value — coordinator side-effects
-# ===========================================================================
 
 
 class TestSetNativeValue:
@@ -215,9 +207,7 @@ class TestSetNativeValue:
         )
 
 
-# ===========================================================================
 # Dynamic entity creation and HA state (integration-level)
-# ===========================================================================
 
 
 async def _create_entry(hass: HomeAssistant):
