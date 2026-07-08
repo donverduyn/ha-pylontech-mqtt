@@ -79,21 +79,26 @@ jobs:
     runs-on: "ubuntu-latest"
     name: HACS Action
     needs: [detect-release]
-    # always() unconditionally, then step-level `if:`s below decide what
-    # actually happens — this job is HACS Action, branch protection's
-    # actual required context, and it needs to be dispatched in every
-    # case (including a confirmed release, to hit its own bail step, and
-    # detect-release failing outright, to still fail closed to running
-    # the real steps) rather than relying on job-level `if:` filtering,
-    # which would only ever produce run-or-skip. A job-level `if:` here
-    # (even one that logically evaluates true) doesn't override GitHub's
-    # implicit "skip if needs failed" default unless it itself calls
-    # always()/success()/failure()/cancelled() — so without this, a
-    # detect-release failure (its own bail step or an unrelated flake)
-    # would silently skip this whole job before the step-level checks
-    # below ever ran, which is exactly the "silently skip instead of
-    # bailing loudly" bug this workflow exists to avoid.
-    if: always()
+    # !cancelled() unconditionally (not always() — see tests.yaml's
+    # pytest job for why: always() would keep this job racing to
+    # completion even when detect-release was itself cancelled by a
+    # second triggering event superseding this whole run, burning real
+    # CI time on a result that's about to be discarded anyway), then
+    # step-level `if:`s below decide what actually happens — this job is
+    # HACS Action, branch protection's actual required context, and it
+    # needs to be dispatched in every case (including a confirmed
+    # release, to hit its own bail step, and detect-release genuinely
+    # failing, to still fail closed to running the real steps) rather
+    # than relying on job-level `if:` filtering, which would only ever
+    # produce run-or-skip. A job-level `if:` here (even one that
+    # logically evaluates true) doesn't override GitHub's implicit "skip
+    # if needs failed" default unless it itself calls always()/success()/
+    # failure()/cancelled() — so without this, a detect-release failure
+    # (its own bail step or an unrelated flake) would silently skip this
+    # whole job before the step-level checks below ever ran, which is
+    # exactly the "silently skip instead of bailing loudly" bug this
+    # workflow exists to avoid.
+    if: "!cancelled()"
     steps:
       - name: Refuse skip-ci on a release PR
         # Duplicates detect-release's identical step (which only gives an
