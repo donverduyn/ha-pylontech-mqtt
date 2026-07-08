@@ -4,15 +4,21 @@ on:
   # No push:master trigger: master commits are already covered by the
   # pull_request run on the PR that merged them (required by branch
   # protection).
-  # types adds labeled/unlabeled to the opened/synchronize/reopened default.
-  # detect-release below looks up the skip-ci label live (see its comment)
-  # rather than trusting github.event.pull_request.labels, which mostly
-  # avoids needing a fresh triggering event at all — but a label applied
-  # to a PR whose most recent run already finished (and so isn't about to
-  # re-check anything live) still needs *some* new event to produce an
-  # up-to-date run, which is what this covers.
+  # Deliberately NOT adding labeled/unlabeled here (tried once, reverted):
+  # `gh pr create --label` fires opened and labeled as two separate events
+  # for the same commit, since GitHub has no atomic "create pre-labeled"
+  # mutation — with both types listed, that one `gh` call doubled every job
+  # below. detect-release's live `gh pr view` lookup (see its comment) is
+  # what makes dropping labeled/unlabeled safe: a label attached moments
+  # after opened/synchronize/reopened fires is still visible to *this* run
+  # once its live-check step executes a few seconds in, so the common case
+  # (labeling at/near creation) keeps working with only one run. The
+  # one capability this trades away: relabeling a PR *after* its most
+  # recent run already finished no longer alone produces a fresh result —
+  # closing/reopening the PR (still in types) or pushing an empty commit
+  # does.
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -22,23 +28,11 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # The event-kind suffix keeps a labeled/unlabeled-triggered run from
-  # cancelling (or being cancelled by) an opened/synchronize/reopened-
-  # triggered run for the same commit, and vice versa — cancel-in-progress
-  # still cancels a *stale* run of the same kind (e.g. a new push
-  # superseding the previous push's run) exactly as before. Without this
-  # split, applying skip-ci while a real run is already in flight for this
-  # exact commit would cancel it mid-flight; since check-runs are scoped
-  # to a commit SHA, a job cancelled that way still posts a CANCELLED
-  # conclusion under its required-status-check name, which coexists
-  # alongside the later run's SKIPPED one and blocks merge — GitHub does
-  # not treat the more recent conclusion as superseding the cancelled one
-  # for branch protection purposes. Letting both runs finish independently
-  # avoids ever producing that CANCELLED entry at all: skip-ci becomes a
-  # no-op once real checks are already running for this commit (the PR
-  # only becomes mergeable once that real run's actual result is in,
-  # label or no label), which is honest behavior, not a bug.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'push' }}
+  # cancel-in-progress cancels a *stale* run for this PR (e.g. a new push
+  # superseding the previous push's run) — safe now that labeled/unlabeled
+  # can't trigger this workflow at all, so there's no longer a label-kind
+  # run that a cancellation could clash with (see the "on" comment above).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Every real job below (pytest/lint/docker-build/meta-lint/e2e) is gated
@@ -91,18 +85,15 @@ jobs:
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Look up the skip-ci label live
-        # github.event.pull_request.labels is a snapshot frozen at
-        # whichever event triggered *this* run — a label attached a moment
-        # after that (e.g. `gh pr create` immediately followed by `gh pr
-        # edit --add-label`, which are two separate API calls and so two
-        # separate events) isn't in it, only visible to a later run. That
-        # forced a real run to start, get cancelled, and wait for a second
-        # run to notice the label — all for a check that's supposed to be
-        # near-instant. Asking the API directly for the PR's *current*
-        # labels means even this very first run can see it, as long as the
-        # label lands before this step runs (checkout + step startup —
-        # normally a few seconds, comfortably longer than two sequential
-        # `gh` calls take to land).
+        # github.event.pull_request.labels is a snapshot frozen at whichever
+        # event triggered *this* run — a label attached a moment after that
+        # (e.g. `gh pr create --label`, whose create and add-label calls are
+        # two separate API calls) isn't in it. Since labeled/unlabeled don't
+        # trigger a run of their own (see the "on" comment above), this live
+        # API lookup is the only way this run can still see a label that
+        # landed just after it started: as long as it arrives before this
+        # step executes (checkout + step startup — normally a few seconds),
+        # it's visible here even though no second event fires.
         id: labels
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,12 +132,11 @@ jobs:
     # the opposite of "fails closed to running the checks".
     # !cancelled() specifically rather than always(): always() would also
     # keep this job racing to completion even when detect-release was
-    # itself cancelled — which happens when a second triggering event
-    # (e.g. a skip-ci label landing right after the PR opened) supersedes
-    # this whole run via the concurrency group above. In that case the run
-    # is already being torn down; !cancelled() correctly backs this job
-    # off too instead of burning several minutes running pytest for real
-    # just to have the result discarded a moment later.
+    # itself cancelled — which happens when a new push to this PR
+    # supersedes this whole run via the concurrency group above. In that
+    # case the run is already being torn down; !cancelled() correctly backs
+    # this job off too instead of burning several minutes running pytest
+    # for real just to have the result discarded a moment later.
     if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     strategy:
       fail-fast: false

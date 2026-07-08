@@ -5,10 +5,13 @@ on:
   # pull_request run on the PR that merged them (required by branch
   # protection). The daily schedule catches drift from HACS's own
   # validation rules changing, independent of any push here.
-  # types adds labeled/unlabeled to the opened/synchronize/reopened default
-  # — see tests.yaml's identical comment for why the skip-ci gate needs it.
+  # Deliberately NOT adding labeled/unlabeled here — see tests.yaml's
+  # identical comment for why (in short: `gh pr create --label` fires
+  # opened and labeled as two separate events for the same commit, which
+  # doubled every job below; detect-release's live label lookup covers the
+  # common case with only one run).
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
@@ -20,12 +23,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # See tests.yaml's identical group key for why: the event-kind suffix
-  # keeps a labeled/unlabeled-triggered run from cancelling (or being
-  # cancelled by) a push-triggered run for the same commit, avoiding the
-  # CANCELLED-conclusion-blocks-merge problem that produces even after a
-  # later run supersedes it.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'push' }}
+  # See tests.yaml's identical group key for why this no longer needs an
+  # event-kind suffix: labeled/unlabeled can't trigger this workflow at all.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -54,12 +54,10 @@ jobs:
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Look up the skip-ci label live
-        # See tests.yaml's identical step for why: github.event.pull_
-        # request.labels is a snapshot frozen at whichever event triggered
-        # this run, so a label attached moments later (e.g. `gh pr create`
-        # immediately followed by `gh pr edit --add-label`, two separate
-        # API calls/events) isn't visible to it. Asking the API directly
-        # for current state means even this first run can see it.
+        # See tests.yaml's identical step for why: since labeled/unlabeled
+        # don't trigger a run of their own, this live API lookup is the
+        # only way this run can still see a label that landed just after
+        # it started (e.g. via `gh pr create --label`).
         id: labels
         env:
           GH_TOKEN: ${{ github.token }}
