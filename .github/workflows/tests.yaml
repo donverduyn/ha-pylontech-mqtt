@@ -4,17 +4,22 @@ on:
   # No push:master trigger: master commits are already covered by the
   # pull_request run on the PR that merged them (required by branch
   # protection).
-  # types adds labeled/unlabeled to the opened/synchronize/reopened default:
-  # the skip-ci jobs below key off github.event.pull_request.labels, a
-  # snapshot frozen at whichever event triggered the run. Without this, a
-  # skip-ci label applied after the PR is already open doesn't get a new
-  # triggering event, so every already-dispatched run keeps evaluating
-  # against its stale, label-less snapshot and just runs normally.
+  # types adds labeled/unlabeled to the opened/synchronize/reopened default.
+  # detect-release below looks up the skip-ci label live (see its comment)
+  # rather than trusting github.event.pull_request.labels, which mostly
+  # avoids needing a fresh triggering event at all — but a label applied
+  # to a PR whose most recent run already finished (and so isn't about to
+  # re-check anything live) still needs *some* new event to produce an
+  # up-to-date run, which is what this covers.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  # pull-requests: read lets detect-release look up the PR's *current*
+  # labels via `gh pr view` instead of trusting github.event.pull_request.
+  # labels — see that job's comment for why.
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -54,6 +59,7 @@ jobs:
     if: github.event_name == 'pull_request'
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
+      skip_ci: ${{ steps.labels.outputs.skip_ci }}
     steps:
       - uses: "actions/checkout@v4"
       - name: Compare manifest.json version against the PR base
@@ -68,11 +74,34 @@ jobs:
           else
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Look up the skip-ci label live
+        # github.event.pull_request.labels is a snapshot frozen at
+        # whichever event triggered *this* run — a label attached a moment
+        # after that (e.g. `gh pr create` immediately followed by `gh pr
+        # edit --add-label`, which are two separate API calls and so two
+        # separate events) isn't in it, only visible to a later run. That
+        # forced a real run to start, get cancelled, and wait for a second
+        # run to notice the label — all for a check that's supposed to be
+        # near-instant. Asking the API directly for the PR's *current*
+        # labels means even this very first run can see it, as long as the
+        # label lands before this step runs (checkout + step startup —
+        # normally a few seconds, comfortably longer than two sequential
+        # `gh` calls take to land).
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name' \
+              | grep -qx 'skip-ci'; then
+            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Refuse skip-ci on a release PR
         # Early, fast (~4s) signal only — this job's own pass/fail isn't
         # a required status check, so tests-status below independently
         # repeats this exact check and is what actually fails the PR.
-        if: steps.check.outputs.is_release == 'true' && contains(github.event.pull_request.labels.*.name, 'skip-ci')
+        if: steps.check.outputs.is_release == 'true' && steps.labels.outputs.skip_ci == 'true'
         run: |
           echo "::error::skip-ci cannot be applied to a release PR (manifest.json version changed against the base branch) — remove the label so the normal checks run before this auto-releases."
           exit 1
@@ -96,7 +125,7 @@ jobs:
     # much a plain network flake), which is the opposite of "fails closed
     # to running the checks". always() disables that implicit gating so
     # the boolean logic here is what actually decides, in every case.
-    if: "always() && (!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == '')"
+    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     strategy:
       fail-fast: false
       matrix:
@@ -158,7 +187,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == '')"
+    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
@@ -208,7 +237,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == '')"
+    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - name: Install actionlint
@@ -253,7 +282,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "always() && (!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == '')"
+    if: "always() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     steps:
       - uses: "actions/checkout@v4"
       - name: Build the sidecar image
@@ -397,7 +426,7 @@ jobs:
     if: always()
     steps:
       - name: Refuse skip-ci on a release PR
-        if: needs.detect-release.outputs.is_release == 'true' && contains(github.event.pull_request.labels.*.name, 'skip-ci')
+        if: needs.detect-release.outputs.is_release == 'true' && needs.detect-release.outputs.skip_ci == 'true'
         run: |
           echo "::error::skip-ci cannot be applied to a release PR — remove the label so this job runs normally before it auto-releases."
           exit 1

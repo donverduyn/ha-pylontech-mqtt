@@ -13,7 +13,11 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  # pull-requests: read lets detect-release look up the PR's *current*
+  # labels via `gh pr view` instead of trusting github.event.pull_request.
+  # labels — see that job's comment for why.
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -29,6 +33,7 @@ jobs:
     if: github.event_name == 'pull_request'
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
+      skip_ci: ${{ steps.labels.outputs.skip_ci }}
     steps:
       - uses: "actions/checkout@v4"
       - name: Compare manifest.json version against the PR base
@@ -43,12 +48,29 @@ jobs:
           else
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Look up the skip-ci label live
+        # See tests.yaml's identical step for why: github.event.pull_
+        # request.labels is a snapshot frozen at whichever event triggered
+        # this run, so a label attached moments later (e.g. `gh pr create`
+        # immediately followed by `gh pr edit --add-label`, two separate
+        # API calls/events) isn't visible to it. Asking the API directly
+        # for current state means even this first run can see it.
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name' \
+              | grep -qx 'skip-ci'; then
+            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Refuse skip-ci on a release PR
         # See tests.yaml's identical step for why: skip-ci on a confirmed
         # release must not silently fall back to running the normal
         # checks — it must fail loudly so whoever applied the label
         # notices and removes it before this auto-releases unreviewed.
-        if: steps.check.outputs.is_release == 'true' && contains(github.event.pull_request.labels.*.name, 'skip-ci')
+        if: steps.check.outputs.is_release == 'true' && steps.labels.outputs.skip_ci == 'true'
         run: |
           echo "::error::skip-ci cannot be applied to a release PR (manifest.json version changed against the base branch) — remove the label so the normal checks run before this auto-releases."
           exit 1
@@ -79,7 +101,7 @@ jobs:
         # protection) so *this* job explicitly fails instead of the
         # checkout/validation steps below silently proceeding as if the
         # label had been ignored, or (worse) silently skipping.
-        if: needs.detect-release.outputs.is_release == 'true' && contains(github.event.pull_request.labels.*.name, 'skip-ci')
+        if: needs.detect-release.outputs.is_release == 'true' && needs.detect-release.outputs.skip_ci == 'true'
         run: |
           echo "::error::skip-ci cannot be applied to a release PR — remove the label so this job runs normally before it auto-releases."
           exit 1
@@ -90,9 +112,9 @@ jobs:
         # confirmed release (caught by the bail step above, which fails
         # this job before this step is ever reached) — still runs the
         # real check below.
-        if: "!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == ''"
+        if: "needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == ''"
       - name: HACS validation
-        if: "!contains(github.event.pull_request.labels.*.name, 'skip-ci') || needs.detect-release.outputs.is_release == ''"
+        if: "needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == ''"
         uses: "hacs/action@d556e736723344f83838d08488c983a15381059a" # 22.5.0
         with:
           category: "integration"
