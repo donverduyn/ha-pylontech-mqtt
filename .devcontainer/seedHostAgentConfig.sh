@@ -62,6 +62,11 @@ sync_dir="$home/.devcontainer-agent-sync$PWD"
 
 mkdir -p "$sync_dir"
 
+# VS Code Local History is a devcontainer bind mount too, but it is not an
+# agent config path and does not belong in agent-config-files.txt. Create the
+# host-side source before Docker evaluates the mount.
+mkdir -p "$sync_dir/.vscode-server/data/User/History"
+
 # Rename onto $2 instead of writing $2 directly, so a concurrent run of this
 # same script (another project restarting at the same moment) can never
 # observe or produce a half-written file.

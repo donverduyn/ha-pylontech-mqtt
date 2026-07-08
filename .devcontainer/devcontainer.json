@@ -111,7 +111,13 @@
     // single file here either — same whole-directory treatment as the rest
     // above, now scoped per-project like everything else instead of one
     // mount shared globally across every project and the host.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.copilot,target=/home/vscode/.copilot,type=bind"
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.copilot,target=/home/vscode/.copilot,type=bind",
+    // VS Code Local History lives under the remote server's user-data tree,
+    // which is otherwise part of the container overlay and disappears when
+    // the devcontainer is rebuilt. Keep only the History directory here,
+    // project-scoped alongside the agent config backups, instead of mounting
+    // all of .vscode-server's caches, extensions and versioned server bits.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.vscode-server/data/User/History,target=/home/vscode/.vscode-server/data/User/History,type=bind"
   ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`
   // but applies to non-interactive shells and VS Code's integrated terminal too). This must be

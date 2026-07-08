@@ -10,6 +10,12 @@ set -e
 sudo mkdir -p "$HOME/.agent-sync"
 sudo chown vscode:vscode "$HOME/.agent-sync"
 
+# Mounted from this project's host-side sync directory so VS Code Local
+# History survives devcontainer rebuilds. Docker can create bind mount
+# targets as root, so normalize ownership before the server writes to it.
+sudo mkdir -p "$HOME/.vscode-server/data/User/History"
+sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
+
 # Every "dir"-kind path in agent-config-files.txt is its own live bind mount
 # straight onto its real container path (see devcontainer.json's "mounts"),
 # so there's nothing to copy in for those — the mount already *is* the real
