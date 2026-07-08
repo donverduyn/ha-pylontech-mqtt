@@ -54,10 +54,10 @@ docker/*.env
 
 # AI CLI config/state lives under $HOME and is persisted by the devcontainer
 # agent-config mounts. Do not keep project-local agent config in this repo.
-.claude/
-.codex/
-.kilo/
-.gemini/
+.claude
+.codex
+.kilo
+.gemini
 opencode.json
 opencode.jsonc
 kilo.jsonc
