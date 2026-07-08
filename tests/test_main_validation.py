@@ -8,6 +8,102 @@ import main
 import pytest
 
 
+def test_int_env_falls_back_to_default_on_non_numeric_value(
+    monkeypatch, caplog
+) -> None:
+    """A non-numeric env var (e.g. BAUD_RATE=fast) must log and fall back to
+    the default rather than crashing the whole process on int()."""
+    import logging
+
+    monkeypatch.setenv("BAUD_RATE", "fast")
+
+    with caplog.at_level(logging.ERROR, logger="pylon2mqtt"):
+        result = main._int_env("BAUD_RATE", 115200)
+
+    assert result == 115200
+    assert "Invalid value for BAUD_RATE='fast'" in caplog.text
+
+
+def test_missing_mqtt_broker_exits_before_connecting(monkeypatch, caplog) -> None:
+    """MQTT_BROKER is the one setting with no default — an empty value must
+    fail fast rather than reaching client.connect() with an empty host."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "")
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "MQTT_BROKER environment variable is required" in caplog.text
+
+
+def test_empty_serial_port_exits_before_connecting(monkeypatch, caplog) -> None:
+    """CONNECTION_TYPE=serial (the default) with an explicitly blanked-out
+    SERIAL_PORT must fail fast rather than reaching serial.Serial("") with
+    an opaque error."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "CONNECTION_TYPE", "serial")
+    monkeypatch.setattr(main, "SERIAL_PORT", "")
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "SERIAL_PORT must not be empty" in caplog.text
+
+
+@pytest.mark.parametrize("bad_baud", [0, -115200])
+def test_non_positive_baud_rate_exits_before_connecting(
+    monkeypatch, caplog, bad_baud
+) -> None:
+    """A non-positive BAUD_RATE (e.g. an env var typo) must fail fast rather
+    than reaching pyserial's own, less legible validation error."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "CONNECTION_TYPE", "serial")
+    monkeypatch.setattr(main, "BAUD_RATE", bad_baud)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "BAUD_RATE must be a positive integer" in caplog.text
+
+
+@pytest.mark.parametrize("bad_port", [0, -1, 65536])
+def test_mqtt_port_out_of_range_exits_before_connecting(
+    monkeypatch, caplog, bad_port
+) -> None:
+    """An out-of-range MQTT_PORT must fail fast rather than reaching
+    client.connect() and failing with an opaque error."""
+    import logging
+
+    monkeypatch.setattr(main, "MQTT_BROKER", "localhost")
+    monkeypatch.setattr(main, "MQTT_PORT_ENV", bad_port)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="pylon2mqtt"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main.main()
+
+    assert exc_info.value.code == 1
+    assert "MQTT_PORT must be between 1 and 65535" in caplog.text
+
+
 def test_invalid_connection_type_exits_before_connecting(monkeypatch, caplog) -> None:
     """A typo like CONNECTION_TYPE=tpc must fail validation up front rather
     than silently falling through to the serial branch (every check in the
