@@ -46,55 +46,20 @@ prepare_config_dir() {
 
   # seedHostConfig.sh drops this marker (inside the seeded tree itself, so it
   # rides the same bind mount into the container) the one time it populates
-  # a "dir" config path fresh from the host. Whenever it's present, this is
-  # the first rebuild to see that content, so do the full walk once here and
-  # consume the marker -- cheap for the small config dirs (opencode, kilo,
-  # gh, gemini, copilot: all under 1MB), and for .claude/.codex it's the only
-  # time the walk is worth paying for at all (see below).
+  # a "dir" config path fresh from the host. That's the only moment content
+  # with a foreign (host) UID can exist here, so it's the only moment a
+  # chown is needed: this mount is `fakeowner`-typed (Docker Desktop for
+  # Mac's VM-level bind mount) -- a file nobody has ever explicitly chowned
+  # shows each caller as its own owner by default, and an explicit chown
+  # persists as real, caller-independent ownership from then on. Once this
+  # walk has run, everything already present is really vscode-owned, and
+  # everything written after this point is created by the vscode process
+  # itself inside the container, so it's vscode-owned from birth regardless
+  # -- there's nothing left for a later rebuild to fix, named-file or not.
   fresh_marker="$HOME/$config_relpath/.devcontainer-freshly-seeded"
   if [ -e "$fresh_marker" ]; then
     full_ownership_walk "$config_relpath"
     sudo rm -f "$fresh_marker"
-    return 0
-  fi
-
-  # .claude and .codex are multi-gigabyte, six-figure-file-count caches
-  # (128k+ files/1.2G, 8k+ files/117M respectively, confirmed in practice) --
-  # almost entirely plugin/session/paste-cache/log data the CLI itself
-  # creates at runtime and therefore already owns correctly by the time a
-  # second rebuild rolls around. The only pre-existing file in either tree
-  # that actually gates login is the one CLI-specific credentials file seeded
-  # host-side by seedHostConfig.sh's `cp -a` under the host user's UID, fixed
-  # once and for all by the marker branch above. Re-walking either tree in
-  # full on every subsequent rebuild just to re-confirm that costs a full
-  # minute per rebuild for no benefit, so ordinary rebuilds only re-chown
-  # that one file by name -- a low-cost safety net in case Docker Desktop's
-  # proxied bind-mount chown (see full_ownership_walk's .git comment) doesn't
-  # durably persist ownership across rebuilds the way a plain local bind
-  # mount would.
-  case "$config_relpath" in
-    .claude) auth_relpath=.credentials.json ;;
-    .codex) auth_relpath=auth.json ;;
-    *) auth_relpath="" ;;
-  esac
-
-  if [ -z "$auth_relpath" ]; then
-    # Every other config dir in config-files.txt is well under a megabyte
-    # even after its first seed, so it costs nothing to keep walking it in
-    # full on every rebuild -- more robust than a named-file allowlist for
-    # CLIs that don't keep login in one clean, separate file the way
-    # .claude/.codex do (e.g. Copilot's session-store.db mixes login in with
-    # everything else it stores -- see config-files.txt).
-    full_ownership_walk "$config_relpath"
-    return 0
-  fi
-
-  if [ ! -w "$HOME/$config_relpath" ]; then
-    sudo chown -h vscode:vscode "$HOME/$config_relpath" || true
-  fi
-  auth_path="$HOME/$config_relpath/$auth_relpath"
-  if [ -e "$auth_path" ]; then
-    sudo chown -h vscode:vscode "$auth_path" || true
   fi
 }
 

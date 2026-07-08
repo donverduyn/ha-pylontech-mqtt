@@ -58,7 +58,16 @@
     "ghcr.io/aqua/devcontainer-antigravity-cli/antigravity-cli:1": {}
   },
   "containerEnv": {
-    "VIRTUAL_ENV": "/home/vscode/.venv"
+    "VIRTUAL_ENV": "/home/vscode/.venv",
+    // The claude-code feature installs a pinned version, but the CLI itself
+    // still self-updates in the background at container start regardless
+    // (confirmed in practice via ~/.claude/.last-update-result.json showing a
+    // "native" update firing seconds after postStart). That races with the
+    // credential file at exactly the point rebuild-login-persistence broke,
+    // so disable it the same way Copilot CLI's own feature-level auto-update
+    // is disabled in postCreate.sh. `make update-deps` + a rebuild is the
+    // explicit, intentional way to move this pin instead.
+    "DISABLE_AUTOUPDATER": "1"
   },
   // Runs on the HOST, before the container is created, so the files below
   // exist by the time the mounts try to attach to them — see the script for
