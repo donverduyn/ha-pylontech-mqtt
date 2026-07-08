@@ -17,9 +17,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # See tests.yaml's detect-release job for why this exists and how the
+  # skip-ci gate below uses it: duplicated here (rather than shared)
+  # because separate workflow files can't reference each other's job
+  # outputs.
+  detect-release:
+    runs-on: "ubuntu-latest"
+    if: github.event_name == 'pull_request'
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Compare manifest.json version against the PR base
+        id: check
+        run: |
+          manifest="custom_components/pylontech_mqtt/manifest.json"
+          new="$(jq -r .version "$manifest")"
+          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          old="$(git show FETCH_HEAD:"$manifest" 2>/dev/null | jq -r .version || echo "")"
+          if [ "$new" = "$old" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   validate:
     runs-on: "ubuntu-latest"
     name: HACS Action
+    needs: [detect-release]
+    # See tests.yaml's identical guard for why: the "skip-ci" PR label lets
+    # a maintainer fast-track a merge without waiting on this check, but
+    # only when detect-release confirms this isn't a release PR.
+    if: "needs.detect-release.outputs.is_release != 'false' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')"
     steps:
       - uses: "actions/checkout@v4"
       - name: HACS validation
