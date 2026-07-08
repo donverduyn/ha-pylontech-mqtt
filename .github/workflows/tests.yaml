@@ -21,11 +21,7 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
-permissions:
-  # pull-requests: read lets detect-release look up the PR's *current*
-  # labels via `gh pr view` instead of trusting github.event.pull_request.
-  # labels — see that job's comment for why.
-  pull-requests: read
+permissions: {}
 
 concurrency:
   # cancel-in-progress cancels a *stale* run for this PR (e.g. a new push
@@ -54,64 +50,19 @@ concurrency:
 # job. The confirmed-release case is caught by an explicit early bail
 # step (see detect-release and tests-finished below), not by silently
 # running the real steps.
-# (The env context isn't available in job-level `if:`, so this condition
-# is duplicated on each job below rather than defined once.)
+# pytest defines this condition once as a YAML anchor (&skip_unless_real_check);
+# lint/meta-lint/docker-build alias it rather than repeating the string.
 
 jobs:
+  # See detect-release.yaml for why this is a reusable-workflow call rather
+  # than an inline job: hacs.yaml and hassfest.yaml need the exact same two
+  # signals (is_release, skip_ci) and previously each carried their own
+  # identical ~40-line copy of this job to get them.
   detect-release:
-    # Whether this PR bumps manifest.json's version — i.e. whether merging
-    # it will auto-release (see autorelease.yaml, which triggers off
-    # exactly this diff on master). Only runs for pull_request events;
-    # workflow_dispatch has no PR to diff, but that's fine — the "skip
-    # only if" conditions below fall back to running checks whenever this
-    # job didn't produce a confirmed is_release == 'false'.
-    runs-on: "ubuntu-latest"
-    if: github.event_name == 'pull_request'
-    outputs:
-      is_release: ${{ steps.check.outputs.is_release }}
-      skip_ci: ${{ steps.labels.outputs.skip_ci }}
-    steps:
-      - uses: "actions/checkout@v4"
-      - name: Compare manifest.json version against the PR base
-        id: check
-        run: |
-          manifest="custom_components/pylontech_mqtt/manifest.json"
-          new="$(jq -r .version "$manifest")"
-          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
-          old="$(git show FETCH_HEAD:"$manifest" 2>/dev/null | jq -r .version || echo "")"
-          if [ "$new" = "$old" ]; then
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Look up the skip-ci label live
-        # github.event.pull_request.labels is a snapshot frozen at whichever
-        # event triggered *this* run — a label attached a moment after that
-        # (e.g. `gh pr create --label`, whose create and add-label calls are
-        # two separate API calls) isn't in it. Since labeled/unlabeled don't
-        # trigger a run of their own (see the "on" comment above), this live
-        # API lookup is the only way this run can still see a label that
-        # landed just after it started: as long as it arrives before this
-        # step executes (checkout + step startup — normally a few seconds),
-        # it's visible here even though no second event fires.
-        id: labels
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name' \
-              | grep -qx 'skip-ci'; then
-            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Refuse skip-ci on a release PR
-        # Early, fast (~4s) signal only — this job's own pass/fail isn't
-        # a required status check, so tests-finished below independently
-        # repeats this exact check and is what actually fails the PR.
-        if: steps.check.outputs.is_release == 'true' && steps.labels.outputs.skip_ci == 'true'
-        run: |
-          echo "::error::skip-ci cannot be applied to a release PR (manifest.json version changed against the base branch) — remove the label so the normal checks run before this auto-releases."
-          exit 1
+    uses: ./.github/workflows/detect-release.yaml
+    permissions:
+      contents: read
+      pull-requests: read
 
   pytest:
     name: "pytest (${{ matrix.ha-version }})"
@@ -137,7 +88,10 @@ jobs:
     # case the run is already being torn down; !cancelled() correctly backs
     # this job off too instead of burning several minutes running pytest
     # for real just to have the result discarded a moment later.
-    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    # Anchored here and aliased by lint/meta-lint/docker-build below — same
+    # condition, defined once. (Can't use env: for this instead: the env
+    # context isn't available in job-level `if:`.)
+    if: &skip_unless_real_check "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
     strategy:
       fail-fast: false
       matrix:
@@ -163,27 +117,10 @@ jobs:
             python-version: "3.13"
     steps:
       - uses: "actions/checkout@v4"
-      - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
+      - uses: "./.github/actions/setup-python-env"
         with:
           python-version: ${{ matrix.python-version }}
-          activate-environment: true
-          cache-dependency-glob: ${{ matrix.lockfile }}
-      - name: Cache installed venv
-        # setup-uv's cache-dependency-glob above only caches downloaded
-        # packages; `uv pip install` still has to link/hash-verify every one
-        # of them into the venv it just created (--require-hashes re-checks
-        # a sha256 per package) on every run. This caches that *result* —
-        # keyed on the exact lockfile content, so it's only ever wrong if
-        # the lockfile changes, in which case it's a miss, not a staleness
-        # bug — so a hit skips the install step below entirely.
-        id: venv-cache
-        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles(matrix.lockfile) }}
-      - name: Install dependencies (HA ${{ matrix.ha-version }})
-        if: steps.venv-cache.outputs.cache-hit != 'true'
-        run: uv pip install --require-hashes -r ${{ matrix.lockfile }}
+          lockfile: ${{ matrix.lockfile }}
       - name: Run test suite
         # --cov-fail-under is a non-regression floor (current combined coverage is
         # ~89%), not a target — it catches a change that quietly drops coverage,
@@ -199,26 +136,15 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: *skip_unless_real_check
     steps:
       - uses: "actions/checkout@v4"
-      - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
+      - uses: "./.github/actions/setup-python-env"
         with:
           # Matches the pytest job's "current" leg: requirements_dev.lock.txt
           # now pins homeassistant==2026.7.1, which requires Python >=3.14.2.
           python-version: "3.14"
-          activate-environment: true
-          cache-dependency-glob: requirements_dev.lock.txt
-      - name: Cache installed venv
-        # See the pytest job's identically-named step for why this exists.
-        id: venv-cache
-        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('requirements_dev.lock.txt') }}
-      - name: Install dependencies
-        if: steps.venv-cache.outputs.cache-hit != 'true'
-        run: uv pip install --require-hashes -r requirements_dev.lock.txt
+          lockfile: requirements_dev.lock.txt
       - name: Ruff check
         run: ruff check .
       - name: Ruff format
@@ -249,7 +175,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: *skip_unless_real_check
     steps:
       - uses: "actions/checkout@v4"
       - name: Install actionlint
@@ -294,7 +220,7 @@ jobs:
     runs-on: "ubuntu-latest"
     needs: [detect-release]
     # See pytest's identical condition/comment above.
-    if: "!cancelled() && (needs.detect-release.outputs.skip_ci != 'true' || needs.detect-release.outputs.is_release == '')"
+    if: *skip_unless_real_check
     steps:
       - uses: "actions/checkout@v4"
       - name: Build the sidecar image
@@ -382,21 +308,10 @@ jobs:
           path: /tmp
       - name: Load the built sidecar image
         run: docker load -i /tmp/pylon2mqtt-ci.tar.gz
-      - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
+      - uses: "./.github/actions/setup-python-env"
         with:
           python-version: ${{ matrix.python-version }}
-          activate-environment: true
-          cache-dependency-glob: ${{ matrix.lockfile }}
-      - name: Cache installed venv
-        # See the pytest job's identically-named step for why this exists.
-        id: venv-cache
-        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles(matrix.lockfile) }}
-      - name: Install dependencies (HA ${{ matrix.ha-version }})
-        if: steps.venv-cache.outputs.cache-hit != 'true'
-        run: uv pip install --require-hashes -r ${{ matrix.lockfile }}
+          lockfile: ${{ matrix.lockfile }}
       - name: Run e2e tests against the built image
         # E2E_SIDECAR_IMAGE makes the compose stack (docker/
         # docker-compose.test.yml) run the loaded image as-is instead of

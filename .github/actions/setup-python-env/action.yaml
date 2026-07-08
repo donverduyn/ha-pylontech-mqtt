@@ -1,0 +1,45 @@
+name: Set up Python environment
+description: >
+  Installs the pinned Python version via astral-sh/setup-uv, then restores or
+  installs the exact hash-pinned venv for the given lockfile. Shared by
+  tests.yaml's pytest/lint/e2e jobs, which previously each carried an
+  identical copy of this setup-uv + cache + conditional-install sequence,
+  differing only in which Python version and lockfile they used.
+
+inputs:
+  python-version:
+    required: true
+  lockfile:
+    required: true
+    description: "Path to the hash-pinned requirements lock file to install from"
+
+outputs:
+  cache-hit:
+    description: "Whether the venv cache was restored instead of freshly installed"
+    value: ${{ steps.venv-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: "astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39" # v8.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        activate-environment: true
+        cache-dependency-glob: ${{ inputs.lockfile }}
+    - name: Cache installed venv
+      # setup-uv's cache-dependency-glob above only caches downloaded
+      # packages; `uv pip install` still has to link/hash-verify every one
+      # of them into the venv it just created (--require-hashes re-checks
+      # a sha256 per package) on every run. This caches that *result* —
+      # keyed on the exact lockfile content, so it's only ever wrong if
+      # the lockfile changes, in which case it's a miss, not a staleness
+      # bug — so a hit skips the install step below entirely.
+      id: venv-cache
+      uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles(inputs.lockfile) }}
+    - name: Install dependencies
+      if: steps.venv-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: uv pip install --require-hashes -r ${{ inputs.lockfile }}

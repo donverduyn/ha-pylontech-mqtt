@@ -16,11 +16,7 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
-permissions:
-  # pull-requests: read lets detect-release look up the PR's *current*
-  # labels via `gh pr view` instead of trusting github.event.pull_request.
-  # labels — see that job's comment for why.
-  pull-requests: read
+permissions: {}
 
 concurrency:
   # See tests.yaml's identical group key for why this no longer needs an
@@ -29,54 +25,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # See tests.yaml's detect-release job for why this exists and how the
-  # skip-ci gate below uses it: duplicated here (rather than shared)
-  # because separate workflow files can't reference each other's job
-  # outputs.
+  # See detect-release.yaml for why this is a reusable-workflow call rather
+  # than an inline job: tests.yaml and hassfest.yaml need the exact same two
+  # signals (is_release, skip_ci) and previously each carried their own
+  # identical ~40-line copy of this job to get them.
   detect-release:
-    runs-on: "ubuntu-latest"
-    if: github.event_name == 'pull_request'
-    outputs:
-      is_release: ${{ steps.check.outputs.is_release }}
-      skip_ci: ${{ steps.labels.outputs.skip_ci }}
-    steps:
-      - uses: "actions/checkout@v4"
-      - name: Compare manifest.json version against the PR base
-        id: check
-        run: |
-          manifest="custom_components/pylontech_mqtt/manifest.json"
-          new="$(jq -r .version "$manifest")"
-          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
-          old="$(git show FETCH_HEAD:"$manifest" 2>/dev/null | jq -r .version || echo "")"
-          if [ "$new" = "$old" ]; then
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Look up the skip-ci label live
-        # See tests.yaml's identical step for why: since labeled/unlabeled
-        # don't trigger a run of their own, this live API lookup is the
-        # only way this run can still see a label that landed just after
-        # it started (e.g. via `gh pr create --label`).
-        id: labels
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name' \
-              | grep -qx 'skip-ci'; then
-            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Refuse skip-ci on a release PR
-        # See tests.yaml's identical step for why: skip-ci on a confirmed
-        # release must not silently fall back to running the normal
-        # checks — it must fail loudly so whoever applied the label
-        # notices and removes it before this auto-releases unreviewed.
-        if: steps.check.outputs.is_release == 'true' && steps.labels.outputs.skip_ci == 'true'
-        run: |
-          echo "::error::skip-ci cannot be applied to a release PR (manifest.json version changed against the base branch) — remove the label so the normal checks run before this auto-releases."
-          exit 1
+    uses: ./.github/workflows/detect-release.yaml
+    permissions:
+      contents: read
+      pull-requests: read
 
   validate:
     runs-on: "ubuntu-latest"

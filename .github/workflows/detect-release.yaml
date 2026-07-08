@@ -1,0 +1,82 @@
+name: Detect release
+
+# Reusable workflow shared by tests.yaml/hacs.yaml/hassfest.yaml: each of
+# those pull_request-triggered workflows needs the exact same two signals —
+# whether this PR bumps manifest.json's version (a release), and whether
+# the skip-ci label is currently on the PR — and previously carried an
+# identical ~40-line copy of this job to get them, since a plain `needs:`
+# reference can't cross workflow files. A reusable workflow's outputs can:
+# each caller adds one job (`uses: ./.github/workflows/detect-release.yaml`)
+# instead of duplicating the checks, and every caller's downstream
+# `needs.detect-release.outputs.*` reference is unchanged.
+on:
+  workflow_call:
+    outputs:
+      is_release:
+        description: "true if this PR's manifest.json version differs from the PR base's"
+        value: ${{ jobs.detect-release.outputs.is_release }}
+      skip_ci:
+        description: "true if the skip-ci label is currently on this PR"
+        value: ${{ jobs.detect-release.outputs.skip_ci }}
+
+permissions: {}
+
+jobs:
+  detect-release:
+    # Whether this PR bumps manifest.json's version — i.e. whether merging
+    # it will auto-release (see autorelease.yaml, which triggers off
+    # exactly this diff on master). Only runs for pull_request events;
+    # workflow_dispatch has no PR to diff, but that's fine — each caller's
+    # "skip only if" conditions fall back to running checks whenever this
+    # job didn't produce a confirmed is_release == 'false'.
+    runs-on: "ubuntu-latest"
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      skip_ci: ${{ steps.labels.outputs.skip_ci }}
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Compare manifest.json version against the PR base
+        id: check
+        run: |
+          manifest="custom_components/pylontech_mqtt/manifest.json"
+          new="$(jq -r .version "$manifest")"
+          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          old="$(git show FETCH_HEAD:"$manifest" 2>/dev/null | jq -r .version || echo "")"
+          if [ "$new" = "$old" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Look up the skip-ci label live
+        # github.event.pull_request.labels is a snapshot frozen at whichever
+        # event triggered *this* run — a label attached a moment after that
+        # (e.g. `gh pr create --label`, whose create and add-label calls are
+        # two separate API calls) isn't in it. Since labeled/unlabeled don't
+        # trigger a run of their own (see each caller's "on" comment), this
+        # live API lookup is the only way this run can still see a label
+        # that landed just after it started: as long as it arrives before
+        # this step executes (checkout + step startup — normally a few
+        # seconds), it's visible here even though no second event fires.
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh pr view "${{ github.event.pull_request.number }}" --json labels -q '.labels[].name' \
+              | grep -qx 'skip-ci'; then
+            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse skip-ci on a release PR
+        # Early, fast (~4s) signal only — this job's own pass/fail isn't a
+        # required status check, so each caller's actual required-check job
+        # (tests-finished/validate) independently repeats this exact check
+        # and is what actually fails the PR.
+        if: steps.check.outputs.is_release == 'true' && steps.labels.outputs.skip_ci == 'true'
+        run: |
+          echo "::error::skip-ci cannot be applied to a release PR (manifest.json version changed against the base branch) — remove the label so the normal checks run before this auto-releases."
+          exit 1
