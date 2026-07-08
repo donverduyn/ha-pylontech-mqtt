@@ -45,7 +45,7 @@ read-write straight from that backup onto the container's real path.
 Changes made inside the container land directly on the backup with no
 copying or polling involved, and never touch your host's own copy of that
 config or any other project's. See the `mounts` comment in
-`.devcontainer/devcontainer.json` and `.devcontainer/seedHostAgentConfig.sh`
+`.devcontainer/devcontainer.json` and `.devcontainer/seedHostConfig.sh`
 for exactly how that works and why.
 
 Do not commit AI CLI config or state under the workspace. Settings belong

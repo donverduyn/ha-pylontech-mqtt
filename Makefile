@@ -1,4 +1,4 @@
-.PHONY: setup test test-e2e lint format typecheck clean
+.PHONY: setup test test-e2e lint format typecheck update-deps clean
 
 # Installs from the hash-pinned lock file CI uses, not the loose
 # requirements_dev.txt it's compiled from — see .devcontainer/postCreate.sh
@@ -29,6 +29,9 @@ format:
 typecheck:
 	mypy
 	pyright
+
+update-deps:
+	python3 scripts/update_dependencies.py
 
 clean:
 	@bash scripts/clean.sh

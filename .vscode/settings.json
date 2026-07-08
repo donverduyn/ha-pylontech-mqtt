@@ -1,19 +1,8 @@
 {
-  "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
-  // devcontainer.json's remoteEnv already puts the venv's bin/ on PATH for
-  // every shell, so the Python extension's default auto-activation just
-  // adds a redundant `source .venv/bin/activate` line to every new terminal.
-  "python.terminal.activateEnvironment": false,
-  "editor.formatOnSave": true,
-  "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.fixAll.ruff": "explicit",
-      "source.organizeImports.ruff": "explicit"
-    }
-  },
-  "ruff.enable": true,
+  // Explorer-tree filtering only — core workbench UI, not owned by any
+  // extension or the remote server, so it belongs here rather than
+  // devcontainer.json (see that file's "settings" block for the
+  // container-run-extension settings this workspace also configures).
   "files.exclude": {
     "**/.git": true,
     "**/.svn": true,
@@ -29,6 +18,5 @@
     "**/.claude": true,
     "**/.codex": true,
     "**/.kilo": true,
-  },
-  "workbench.localHistory.enabled": true
+  }
 }

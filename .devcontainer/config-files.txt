@@ -1,6 +1,6 @@
 # Single source of truth for every AI CLI config path that needs to survive
-# a container rebuild, read by three scripts (host-side seedHostAgentConfig.sh,
-# container-side postCreate.sh and syncAgentConfigOut.sh) so the list is never
+# a container rebuild, read by three scripts (host-side seedHostConfig.sh,
+# container-side postCreate.sh and syncConfigOut.sh) so the list is never
 # duplicated. Format: "<path
 # relative to $HOME>|<kind>", where kind is:
 #   dir   - a whole directory, bind-mounted read-write directly from this
@@ -9,10 +9,10 @@
 #           the host has at that path; after that the mount itself is the
 #           only copy anyone reads or writes -- no copying, no polling.
 #   json  - a bare file, not inside its own directory, so it can't be
-#           bind-mounted the same way (see seedHostAgentConfig.sh for why).
+#           bind-mounted the same way (see seedHostConfig.sh for why).
 #           Still handled the old file-by-file way: seeded once as {} if
 #           the host doesn't have one, copied into the container by
-#           postCreate.sh, and polled back out by syncAgentConfigOut.sh.
+#           postCreate.sh, and polled back out by syncConfigOut.sh.
 
 # Claude Code
 .claude|dir

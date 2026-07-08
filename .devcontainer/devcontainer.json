@@ -8,26 +8,54 @@
   // this repo declare HA 2024.11 as its minimum while never testing it.
   "image": "mcr.microsoft.com/devcontainers/python:3-3.14-trixie",
   "features": {
-    "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers-extra/features/claude-code:2": {},
-    "ghcr.io/devcontainers-extra/features/opencode:1": {},
-    "ghcr.io/devcontainers-extra/features/uv:1": {},
-    // Pinned major version: the feature defaults to whatever "lts" resolves
-    // to at build time, which drifts across major versions over a
-    // container's lifetime. The npm-installed AI CLIs below (Codex,
-    // Kilocode) are deliberately left unpinned instead — those want latest
-    // by design, and floating is the whole point of an "agent" package.
-    "ghcr.io/devcontainers/features/node:2": {
-      "version": "22"
+    "ghcr.io/devcontainers-extra/features/ripgrep:1": {
+      "version": "15.1.0"
     },
-    "ghcr.io/devcontainers/features/copilot-cli:1": {},
-    "ghcr.io/aqua/devcontainer-antigravity-cli/antigravity-cli:1": {},
+    // xdg-utils provides xdg-open, which opencode/other CLIs shell out to for
+    // browser-based auth flows; without it, browser launches silently fail
+    // even though $BROWSER is set. inotify-tools provides inotifywait, which
+    // syncConfigOut.sh uses to push .claude.json out to the host the moment
+    // it changes instead of polling. Installed as a feature rather than via
+    // apt-get in postCreate.sh so both binaries exist before postCreateCommand
+    // even starts: features install during container creation, ahead of
+    // every lifecycle command, so a later postCreateCommand step failing
+    // (npm/uv installs are the likelier culprits) can no longer prevent
+    // syncConfigOut.sh's watcher from starting for lack of inotifywait — see
+    // postCreate.sh for where that watcher gets launched and why timing here
+    // matters.
+    "ghcr.io/devcontainers-extra/features/apt-packages:1": {
+      "packages": "xdg-utils,inotify-tools"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "2.96.0"
+    },
+    "ghcr.io/devcontainers-extra/features/claude-code:2": {
+      "version": "2.1.204"
+    },
+    "ghcr.io/devcontainers-extra/features/opencode:1": {
+      "version": "1.17.15"
+    },
+    "ghcr.io/devcontainers-extra/features/uv:1": {
+      "version": "0.11.28"
+    },
+    // Node, pnpm, and nvm are exact pins here. CLI versions that should
+    // move are updated by `make update-deps`, then
+    // consumed as exact pins by feature options here and by
+    // postCreate.sh's pnpm install step.
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "22.23.1",
+      "pnpmVersion": "11.10.0",
+      "nvmVersion": "0.40.5"
+    },
+    "ghcr.io/devcontainers/features/copilot-cli:1": {
+      "version": "1.0.69"
+    },
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-      "version": "latest",
-      "enableNonRootDocker": "true",
-      "moby": "false"
-    }
+      "version": "29.6.1",
+      "enableNonRootDocker": true,
+      "moby": false
+    },
+    "ghcr.io/aqua/devcontainer-antigravity-cli/antigravity-cli:1": {}
   },
   "containerEnv": {
     "VIRTUAL_ENV": "/home/vscode/.venv"
@@ -35,7 +63,7 @@
   // Runs on the HOST, before the container is created, so the files below
   // exist by the time the mounts try to attach to them — see the script for
   // why that ordering matters.
-  "initializeCommand": "bash .devcontainer/seedHostAgentConfig.sh",
+  "initializeCommand": "bash .devcontainer/seedHostConfig.sh",
   // Every AI CLI's login and hand-set preferences need to survive a
   // container rebuild instead of re-provisioning from scratch each time.
   // This used to be one bind mount per file, read-write (every one of them
@@ -51,13 +79,13 @@
   // closing a container mid-write could leave a torn/truncated file on the
   // host — see this repo's history for the incident that surfaced it.
   //
-  // Replacement: agent-config-files.txt lists every one of these paths,
+  // Replacement: config-files.txt lists every one of these paths,
   // almost all of them whole directories. A *directory* bind mount doesn't
   // have the single-file problem above — a rename inside a mounted
   // directory only replaces that entry, never the mount point itself — so
   // each tool's directory is bind-mounted read-write straight from this
   // project's own backup onto its real container path (see "mounts"
-  // below). seedHostAgentConfig.sh (initializeCommand, host-side) seeds
+  // below). seedHostConfig.sh (initializeCommand, host-side) seeds
   // that backup once, ever, from whatever the host has at that path the
   // very first time this project's container starts; after that, the live
   // mount is the only thing anyone reads or writes, forever — no copying,
@@ -67,13 +95,13 @@
   // whole-file replace with no way to merge, so it was last-write-wins
   // against whatever the host or another project had changed since,
   // verified in practice to silently discard host edits, not just a
-  // theoretical risk. See seedHostAgentConfig.sh for the full story.
+  // theoretical risk. See seedHostConfig.sh for the full story.
   //
   // .claude.json is the one exception: a bare file at $HOME root, not
   // inside its own directory, so it can't be bind-mounted the way the rest
   // are — same single-file rename problem as above. It still gets the old
-  // file-by-file treatment (seeded once by seedHostAgentConfig.sh, copied
-  // in by postCreate.sh, polled back out by syncAgentConfigOut.sh's
+  // file-by-file treatment (seeded once by seedHostConfig.sh, copied
+  // in by postCreate.sh, polled back out by syncConfigOut.sh's
   // postStartCommand below), just scoped to this one file now instead of
   // every path.
   //
@@ -84,15 +112,15 @@
   // ${localWorkspaceFolder} (this project's absolute path), not its
   // basename, so two checkouts of differently-located repos that happen to
   // share a folder name can't collide on one sync directory. Kept in sync
-  // manually with the equivalent computation in seedHostAgentConfig.sh
+  // manually with the equivalent computation in seedHostConfig.sh
   // ("$home/.devcontainer-agent-sync$PWD"), since one runs in a JSON string
   // and the other in a shell script.
   "mounts": [
     // Staging directory for .claude.json, the one path in
-    // agent-config-files.txt that isn't bind-mounted directly (see the
+    // config-files.txt that isn't bind-mounted directly (see the
     // "initializeCommand" comment above for why).
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder},target=/home/vscode/.agent-sync,type=bind",
-    // Everything else in agent-config-files.txt: a live, read-write,
+    // Everything else in config-files.txt: a live, read-write,
     // whole-directory bind mount straight from this project's own backup
     // onto the tool's real container path. No copying, no polling — see
     // the "initializeCommand" comment above.
@@ -114,22 +142,40 @@
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.copilot,target=/home/vscode/.copilot,type=bind",
     // VS Code Local History lives under the remote server's user-data tree,
     // which is otherwise part of the container overlay and disappears when
-    // the devcontainer is rebuilt. Keep only the History directory here,
-    // project-scoped alongside the agent config backups, instead of mounting
-    // all of .vscode-server's caches, extensions and versioned server bits.
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.vscode-server/data/User/History,target=/home/vscode/.vscode-server/data/User/History,type=bind"
+    // the devcontainer is rebuilt. The mount target deliberately is NOT a
+    // path under .vscode-server itself: Docker auto-creates a bind mount
+    // target's whole ancestor chain as root at container-start, before the
+    // container's own entrypoint/USER applies, so a target nested inside
+    // .vscode-server forces that directory to exist as root before the
+    // remote server (running as vscode) gets to it — and the server's own
+    // "install myself" step (mkdir .vscode-server/bin) runs before
+    // postCreateCommand, so no chown fix in postCreate.sh can run early
+    // enough to save it (confirmed in practice: this is exactly the
+    // permission-denied-on-mkdir failure that motivated this comment).
+    // Mounting to this neutral path instead means .vscode-server is created
+    // by the server itself, as vscode, completely unmounted-into and
+    // unimpeded; postCreate.sh then symlinks History to here once that's
+    // done.
+    // "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.vscode-server/data/User/History,target=/home/vscode/.local-history-sync,type=bind"
   ],
   // Put the venv's bin dir on PATH for every shell (equivalent to `source .venv/bin/activate`
   // but applies to non-interactive shells and VS Code's integrated terminal too). This must be
   // remoteEnv, not containerEnv: containerEnv is baked into the initial `docker run`, before a
   // container exists to query, so `${containerEnv:PATH}` can't resolve there and ends up literal
   // — which clobbers PATH entirely and breaks the container before it even starts.
+  // pnpm's global bin dir rides along here for the same reason: postCreate.sh's
+  // `pnpm install -g` (Codex, Kilocode) puts its shims in
+  // ~/.local/share/pnpm/bin, which (unlike npm's old global prefix) isn't on
+  // PATH anywhere by default.
   "remoteEnv": {
-    "PATH": "/home/vscode/.venv/bin:/usr/local/share/nvm/current/bin:${containerEnv:PATH}"
+    "PATH": "/home/vscode/.venv/bin:/home/vscode/.local/share/pnpm/bin:/usr/local/share/nvm/current/bin:${containerEnv:PATH}"
   },
+  // Marker only: this makes the otherwise-silent handoff from the host-side
+  // initializeCommand to the in-container lifecycle visible in rebuild logs.
+  "onCreateCommand": "date '+[devcontainer:%H:%M:%S] onCreate reached container lifecycle'",
   "postCreateCommand": "bash .devcontainer/postCreate.sh",
   // nohup'd and backgrounded so this returns immediately instead of blocking
-  // startup on syncAgentConfigOut.sh's infinite inotifywait loop — see that
+  // startup on syncConfigOut.sh's infinite inotifywait loop — see that
   // script and the "mounts" comment above for what it's syncing and why.
   // Plain `&` isn't enough here (confirmed in practice: the watcher was
   // found dead with no pidfile shortly after startup, stale configs behind)
@@ -142,7 +188,7 @@
   // plain restart of an existing container still needs the watcher
   // relaunched; the pidfile check inside the script itself is what stops
   // that from stacking a second watcher on top of one still running.
-  "postStartCommand": "nohup bash .devcontainer/syncAgentConfigOut.sh > /tmp/sync-agent-config-out.log 2>&1 &",
+  "postStartCommand": "nohup bash .devcontainer/syncConfigOut.sh > /tmp/sync-agent-config-out.log 2>&1 &",
   // Default waitFor is "updateContentCommand", so VS Code attaches and reads
   // python.defaultInterpreterPath before postCreateCommand has created the venv, causing
   // a spurious "no interpreter at path" warning on every fresh container. Block on it instead.
@@ -167,6 +213,11 @@
       ],
       "settings": {
         "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
+        // remoteEnv above already puts the venv's bin/ on PATH for every
+        // shell, so the Python extension's default auto-activation just
+        // adds a redundant `source .venv/bin/activate` line to every new
+        // terminal (which itself runs in-container, hence belonging here).
+        "python.terminal.activateEnvironment": false,
         // typeCheckingMode/extraPaths/etc. now live in [tool.pyright] in
         // pyproject.toml (which Pylance reads directly and takes precedence
         // over these settings) so there's one source of truth instead of two
@@ -180,7 +231,26 @@
             "source.organizeImports.ruff": "explicit"
           }
         },
-        "ruff.enable": true
+        "ruff.enable": true,
+        // Default "file" scope passes the open file's path straight to
+        // mypy, bypassing [tool.mypy]'s `exclude` (mypy only applies
+        // `exclude` to directory recursion, not explicitly-passed paths) —
+        // so it strict-checks tests/ even though CI never does. "workspace"
+        // instead runs mypy with no explicit file args, so it picks up
+        // `files`/`exclude` exactly like CI's `mypy .`.
+        "mypy-type-checker.reportingScope": "workspace",
+        // Default "openFilesOnly" only analyzes buffers you have open, same
+        // gap as mypy's "file" scope had.
+        "python.analysis.diagnosticMode": "workspace",
+        // Pylance and mypy already report syntax errors (at workspace scope
+        // now, so regardless of what's open). Ruff's own copy is pure
+        // duplication with no autofix upside, unlike its lint rules above.
+        "ruff.showSyntaxErrors": false,
+        // Local History's data lives under .vscode-server's user-data tree
+        // (see the "mounts" comment above) — it's persisted by the remote
+        // server running in-container, not the local UI, so it belongs here
+        // rather than in .vscode/settings.json.
+        "workbench.localHistory.enabled": true
       }
     }
   }
