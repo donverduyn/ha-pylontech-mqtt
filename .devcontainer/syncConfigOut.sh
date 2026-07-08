@@ -5,14 +5,14 @@
 # loop below — see devcontainer.json for why nohup specifically, not just
 # a bare "&").
 #
-# Every "dir"-kind path in agent-config-files.txt is a live bind mount
+# Every "dir"-kind path in config-files.txt is a live bind mount
 # straight onto its real container path — the container's writes already
 # land on the host's per-project backup directly, no help needed here. The
 # one exception is .claude.json ("json"-kind): a bare file at $HOME root
-# that can't be bind-mounted the same way (see seedHostAgentConfig.sh), so
+# that can't be bind-mounted the same way (see seedHostConfig.sh), so
 # it still needs pushing out to /home/vscode/.agent-sync (the directory
 # bind-mounted from this project's backup on the host) by hand. This script
-# only ever seeds that flow, once ever — see seedHostAgentConfig.sh for why
+# only ever seeds that flow, once ever — see seedHostConfig.sh for why
 # nothing folds it back onto the host's own ~/.claude.json beyond that.
 #
 # inotifywait watches $home itself, not the individual json-kind files —
@@ -22,7 +22,7 @@
 # that name). Watching the containing directory for close_write/moved_to
 # and filtering by the reported filename survives renames indefinitely,
 # same principle as why a directory bind mount survives them but a
-# single-file one doesn't (see seedHostAgentConfig.sh). Every json-kind
+# single-file one doesn't (see seedHostConfig.sh). Every json-kind
 # path is, by construction, a bare file directly under $home (that's the
 # whole reason it's in this kind instead of "dir"), so a single
 # non-recursive watch on $home covers all of them without watching
@@ -34,7 +34,7 @@
 # comparisons, not a correctness issue.
 #
 # Writes below go through a temp-file-then-rename, same reasoning as
-# seedHostAgentConfig.sh: if the same project is open in two containers at
+# seedHostConfig.sh: if the same project is open in two containers at
 # once, both watch and write into this one host-side sync directory, and a
 # rename can't leave a torn file the way writing the destination directly
 # could.
@@ -42,7 +42,7 @@ set -e
 
 home="${HOME:-$USERPROFILE}"
 sync_dir="$home/.agent-sync"
-list_file="$(dirname "$0")/agent-config-files.txt"
+list_file="$(dirname "$0")/config-files.txt"
 pidfile="/tmp/sync-agent-config-out.pid"
 
 # postStartCommand can fire again on a container restart; don't stack a

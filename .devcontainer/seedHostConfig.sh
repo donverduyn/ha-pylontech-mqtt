@@ -12,7 +12,7 @@
 # and with the host's own Claude Code and a devcontainer's both able to hold
 # the same file open at once, that's a race, not a corner case.
 #
-# Replacement: agent-config-files.txt lists every one of these paths, most
+# Replacement: config-files.txt lists every one of these paths, most
 # of them whole directories (kind "dir"). A *directory* bind mount doesn't
 # have the single-file problem above — renaming a file inside a mounted
 # directory only replaces that entry, never the mount point itself — so
@@ -40,7 +40,7 @@
 # inside its own directory, so it can't be bind-mounted the way the "dir"
 # paths are — same single-file rename problem as the very first paragraph
 # above. It still gets the old file-by-file treatment (seeded here once;
-# see postCreate.sh and syncAgentConfigOut.sh for the copy-in/poll-out
+# see postCreate.sh and syncConfigOut.sh for the copy-in/poll-out
 # around it), just scoped to this one file instead of every path.
 #
 # $sync_dir is keyed on this project's absolute path, not its basename —
@@ -56,14 +56,58 @@
 # build.)
 set -e
 
+log() {
+  printf '[devcontainer:%s] %s\n' "$(date '+%H:%M:%S')" "$*"
+}
+
+elapsed_since() {
+  now=$(date +%s)
+  printf '%ss' "$((now - $1))"
+}
+
+run_with_heartbeat() {
+  step_label=$1
+  shift
+  step_start=$(date +%s)
+  heartbeat_interval="${DEVCONTAINER_STEP_HEARTBEAT_SECONDS:-30}"
+
+  log "START: $step_label"
+  (
+    while :; do
+      sleep "$heartbeat_interval"
+      log "STILL RUNNING: $step_label ($(elapsed_since "$step_start"))"
+    done
+  ) &
+  heartbeat_pid=$!
+
+  set +e
+  "$@"
+  step_status=$?
+  set -e
+
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+
+  step_elapsed=$(elapsed_since "$step_start")
+  if [ "$step_status" -eq 0 ]; then
+    log "DONE: $step_label ($step_elapsed)"
+  else
+    log "FAILED: $step_label ($step_elapsed, exit $step_status)"
+  fi
+  return "$step_status"
+}
+
 home="${HOME:-$USERPROFILE}"
-list_file="$(dirname "$0")/agent-config-files.txt"
+list_file="$(dirname "$0")/config-files.txt"
 sync_dir="$home/.devcontainer-agent-sync$PWD"
+script_start=$(date +%s)
+
+log "Host config seed starting: $sync_dir"
 
 mkdir -p "$sync_dir"
 
 # VS Code Local History is a devcontainer bind mount too, but it is not an
-# agent config path and does not belong in agent-config-files.txt. Create the
+# agent config path and does not belong in config-files.txt. Create the
 # host-side source before Docker evaluates the mount.
 mkdir -p "$sync_dir/.vscode-server/data/User/History"
 
@@ -96,16 +140,33 @@ while IFS='|' read -r relpath kind; do
 
   # Already seeded for this project on a prior run — leave it alone from
   # here on, whichever kind it is.
-  [ -e "$sync_path" ] && continue
+  if [ -e "$sync_path" ]; then
+    log "SKIP: $relpath already seeded"
+    continue
+  fi
 
   case "$kind" in
     dir)
       mkdir -p "$sync_path"
-      [ -d "$host_path" ] && cp -a "$host_path/." "$sync_path/"
+      if [ -d "$host_path" ]; then
+        run_with_heartbeat "seed directory $relpath" cp -a "$host_path/." "$sync_path/"
+      else
+        log "CREATE: empty seed directory for missing host path $relpath"
+      fi
+      # Dropped inside $sync_path itself (not next to it) so it rides the
+      # same bind mount into the container: postCreate.sh's prepare_config_dir
+      # uses this to run its one-time full ownership walk only on the first
+      # rebuild after a fresh seed like this one, instead of on every rebuild
+      # forever, for the two config dirs (.claude, .codex) large enough for
+      # that walk to actually cost something.
+      touch "$sync_path/.devcontainer-freshly-seeded"
       ;;
     json)
+      log "SEED: json file $relpath"
       seed_json "$host_path"
       atomic_cp "$host_path" "$sync_path"
       ;;
   esac
 done < "$list_file"
+
+log "Host config seed complete ($(elapsed_since "$script_start"))"

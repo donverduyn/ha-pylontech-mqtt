@@ -1,9 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+  # Python/devcontainer pins are updated together by
+  # .github/workflows/dependency-updates.yaml (`make update-deps`) so the
+  # lock files and devcontainer feature pins move in one PR.
 
   - package-ecosystem: "docker"
     directory: "/docker"

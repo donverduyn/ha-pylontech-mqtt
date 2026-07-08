@@ -1,22 +1,227 @@
 #!/bin/sh
 set -e
 
+log() {
+  printf '[devcontainer:%s] %s\n' "$(date '+%H:%M:%S')" "$*"
+}
+
+elapsed_since() {
+  now=$(date +%s)
+  printf '%ss' "$((now - $1))"
+}
+
+run_with_heartbeat() {
+  step_label=$1
+  shift
+  step_start=$(date +%s)
+  heartbeat_interval="${DEVCONTAINER_STEP_HEARTBEAT_SECONDS:-30}"
+
+  log "START: $step_label"
+  (
+    while :; do
+      sleep "$heartbeat_interval"
+      log "STILL RUNNING: $step_label ($(elapsed_since "$step_start"))"
+    done
+  ) &
+  heartbeat_pid=$!
+
+  set +e
+  "$@"
+  step_status=$?
+  set -e
+
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+
+  step_elapsed=$(elapsed_since "$step_start")
+  if [ "$step_status" -eq 0 ]; then
+    log "DONE: $step_label ($step_elapsed)"
+  else
+    log "FAILED: $step_label ($step_elapsed, exit $step_status)"
+  fi
+  return "$step_status"
+}
+
+prepare_agent_sync() {
+  sudo mkdir -p "$HOME/.agent-sync" || return $?
+  sudo chown vscode:vscode "$HOME/.agent-sync"
+}
+
+disable_copilot_cli_auto_update() {
+  marker=/etc/devcontainer-copilot-cli/auto-update
+  if [ -f "$marker" ]; then
+    sudo rm -f "$marker"
+    log "Disabled Copilot CLI feature auto-update"
+  else
+    log "Copilot CLI feature auto-update already disabled"
+  fi
+}
+
+full_ownership_walk() {
+  walk_relpath=$1
+  # -prune on .git: git marks pack files read-only (mode 444), and on
+  # Docker Desktop for Mac, bind-mount chown is proxied back to the host
+  # filesystem, where changing ownership of a read-only file reliably
+  # fails with "Permission denied" even under sudo in the container —
+  # confirmed in practice for claude-plugins-official's .git/objects/pack
+  # (a marketplace plugin cloned by Claude Code itself). Skipping .git
+  # entirely avoids the failure outright instead of swallowing it after
+  # the fact: nothing needs to change ownership of a git repo's internals
+  # anyway, since mode 444 is already world-readable (vscode can read
+  # these files regardless of who owns them) and nothing here writes to
+  # an already-packed git object. `|| true` still guards the remaining
+  # walk in case some other unrelated file trips the same fakeowner
+  # quirk.
+  #
+  # chown -h: without -h, chown dereferences symlinks and chowns their
+  # *target* instead of the link itself. Codex leaves dangling sandbox
+  # symlinks behind under .codex/tmp/** (applypatch, apply_patch,
+  # codex-execve-wrapper) whose targets it has already cleaned up by the
+  # time this runs, so a target-following chown fails with "cannot
+  # dereference ... No such file or directory" for each one (confirmed in
+  # practice). -h fixes the symlink's own ownership instead, which always
+  # exists, sidestepping the dangling-target case entirely.
+  sudo find "$HOME/$walk_relpath" \( -name .git -prune \) -o -exec chown -h vscode:vscode {} + || true
+}
+
+prepare_config_dir() {
+  config_relpath=$1
+  sudo mkdir -p "$HOME/$config_relpath" || return $?
+
+  # seedHostConfig.sh drops this marker (inside the seeded tree itself, so it
+  # rides the same bind mount into the container) the one time it populates
+  # a "dir" config path fresh from the host. Whenever it's present, this is
+  # the first rebuild to see that content, so do the full walk once here and
+  # consume the marker -- cheap for the small config dirs (opencode, kilo,
+  # gh, gemini, copilot: all under 1MB), and for .claude/.codex it's the only
+  # time the walk is worth paying for at all (see below).
+  fresh_marker="$HOME/$config_relpath/.devcontainer-freshly-seeded"
+  if [ -e "$fresh_marker" ]; then
+    log "First seed of $config_relpath -- running full ownership walk"
+    full_ownership_walk "$config_relpath"
+    sudo rm -f "$fresh_marker"
+    return 0
+  fi
+
+  # .claude and .codex are multi-gigabyte, six-figure-file-count caches
+  # (128k+ files/1.2G, 8k+ files/117M respectively, confirmed in practice) --
+  # almost entirely plugin/session/paste-cache/log data the CLI itself
+  # creates at runtime and therefore already owns correctly by the time a
+  # second rebuild rolls around. The only pre-existing file in either tree
+  # that actually gates login is the one CLI-specific credentials file seeded
+  # host-side by seedHostConfig.sh's `cp -a` under the host user's UID, fixed
+  # once and for all by the marker branch above. Re-walking either tree in
+  # full on every subsequent rebuild just to re-confirm that costs a full
+  # minute per rebuild for no benefit, so ordinary rebuilds only re-chown
+  # that one file by name -- a low-cost safety net in case Docker Desktop's
+  # proxied bind-mount chown (see full_ownership_walk's .git comment) doesn't
+  # durably persist ownership across rebuilds the way a plain local bind
+  # mount would.
+  case "$config_relpath" in
+    .claude) auth_relpath=.credentials.json ;;
+    .codex) auth_relpath=auth.json ;;
+    *) auth_relpath="" ;;
+  esac
+
+  if [ -z "$auth_relpath" ]; then
+    # Every other config dir in config-files.txt is well under a megabyte
+    # even after its first seed, so it costs nothing to keep walking it in
+    # full on every rebuild -- more robust than a named-file allowlist for
+    # CLIs that don't keep login in one clean, separate file the way
+    # .claude/.codex do (e.g. Copilot's session-store.db mixes login in with
+    # everything else it stores -- see config-files.txt).
+    full_ownership_walk "$config_relpath"
+    return 0
+  fi
+
+  if [ ! -w "$HOME/$config_relpath" ]; then
+    log "Fixing top-level ownership for $config_relpath"
+    sudo chown -h vscode:vscode "$HOME/$config_relpath" || \
+      log "CONTINUE: top-level ownership fix failed for $config_relpath"
+  fi
+  auth_path="$HOME/$config_relpath/$auth_relpath"
+  if [ -e "$auth_path" ]; then
+    sudo chown -h vscode:vscode "$auth_path" || \
+      log "CONTINUE: credential ownership fix failed for $auth_path"
+  fi
+}
+
+copy_staged_json_config() {
+  json_relpath=$1
+  json_src="$HOME/.agent-sync/$json_relpath"
+  json_dest="$HOME/$json_relpath"
+  if [ ! -f "$json_src" ]; then
+    log "SKIP: staged JSON config missing $json_relpath"
+    return 0
+  fi
+  mkdir -p "$(dirname "$json_dest")" || return $?
+  cp -p "$json_src" "$json_dest"
+}
+
+script_dir=$(dirname "$0")
+tool_versions_file="$script_dir/tool-versions.env"
+script_start=$(date +%s)
+log "postCreate starting"
+
+if [ ! -f "$tool_versions_file" ]; then
+  log "FAILED: missing tool version pins at $tool_versions_file"
+  exit 1
+fi
+# shellcheck disable=SC1090 # path is repo-local and checked above
+. "$tool_versions_file"
+: "${CODEX_VERSION:?missing CODEX_VERSION in tool-versions.env}"
+: "${KILO_VERSION:?missing KILO_VERSION in tool-versions.env}"
+
+# The devcontainers/features copilot-cli feature has no auto-update option
+# as of the pinned 1.1.3 feature metadata. It installs Copilot during image
+# creation, then pays a postStart `copilot update` check on every start when
+# this marker exists. Remove it here; intentional latest refreshes are handled
+# by `make update-deps` and a rebuild.
+run_with_heartbeat "disable Copilot CLI feature auto-update" disable_copilot_cli_auto_update
+
 # /home/vscode/.agent-sync is a directory bind mount, staging just
-# .claude.json (see agent-config-files.txt and seedHostAgentConfig.sh for
+# .claude.json (see config-files.txt and seedHostConfig.sh for
 # why that one file alone still needs staging). Docker auto-creates its
 # target as root before this script runs if it doesn't already exist in the
 # base image, so it needs its ownership fixed before anything below can
 # write into it.
-sudo mkdir -p "$HOME/.agent-sync"
-sudo chown vscode:vscode "$HOME/.agent-sync"
+run_with_heartbeat "prepare .agent-sync staging directory" prepare_agent_sync
 
-# Mounted from this project's host-side sync directory so VS Code Local
-# History survives devcontainer rebuilds. Docker can create bind mount
-# targets as root, so normalize ownership before the server writes to it.
-sudo mkdir -p "$HOME/.vscode-server/data/User/History"
-sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
+# Start the sync-out watcher as early as this script can possibly manage --
+# its only prerequisites are $HOME/.agent-sync existing and writable (just
+# above) and inotifywait being on PATH, which the apt-packages feature in
+# devcontainer.json now guarantees before this script even starts (see that
+# feature entry for why). Every step below this point (the History symlink,
+# the config copy-in loop, npm/uv installs) can still fail without taking the
+# watcher down with it: devcontainer.json sets postStartCommand to waitFor
+# postCreateCommand, so if this script exits non-zero, postStartCommand never
+# runs at all for the rest of this container's life -- confirmed in practice,
+# not just in theory: the devcontainers CLI logs "Skipping any further
+# user-provided commands" and skips postStartCommand outright on a
+# postCreateCommand failure. Any Claude Code login done in that broken
+# container would then live only in the container's ephemeral filesystem and
+# be discarded on the next rebuild, forcing a re-login, since nothing ever
+# pushed it out to the host-backed .agent-sync mount. Safe to invoke twice:
+# syncConfigOut.sh guards itself with a pidfile, so postStartCommand's later
+# invocation of the same script is just a no-op once this one is already
+# running.
+log "Launching config sync-out watcher"
+nohup bash "$script_dir/syncConfigOut.sh" > /tmp/sync-agent-config-out.log 2>&1 &
+watcher_pid=$!
+log "Config sync-out watcher launch requested (pid $watcher_pid)"
 
-# Every "dir"-kind path in agent-config-files.txt is its own live bind mount
+# Bind-mounted (see devcontainer.json's "mounts") to a path outside
+# .vscode-server so Docker never has to auto-create .vscode-server itself as
+# root — that would block the remote server's own install step (which runs
+# before this script, as the vscode user) from creating .vscode-server/bin,
+# a permission-denied error confirmed in practice. By now the server has
+# already created .vscode-server/data/User itself, owned by vscode, so
+# symlinking History in here is the only step left to make it persistent.
+# mkdir -p "$HOME/.vscode-server/data/User"
+# rm -rf "$HOME/.vscode-server/data/User/History"
+# ln -s "$HOME/.local-history-sync" "$HOME/.vscode-server/data/User/History"
+
+# Every "dir"-kind path in config-files.txt is its own live bind mount
 # straight onto its real container path (see devcontainer.json's "mounts"),
 # so there's nothing to copy in for those — the mount already *is* the real
 # path. Docker still auto-creates each one as root before this script runs,
@@ -29,34 +234,47 @@ while IFS='|' read -r relpath kind; do
   esac
   case "$kind" in
     dir)
-      sudo mkdir -p "$HOME/$relpath"
-      sudo chown -R vscode:vscode "$HOME/$relpath"
+      run_with_heartbeat "prepare config dir $relpath" prepare_config_dir "$relpath"
       ;;
     json)
-      src="$HOME/.agent-sync/$relpath"
-      dest="$HOME/$relpath"
-      [ -f "$src" ] || continue
-      mkdir -p "$(dirname "$dest")"
-      cp -p "$src" "$dest"
+      run_with_heartbeat "copy staged JSON config $relpath" copy_staged_json_config "$relpath"
       ;;
   esac
-done < "$(dirname "$0")/agent-config-files.txt"
+done < "$script_dir/config-files.txt"
 
-# xdg-utils provides xdg-open, which opencode/other CLIs shell out to for browser-based
-# auth flows; without it, browser launches silently fail even though $BROWSER is set.
-# inotify-tools provides inotifywait, which syncAgentConfigOut.sh (postStartCommand)
-# uses to push .claude.json out to the host the moment it changes instead of polling.
-# (No mosquitto here: the e2e suite runs its broker as a pinned container —
-# see docker/docker-compose.test.yml — via the docker-outside-of-docker
-# feature, so no broker binary is needed in the devcontainer itself.)
-sudo apt-get update
-sudo apt-get install -y xdg-utils inotify-tools
-
-npm install -g @openai/codex @kilocode/cli
+# Codex and Kilo versions are pinned in tool-versions.env. Rebuilds consume
+# those exact versions; `make update-deps` is the explicit
+# operation that contacts npm and moves the pins.
+#
+# --allow-build is required, not cosmetic: both packages fetch a
+# platform-specific native binary via a postinstall script (visible above as
+# the "Downloading ..." lines), and pnpm 11's build-script approval gate
+# blocks those scripts by default. Without this flag the gate falls back to
+# an interactive "Choose which packages to build" picker gated on
+# stdin.isTTY (not on $CI), which hangs forever under devcontainer's
+# postCreateCommand -- confirmed in practice. --allow-build approves them
+# non-interactively regardless of whether a TTY is attached.
+#
+# The flag must be repeated once per package, not comma-joined: pnpm's CLI
+# parser treats each `--allow-build=` occurrence as one literal allow-list
+# entry and never splits on commas, so `--allow-build=a,b` registers a
+# single bogus entry named "a,b" that matches neither real package --
+# confirmed in practice via the resulting global pnpm-workspace.yaml
+# (`allowBuilds: {'a,b': true}`). @openai/codex has no gated postinstall so
+# it installs fine either way, which is why only @kilocode/cli's build
+# picker was ever seen hanging.
+run_with_heartbeat "install global npm CLIs with pnpm" \
+  pnpm add -g \
+    --config.minimumReleaseAge=0 \
+    --allow-build=@openai/codex \
+    --allow-build=@kilocode/cli \
+    "@openai/codex@$CODEX_VERSION" \
+    "@kilocode/cli@$KILO_VERSION"
 
 # Keep OpenCode/Kilo plugin installs in their home-backed global config.
 # Both CLIs already use XDG home paths for normal config/data/state, but their
 # plugin command defaults to project-local config unless --global is supplied.
+log "Installing CLI wrapper scripts"
 mkdir -p /home/vscode/.local/bin
 cat > /home/vscode/.local/bin/opencode <<'EOF'
 #!/bin/sh
@@ -78,6 +296,9 @@ exec /usr/local/bin/opencode "$@"
 EOF
 cat > /home/vscode/.local/bin/kilo <<'EOF'
 #!/bin/sh
+# kilo itself is installed by `pnpm install -g` below into pnpm's own global
+# bin dir, not nvm's -- unlike npm, pnpm never symlinks global packages into
+# the Node install it ran from.
 if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
   command_name="$1"
   shift
@@ -88,11 +309,11 @@ if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
     esac
   done
   if [ "$has_global" -eq 0 ]; then
-    exec /usr/local/share/nvm/current/bin/kilo "$command_name" --global "$@"
+    exec /home/vscode/.local/share/pnpm/bin/kilo "$command_name" --global "$@"
   fi
-  exec /usr/local/share/nvm/current/bin/kilo "$command_name" "$@"
+  exec /home/vscode/.local/share/pnpm/bin/kilo "$command_name" "$@"
 fi
-exec /usr/local/share/nvm/current/bin/kilo "$@"
+exec /home/vscode/.local/share/pnpm/bin/kilo "$@"
 EOF
 chmod +x /home/vscode/.local/bin/opencode /home/vscode/.local/bin/kilo
 
@@ -116,16 +337,28 @@ chmod +x /home/vscode/.local/bin/opencode /home/vscode/.local/bin/kilo
 # under --require-hashes and install an unpinned newer one instead, same drift
 # as above but for the interpreter and a dependency at once. This must track
 # the base image tag and CI's actions/setup-python version above.
-uv venv --python 3.14 /home/vscode/.venv
-uv pip install --python /home/vscode/.venv/bin/python --require-hashes -r requirements_dev.lock.txt
+run_with_heartbeat "create Python 3.14 venv" \
+  uv venv --python 3.14 /home/vscode/.venv
+run_with_heartbeat "install Python dev dependencies" \
+  uv pip install --python /home/vscode/.venv/bin/python --require-hashes -r requirements_dev.lock.txt
 
 # containerEnv/remoteEnv set PATH for processes VS Code itself launches, but a login shell
 # (bash -l) re-sources /etc/profile, which unconditionally resets PATH and wipes that out.
 # Debian sources /etc/profile.d/*.sh at the very end of /etc/profile, after that reset, so
 # dropping the venv PATH there is what makes it survive in a plain terminal too.
+log "Writing shell profile defaults"
 sudo tee /etc/profile.d/00-venv.sh > /dev/null <<'EOF'
 export VIRTUAL_ENV=/home/vscode/.venv
 export PATH="$VIRTUAL_ENV/bin:$PATH"
+EOF
+
+# Same login-shell problem as the venv above, but for pnpm's global bin dir:
+# devcontainer.json's remoteEnv.PATH only reaches shells/processes VS Code
+# itself launches, not a plain login shell re-sourcing /etc/profile. Without
+# this, `codex`/`kilo` (installed via `pnpm install -g` above) resolve fine
+# from a VS Code terminal but 404 from `bash -l` or an SSH session.
+sudo tee /etc/profile.d/01-pnpm.sh > /dev/null <<'EOF'
+export PATH="/home/vscode/.local/share/pnpm/bin:$PATH"
 EOF
 
 # Lets locally-installed npm CLI tools (e.g. from devDependencies) run by name from an
@@ -168,3 +401,5 @@ EOF
 # alias still lets any extra arguments you type pass through untouched
 # (`agy foo` expands to `agy --dangerously-skip-permissions foo`).
 grep -qF 'alias agy=' /home/vscode/.bashrc || echo "alias agy='agy --dangerously-skip-permissions'" >> /home/vscode/.bashrc
+
+log "postCreate complete ($(elapsed_since "$script_start"))"
