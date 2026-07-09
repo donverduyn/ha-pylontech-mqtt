@@ -1,0 +1,75 @@
+name: Close Superseded Dependabot PRs
+
+# Dependabot security updates (CVE-driven) fire independently of
+# dependabot.yml's schedule/ecosystem list — they've repeatedly opened
+# isolated single-package pip bumps (e.g. #66-69, #74) that conflict with
+# the frozen requirements_dev_min.txt/hacs.json HA-version floor, since a
+# lone package bump can't satisfy a resolver that also has to respect a
+# transitive pin from that floor's homeassistant release. dependency-
+# updates.yaml / min-ha-version-update.yaml already supersede these by
+# refreshing the whole dependency set together with uv; this just closes
+# the now-redundant PR once its CI failure confirms that's what happened,
+# instead of a human doing it by hand each time.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 6 hours, offset from the top of the hour.
+    - cron: "45 */6 * * *"
+
+permissions: {}
+
+concurrency:
+  group: close-superseded-dependabot-prs
+  cancel-in-progress: true
+
+jobs:
+  close-superseded:
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Close Dependabot PRs blocked by the frozen min-HA-version floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          pr_numbers="$(gh pr list --repo "$REPO" --state open --json number,author \
+            -q '.[] | select(.author.login == "dependabot[bot]") | .number')"
+
+          if [ -z "$pr_numbers" ]; then
+            echo "No open Dependabot PRs."
+            exit 0
+          fi
+
+          for pr in $pr_numbers; do
+            echo "::group::PR #$pr"
+            job_urls="$(gh pr view "$pr" --repo "$REPO" --json statusCheckRollup \
+              -q '.statusCheckRollup[]? | select(.conclusion == "FAILURE") | .detailsUrl // empty')"
+
+            matched=0
+            for url in $job_urls; do
+              job_id="$(echo "$url" | grep -oE '[0-9]+$' || true)"
+              [ -z "$job_id" ] && continue
+
+              log="$(gh run view --repo "$REPO" --job "$job_id" --log 2>/dev/null || true)"
+              if echo "$log" | grep -q "No solution found when resolving dependencies" \
+                 && echo "$log" | grep -q "homeassistant=="; then
+                matched=1
+                break
+              fi
+            done
+
+            if [ "$matched" = "1" ]; then
+              echo "PR #$pr matches the known min-HA-version-floor conflict — closing."
+              gh pr close "$pr" --repo "$REPO" --delete-branch --comment \
+                "Closing automatically: this PR's CI failure is the known conflict between an isolated single-package bump and the frozen \`requirements_dev_min.txt\`/hacs.json HA-version floor — a transitive pin from that floor's homeassistant release disagrees with the version this PR wants. \`dependency-updates.yaml\`/\`min-ha-version-update.yaml\` resolve the whole dependency set together with \`uv\` on their own weekly schedule and supersede single-package bumps like this one; Dependabot will reopen or recreate this PR on its own if the conflict is somehow still unresolved after those run."
+            else
+              echo "PR #$pr: no matching conflict signature found, leaving open."
+            fi
+            echo "::endgroup::"
+          done
