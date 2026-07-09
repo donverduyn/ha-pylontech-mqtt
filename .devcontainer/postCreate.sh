@@ -13,6 +13,56 @@ disable_copilot_cli_auto_update() {
   fi
 }
 
+# The devcontainers/features copilot-cli feature has no auto-update option
+# as of the pinned 1.1.3 feature metadata. It installs Copilot during image
+# creation, then pays a postStart `copilot update` check on every start when
+# this marker exists. Remove it here; intentional latest refreshes are handled
+# by `make update-deps` and a rebuild.
+disable_copilot_cli_auto_update
+
+# /home/vscode/.agent-sync is a directory bind mount, staging just
+# .claude.json (see config-files.txt and seedHostConfig.sh for
+# why that one file alone still needs staging). Docker auto-creates its
+# target as root before this script runs if it doesn't already exist in the
+# base image, so it needs its ownership fixed before anything below can
+# write into it.
+prepare_agent_sync
+
+script_dir=$(dirname "$0")
+
+# Start the sync-out watcher as early as this script can possibly manage --
+# its only prerequisites are $HOME/.agent-sync existing and writable (just
+# above) and inotifywait being on PATH, which the apt-packages feature in
+# devcontainer.json now guarantees before this script even starts (see that
+# feature entry for why). Every step below this point (the History symlink,
+# the config copy-in loop, npm/uv installs) can still fail without taking the
+# watcher down with it: devcontainer.json sets postStartCommand to waitFor
+# postCreateCommand, so if this script exits non-zero, postStartCommand never
+# runs at all for the rest of this container's life -- confirmed in practice,
+# not just in theory: the devcontainers CLI logs "Skipping any further
+# user-provided commands" and skips postStartCommand outright on a
+# postCreateCommand failure. Any Claude Code login done in that broken
+# container would then live only in the container's ephemeral filesystem and
+# be discarded on the next rebuild, forcing a re-login, since nothing ever
+# pushed it out to the host-backed .agent-sync mount. Safe to invoke twice:
+# syncConfigOut.sh guards itself with a pidfile, so postStartCommand's later
+# invocation of the same script is just a no-op once this one is already
+# running.
+#
+# setsid, not just nohup: postCreateCommand runs as its own exec session
+# same as postStartCommand does, and nohup alone only blocks SIGHUP -- a
+# group-wide signal on that session's teardown could still take a bare
+# nohup'd child down with it (see devcontainer.json's postStartCommand for
+# where this was confirmed live). setsid detaches into a new session/process
+# group so nothing that only signals the old group can reach it.
+setsid nohup bash "$script_dir/syncConfigOut.sh" > /tmp/sync-config-out.log 2>&1 < /dev/null &
+
+# Mounted from this project's host-side sync directory so VS Code Local
+# History survives devcontainer rebuilds. Docker can create bind mount
+# targets as root, so normalize ownership before the server writes to it.
+# sudo mkdir -p "$HOME/.vscode-server/data/User/History"
+# sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
+
 full_ownership_walk() {
   walk_relpath=$1
   # -prune on .git: git marks pack files read-only (mode 444), and on
@@ -39,6 +89,7 @@ full_ownership_walk() {
   # exists, sidestepping the dangling-target case entirely.
   sudo find "$HOME/$walk_relpath" \( -name .git -prune \) -o -exec chown -h vscode:vscode {} + || true
 }
+
 
 prepare_config_dir() {
   config_relpath=$1
@@ -74,7 +125,6 @@ copy_staged_json_config() {
   cp -p "$json_src" "$json_dest"
 }
 
-script_dir=$(dirname "$0")
 tool_versions_file="$script_dir/tool-versions.env"
 
 if [ ! -f "$tool_versions_file" ]; then
@@ -88,41 +138,6 @@ fi
 : "${ACTIONLINT_SHA256:?missing ACTIONLINT_SHA256 in tool-versions.env}"
 : "${HADOLINT_VERSION:?missing HADOLINT_VERSION in tool-versions.env}"
 : "${HADOLINT_SHA256:?missing HADOLINT_SHA256 in tool-versions.env}"
-
-# The devcontainers/features copilot-cli feature has no auto-update option
-# as of the pinned 1.1.3 feature metadata. It installs Copilot during image
-# creation, then pays a postStart `copilot update` check on every start when
-# this marker exists. Remove it here; intentional latest refreshes are handled
-# by `make update-deps` and a rebuild.
-disable_copilot_cli_auto_update
-
-# /home/vscode/.agent-sync is a directory bind mount, staging just
-# .claude.json (see config-files.txt and seedHostConfig.sh for
-# why that one file alone still needs staging). Docker auto-creates its
-# target as root before this script runs if it doesn't already exist in the
-# base image, so it needs its ownership fixed before anything below can
-# write into it.
-prepare_agent_sync
-
-# Start the sync-out watcher as early as this script can possibly manage --
-# its only prerequisites are $HOME/.agent-sync existing and writable (just
-# above) and inotifywait being on PATH, which the apt-packages feature in
-# devcontainer.json now guarantees before this script even starts (see that
-# feature entry for why). Every step below this point (the History symlink,
-# the config copy-in loop, npm/uv installs) can still fail without taking the
-# watcher down with it: devcontainer.json sets postStartCommand to waitFor
-# postCreateCommand, so if this script exits non-zero, postStartCommand never
-# runs at all for the rest of this container's life -- confirmed in practice,
-# not just in theory: the devcontainers CLI logs "Skipping any further
-# user-provided commands" and skips postStartCommand outright on a
-# postCreateCommand failure. Any Claude Code login done in that broken
-# container would then live only in the container's ephemeral filesystem and
-# be discarded on the next rebuild, forcing a re-login, since nothing ever
-# pushed it out to the host-backed .agent-sync mount. Safe to invoke twice:
-# syncConfigOut.sh guards itself with a pidfile, so postStartCommand's later
-# invocation of the same script is just a no-op once this one is already
-# running.
-nohup bash "$script_dir/syncConfigOut.sh" > /tmp/sync-agent-config-out.log 2>&1 &
 
 # Bind-mounted (see devcontainer.json's "mounts") to a path outside
 # .vscode-server so Docker never has to auto-create .vscode-server itself as

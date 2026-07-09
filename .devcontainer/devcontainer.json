@@ -183,21 +183,36 @@
   // initializeCommand to the in-container lifecycle visible in rebuild logs.
   "onCreateCommand": "date '+[devcontainer:%H:%M:%S] onCreate reached container lifecycle'",
   "postCreateCommand": "bash .devcontainer/postCreate.sh",
-  // nohup'd and backgrounded so this returns immediately instead of blocking
-  // startup on syncConfigOut.sh's infinite inotifywait loop — see that
-  // script and the "mounts" comment above for what it's syncing and why.
-  // Plain `&` isn't enough here (confirmed in practice: the watcher was
-  // found dead with no pidfile shortly after startup, stale configs behind)
-  // — the Dev Containers CLI runs postStartCommand as its own exec session,
-  // and whatever ends that session can take a bare backgrounded child down
-  // with it. nohup detaches the process from that session so it survives
-  // past the command "finishing"; see
-  // https://code.visualstudio.com/remote/advancedcontainers/start-processes
-  // for the same guidance. Runs on every start, not just creation, since a
-  // plain restart of an existing container still needs the watcher
-  // relaunched; the pidfile check inside the script itself is what stops
-  // that from stacking a second watcher on top of one still running.
-  "postStartCommand": "nohup bash .devcontainer/syncConfigOut.sh > /tmp/sync-agent-config-out.log 2>&1 &",
+  // setsid+nohup'd and backgrounded so this returns immediately instead of
+  // blocking startup on syncAgentConfigOut.sh's infinite inotifywait loop —
+  // see that script and the "mounts" comment above for what it's syncing
+  // and why. Plain `&` isn't enough here (confirmed in practice: the
+  // watcher was found dead with no pidfile shortly after startup, stale
+  // configs behind) — the Dev Containers CLI runs postStartCommand as its
+  // own exec session, and whatever ends that session can take a bare
+  // backgrounded child down with it. nohup alone was the first fix
+  // (matches https://code.visualstudio.com/remote/advancedcontainers/start-processes)
+  // but only blocks SIGHUP — it leaves the child in the same process group
+  // as the exec session, so a group-wide kill (rather than a plain hangup)
+  // still takes it down; confirmed live once more even with nohup in place
+  // (watcher missing after a real rebuild, while a manual `docker exec`
+  // replay of the identical command succeeded every time — the difference
+  // being the real Dev Containers CLI's own session teardown). setsid
+  // starts a brand new session and process group, so nothing that only
+  // signals the old group can reach it. Runs on every start, not just
+  // creation, since a plain restart of an existing container still needs
+  // the watcher relaunched; the pidfile check inside the script itself is
+  // what stops that from stacking a second watcher on top of one still
+  // running.
+  "postStartCommand": "setsid nohup bash .devcontainer/syncConfigOut.sh > /tmp/sync-config-out.log 2>&1 < /dev/null &",
+  // Second, independent trigger for the same launch: postAttachCommand
+  // fires whenever a client (VS Code, this CLI, anything) actually attaches
+  // to the container, not just on container start — so if postStartCommand
+  // ever gets missed or killed (the exact failure this is hardening
+  // against), the next attach gets another chance. Safe to run redundantly:
+  // syncConfigOut.sh's own pidfile check makes a second launch into a
+  // no-op if the first one is still alive.
+  "postAttachCommand": "setsid nohup bash .devcontainer/syncConfigOut.sh > /tmp/sync-config-out.log 2>&1 < /dev/null &",
   // Default waitFor is "updateContentCommand", so VS Code attaches and reads
   // python.defaultInterpreterPath before postCreateCommand has created the venv, causing
   // a spurious "no interpreter at path" warning on every fresh container. Block on it instead.
