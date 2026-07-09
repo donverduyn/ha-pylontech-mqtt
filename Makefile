@@ -1,4 +1,4 @@
-.PHONY: setup test test-e2e lint format typecheck update-deps clean
+.PHONY: setup test test-e2e lint format typecheck mutation-test update-deps clean
 
 # Installs from the hash-pinned lock file CI uses, not the loose
 # requirements_dev.txt it's compiled from — see .devcontainer/postCreate.sh
@@ -18,6 +18,16 @@ test:
 # daemon with the compose plugin. First run builds the images.
 test-e2e:
 	pytest -m e2e
+
+# Mutation testing: not a CI gate (line coverage already gates CI — see
+# --cov-fail-under in .github/workflows/tests.yaml), this is a periodic/
+# manual signal for finding assertions the test suite is missing. Full run
+# takes roughly 30-60 minutes; scope it with
+# ONLY_MUTATE=custom_components/pylontech_mqtt/coordinator.py to iterate on
+# one file. See scripts/mutmut_report.py's docstring for why survivors need
+# human triage rather than a pass/fail threshold.
+mutation-test:
+	python3 scripts/mutmut_report.py $(if $(ONLY_MUTATE),--only-mutate $(ONLY_MUTATE),)
 
 lint:
 	ruff check .

@@ -25,6 +25,11 @@ htmlcov/
 .pytest_cache/
 .tox/
 
+# Mutation testing (see scripts/mutmut_report.py / `make mutation-test`)
+mutants
+.mutmut-cache/
+mutation-report.md
+
 # Type checking
 .mypy_cache/
 .dmypy.json

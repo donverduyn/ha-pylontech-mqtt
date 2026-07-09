@@ -8,6 +8,9 @@ pytest-homeassistant-custom-component
 # Coverage reporting; already pulled in transitively but pinned here directly
 # since CI now invokes it explicitly (pytest --cov).
 pytest-cov
+# Mutation testing (`make mutation-test`); periodic/manual signal, not a CI
+# gate — see [tool.mutmut] in pyproject.toml and scripts/mutmut_report.py.
+mutmut
 
 # Code quality
 ruff

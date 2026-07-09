@@ -119,3 +119,33 @@ reportMissingTypeStubs = "none"
 reportUnusedFunction = "none"
 reportUnnecessaryComparison = "none"
 reportUnnecessaryIsInstance = "none"
+
+# Mutation testing (see scripts/mutmut_report.py / `make mutation-test`).
+# Not a CI gate: this is a periodic/manual signal, not a merge check — see
+# that script's docstring for why.
+[tool.mutmut]
+# Whole trees, not individual files: mutmut copies only source_paths into an
+# isolated mutants/ workspace before running tests there, so anything a
+# mutated file imports from a sibling module (e.g. diagnostics.py importing
+# from .const) needs to already be present in that copy or collection fails
+# with ModuleNotFoundError. `only_mutate` (set per-run by the wrapper script,
+# not here) narrows which files actually get mutated without narrowing what
+# gets copied.
+source_paths = ["custom_components", "docker"]
+# tests/conftest.py's stub_server fixture spawns scripts/pylon_stub.py as a
+# real subprocess; without this it's missing from the copied workspace and
+# every test that starts the stub fails with FileNotFoundError before a
+# single mutant runs.
+also_copy = ["scripts/"]
+# These reach outside source_paths/also_copy (repo-root .devcontainer/ config
+# files, docker compose for the e2e suite) so they fail to collect in the
+# isolated mutants/ workspace regardless of which mutant is active — excluding
+# them here is about workspace plumbing, not the e2e marker (already handled
+# by pytest's own addopts).
+pytest_add_cli_args_test_selection = [
+    "--ignore=tests/test_devcontainer_seed_host_config.py",
+    "--ignore=tests/test_devcontainer_sync_config_in.py",
+    "--ignore=tests/test_devcontainer_jsonc_to_json.py",
+    "--ignore=tests/test_sidecar_e2e.py",
+    "--ignore=tests/test_transcripts.py",
+]
