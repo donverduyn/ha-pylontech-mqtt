@@ -15,8 +15,5 @@
     "**/__pycache__": true,
     "**/.mypy_cache": true,
     "**/.coverage*": true,
-    "**/.claude": true,
-    "**/.codex": true,
-    "**/.kilo": true,
   }
 }

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(secrets.env)",
+      "Read(secrets.env.local)",
+      "Edit(secrets.env)",
+      "Edit(secrets.env.local)",
+      "Write(secrets.env)",
+      "Write(secrets.env.local)",
+      "Grep(secrets.env)",
+      "Grep(secrets.env.local)"
+    ]
+  },
+  "sandbox": {
+    "credentials": {
+      "files": [
+        { "path": "secrets.env", "mode": "deny" },
+        { "path": "secrets.env.local", "mode": "deny" }
+      ]
+    }
+  }
+}
