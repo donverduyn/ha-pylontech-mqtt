@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
 
           pr_numbers="$(gh pr list --repo "$REPO" --state open --json number,author \
-            -q '.[] | select(.author.login == "dependabot[bot]") | .number')"
+            -q '.[] | select(.author.login == "dependabot[bot]" or .author.login == "app/dependabot") | .number')"
 
           if [ -z "$pr_numbers" ]; then
             echo "No open Dependabot PRs."
