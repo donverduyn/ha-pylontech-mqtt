@@ -3,6 +3,48 @@ updates:
   # Python/devcontainer pins are updated together by
   # .github/workflows/dependency-updates.yaml (`make update-deps`) so the
   # lock files and devcontainer feature pins move in one PR.
+  #
+  # This entry exists only to carry the ignore list below — Dependabot's
+  # separate CVE-driven security updates run independently of the
+  # updates: schedule/ecosystem list (see close-stale-automation-prs.yaml's
+  # top comment) and can't be turned off entirely without losing alerts
+  # for genuine issues, but ignore: applies to both version *and* security
+  # updates for a matching ecosystem+directory. open-pull-requests-limit: 0
+  # suppresses the *version*-update PRs this entry would otherwise start
+  # opening (dependency-updates.yaml already owns that), while leaving
+  # security updates for anything not listed below.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    ignore:
+      # Every one of these is an exact upstream pin from either
+      # homeassistant or pytest-homeassistant-custom-component itself
+      # (confirmed via PyPI metadata, e.g. homeassistant==2026.7.1 pins
+      # PyJWT==2.12.1, aiohttp==3.14.1, cryptography==48.0.1 exactly;
+      # pytest-homeassistant-custom-component==0.13.305 pins pytest==9.0.0)
+      # — a Dependabot PR bumping any of these can never resolve, since
+      # our own dependency-updates.yaml/min-ha-version-update.yaml (which
+      # respect the same upstream pins) can't apply it either. None of
+      # these are runtime dependencies (requirements_runtime.txt is just
+      # paho-mqtt/pyserial — see its own comment), so this can't suppress
+      # a real production-facing alert as things stand today; revisit if
+      # that ever changes. Add a name here once observed hitting this
+      # pattern — close-stale-automation-prs.yaml's CI-failure-signature
+      # detection remains the backstop for anything not yet listed.
+      - dependency-name: "pyjwt"
+      - dependency-name: "PyJWT"
+      - dependency-name: "aiohttp"
+      - dependency-name: "cryptography"
+      - dependency-name: "pillow"
+      - dependency-name: "zeroconf"
+      - dependency-name: "pyopenssl"
+      - dependency-name: "orjson"
+      - dependency-name: "uv"
+      - dependency-name: "requests"
+      - dependency-name: "pytest"
+      - dependency-name: "homeassistant"
 
   - package-ecosystem: "docker"
     directory: "/docker"
