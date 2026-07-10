@@ -35,6 +35,17 @@ on:
 
 permissions: {}
 
+# cancel-in-progress cancels a *stale* run for this PR (e.g. a new push
+# superseding the previous push's run) — same reasoning as tests.yaml's
+# identical group key. Without this, rapid-fire synchronize events (e.g.
+# Dependabot pushing several updates to the same PR in quick succession)
+# could run this job concurrently across stale and fresh commits; harmless
+# (re-enabling auto-merge is idempotent) but wasteful and inconsistent
+# with every other pull_request-triggered workflow in this repo.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   auto-merge:
     if: github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'app/dependabot'
