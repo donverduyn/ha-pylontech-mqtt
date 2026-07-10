@@ -88,13 +88,18 @@ jobs:
         # commit just introduced.
         run: |
           set -euo pipefail
+          # -X GET is required here: `gh api` defaults to POST whenever -f
+          # params are present, which 404s on this GET-only endpoint —
+          # confirmed live (PR #96), where dropping it caused every call to
+          # fail with "Not Found" regardless of whether matching alerts
+          # existed.
           # --jq '.[]' (rather than a `[...]`-wrapped filter) matters under
           # --paginate: it emits one alert object per line across all pages,
           # which `jq -s` below can slurp into a single array regardless of
           # how many pages came back — a `[...]`-wrapped filter would instead
           # print one array *per page*, concatenated as separate top-level
           # JSON values that `jq length` can't sum correctly.
-          alerts="$(gh api "repos/$REPO/code-scanning/alerts" -f "ref=$REF" -f state=open --paginate --jq '.[]' \
+          alerts="$(gh api "repos/$REPO/code-scanning/alerts" -X GET -f "ref=$REF" -f state=open --paginate --jq '.[]' \
             | jq -s '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")]')"
           count="$(echo "$alerts" | jq 'length')"
           if [ "$count" != "0" ]; then
