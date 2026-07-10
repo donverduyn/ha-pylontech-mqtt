@@ -1,15 +1,42 @@
 # shellcheck shell=sh
-# Sourced by postCreate.sh. Kept as its own file (not inlined there) so
-# tests can source just this -- postCreate.sh's own top-level body runs
-# real installs/downloads/sudo calls unconditionally the moment it's
+# Filesystem-domain helpers shared across the devcontainer setup scripts:
+#   is_bind_mounted    -- sync_config_in below, and syncConfigOut.sh
+#   atomic_copy/atomic_write -- seedHostConfig.sh and syncConfigOut.sh
+#   sync_config_in     -- postCreate.sh only
+# Kept as its own file (not inlined in any of those) so tests can source
+# just this -- postCreate.sh's and seedHostConfig.sh's own top-level bodies
+# run real installs/downloads/sudo calls unconditionally the moment they're
 # invoked, which a unit test has no business triggering.
-#
-# is_bind_mounted() is expected to already be defined by the time
-# sync_config_in() below is called -- sourced from lib/is-bind-mounted.sh
-# by whatever sources this file (postCreate.sh; tests do the same -- see
-# test_devcontainer_sync_config_in.py), not re-sourced here, since
-# is-bind-mounted.sh is also shared with syncConfigOut.sh and has no
-# reason to know this file's location to find it.
+
+# Whether $1 is itself the live bind-mount target (see devcontainer.json's
+# "mounts"), as opposed to something that still needs copying/staging
+# through .agent-sync.
+is_bind_mounted() {
+  mountpoint -q "$1" 2>/dev/null
+}
+
+# Copies $1 onto $2 atomically, preserving $1's mode/timestamps (cp -p): a
+# temp file next to the destination, then `mv -f` onto it, so a concurrent
+# run of another script (another project's container starting or syncing
+# at the same moment) can never observe or produce a half-written file at
+# that path.
+atomic_copy() {
+  src="$1"
+  dest="$2"
+  mkdir -p "$(dirname "$dest")"
+  tmp="$dest.tmp.$$"
+  cp -p "$src" "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+# Writes stdin onto $1 atomically -- same mechanism as atomic_copy above.
+atomic_write() {
+  dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  tmp="$dest.tmp.$$"
+  cat > "$tmp"
+  mv -f "$tmp" "$dest"
+}
 
 full_ownership_walk() {
   walk_relpath=$1

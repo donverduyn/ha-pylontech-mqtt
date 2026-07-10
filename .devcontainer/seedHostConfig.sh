@@ -70,10 +70,9 @@ mkdir -p "$sync_dir/.vscode-server/data/User/History"
 # atomic_copy/atomic_write (write onto a temp file next to the destination,
 # then `mv -f` onto it, so a concurrent run of this same script -- another
 # project restarting at the same moment -- can never observe or produce a
-# half-written file) are shared with syncConfigOut.sh -- see
-# lib/atomic-write.sh.
+# half-written file) are shared with syncConfigOut.sh -- see lib/fs.sh.
 # shellcheck disable=SC1091 # path is repo-local and always present
-. "$(dirname "$0")/lib/atomic-write.sh"
+. "$(dirname "$0")/lib/fs.sh"
 
 # Whether $1 (a relpath from config-files.txt) is declared as a directory
 # bind mount under $HOME in devcontainer.json's "mounts" array, for the
@@ -90,7 +89,7 @@ mkdir -p "$sync_dir/.vscode-server/data/User/History"
 # install, like jq or @devcontainers/cli -- exists, and installing
 # something onto the host itself (as opposed to the disposable container)
 # is a different, more invasive class of action this project doesn't do
-# anywhere else. lib/jsonc-to-json.sh (see that file) converts it to
+# anywhere else. lib/json.sh (see that file) converts it to
 # strict JSON first, in pure bash -- not awk/jq/python, since bash is
 # already the one thing this script unconditionally requires on the host
 # regardless (see devcontainer.json's initializeCommand), so this adds no
@@ -125,7 +124,7 @@ mkdir -p "$sync_dir/.vscode-server/data/User/History"
 # them (e.g. consistency=cached) would silently fall through to "not a
 # declared dir mount" even though the mount really is one. Docker mount
 # strings don't guarantee field order, so this must not either. This
-# mirrors tests/test_devcontainer_jsonc_to_json.py's own
+# mirrors tests/test_devcontainer_json.py's own
 # _declared_dir_mount_relpaths() Python helper, which already parsed it
 # this way.
 is_declared_dir_mount() {
@@ -156,7 +155,7 @@ is_declared_dir_mount() {
         _dir_mount_relpaths="$_dir_mount_relpaths${target_relpath%/} "
       fi
     done <<EOF
-$(bash "$(dirname "$0")/lib/jsonc-to-json.sh" "$(dirname "$0")/devcontainer.json" |
+$(bash "$(dirname "$0")/lib/json.sh" "$(dirname "$0")/devcontainer.json" |
       grep -oE '"[^"]*target=/home/vscode/[^"]*"' |
       sed -E 's/^"//; s/"$//')
 EOF
@@ -226,7 +225,7 @@ while IFS= read -r relpath; do
     # Nothing on the host, and not a declared directory mount either -- a
     # file-type entry with no real content anywhere yet. Still seeded, but
     # only in $sync_path, never on the real host: postCreate.sh's job (see
-    # lib/sync-config-in.sh) is purely to copy whatever's already staged
+    # lib/fs.sh) is purely to copy whatever's already staged
     # into the container, never to invent content itself, so something has
     # to already exist here for it to copy from. The tradeoff, same as
     # every other path here: seeded once, ever (see the "already seeded"

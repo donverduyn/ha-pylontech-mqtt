@@ -144,8 +144,9 @@ also_copy = ["scripts/"]
 # by pytest's own addopts).
 pytest_add_cli_args_test_selection = [
     "--ignore=tests/test_devcontainer_seed_host_config.py",
-    "--ignore=tests/test_devcontainer_sync_config_in.py",
-    "--ignore=tests/test_devcontainer_jsonc_to_json.py",
+    "--ignore=tests/test_devcontainer_fs.py",
+    "--ignore=tests/test_devcontainer_json.py",
+    "--ignore=tests/test_devcontainer_cli.py",
     "--ignore=tests/test_sidecar_e2e.py",
     "--ignore=tests/test_transcripts.py",
 ]

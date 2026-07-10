@@ -40,18 +40,13 @@ script_dir_abs=$(cd "$script_dir" && pwd)
 # sudo mkdir -p "$HOME/.vscode-server/data/User/History"
 # sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
 
-# is_bind_mounted lives in lib/is-bind-mounted.sh, shared with
-# syncConfigOut.sh -- sourced first since sync-config-in.sh's
-# sync_config_in() below calls it without defining or sourcing it itself.
+# is_bind_mounted/full_ownership_walk/sync_config_in live in lib/fs.sh
+# (shared with syncConfigOut.sh, which needs is_bind_mounted too), not here
+# -- kept sourceable on its own so tests can exercise sync_config_in
+# directly without triggering this script's own top-level
+# installs/downloads/sudo calls (see that file).
 # shellcheck disable=SC1091 # path is repo-local and always present
-. "$(dirname "$0")/lib/is-bind-mounted.sh"
-
-# full_ownership_walk/default_content_for_relpath/write_placeholder/
-# sync_config_in live in lib/sync-config-in.sh, not here -- kept sourceable
-# on their own so tests can exercise them directly without triggering this
-# script's own top-level installs/downloads/sudo calls (see that file).
-# shellcheck disable=SC1091 # path is repo-local and always present
-. "$(dirname "$0")/lib/sync-config-in.sh"
+. "$(dirname "$0")/lib/fs.sh"
 
 tool_versions_file="$script_dir/tool-versions.env"
 
@@ -222,15 +217,39 @@ EOF
 # shellcheck disable=SC2016 # $PATH must stay literal here — it's expanded later when .bashrc is sourced, not now
 grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_modules/.bin:$PATH"' >> /home/vscode/.bashrc
 
-# The claude/opencode/kilo shell function shims themselves live in
-# lib/agent-cli-shims.sh, not inlined here as heredoc text -- that keeps
-# them real, shellcheck-linted, independently testable bash instead of an
-# opaque string literal only this script ever sees (see that file). This
-# step's only job is making sure a future interactive shell sources it.
+# lib/cli.sh's _devcontainer_define_cli_shim (see that file) is a generic
+# factory: given a CLI name plus its trigger words, override flag, default
+# flag, and any unconditional prefix flags, it defines a same-named shell
+# function that applies them. The three calls below are the only
+# CLI-specific knowledge that exists anywhere -- lib/cli.sh has no idea
+# what claude, opencode, kilo, --scope, or --global are.
+#
+# claude: auto mode ("--permission-mode auto") biases Claude Code toward
+# acting without stopping for clarifying questions, applied
+# unconditionally. MCP additions default to user scope so they stay under
+# ~/.claude instead of the workspace, unless -s/--scope was already given.
+#
+# opencode/kilo: both already use XDG home paths for normal config/data/
+# state, but their plugin command defaults to project-local config unless
+# --global is supplied -- defaulted here the same way, unless -g/--global
+# was already given. kilo itself is installed by this script's `pnpm
+# install -g` step above, not here -- unlike npm, pnpm never symlinks
+# global packages into the Node install it ran from, so it lands in pnpm's
+# own global bin dir.
+#
+# The calls below are plain data (CLI name, real binary path, trigger
+# words, flags) -- no "$@" or other shell metacharacters -- so they're safe
+# to write directly into this heredoc even though it's unquoted (needed so
+# $script_dir_abs still expands into an absolute path baked into .bashrc,
+# same as before). See _devcontainer_define_cli_shim's own comment for why
+# that distinction matters.
 grep -qF '# Devcontainer AI CLI home-config defaults' /home/vscode/.bashrc || cat >> /home/vscode/.bashrc <<EOF
 
 # Devcontainer AI CLI home-config defaults
-. "$script_dir_abs/lib/agent-cli-shims.sh"
+. "$script_dir_abs/lib/cli.sh"
+_devcontainer_define_cli_shim claude /home/vscode/.local/bin/claude "mcp add|mcp add-json" -s --scope "--scope user" "--permission-mode auto"
+_devcontainer_define_cli_shim opencode /usr/local/bin/opencode "plugin|plug" -g --global --global ""
+_devcontainer_define_cli_shim kilo /home/vscode/.local/share/pnpm/bin/kilo "plugin|plug" -g --global --global ""
 EOF
 
 # Same idea for the Antigravity CLI (agy): --dangerously-skip-permissions

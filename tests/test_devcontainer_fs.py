@@ -1,7 +1,7 @@
 """
-Tests for .devcontainer/lib/sync-config-in.sh's sync_config_in(), the
-container-side half of getting a config path into place (the host-side
-half is seedHostConfig.sh -- see test_devcontainer_seed_host_config.py).
+Tests for .devcontainer/lib/fs.sh's sync_config_in(), the container-side
+half of getting a config path into place (the host-side half is
+seedHostConfig.sh -- see test_devcontainer_seed_host_config.py).
 
 The regression this guards: sync_config_in must be a pure copy from
 $HOME/.agent-sync into the real container path, never inventing content of
@@ -24,22 +24,12 @@ import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
-_IS_BIND_MOUNTED_LIB = _ROOT / ".devcontainer" / "lib" / "is-bind-mounted.sh"
-_LIB = _ROOT / ".devcontainer" / "lib" / "sync-config-in.sh"
+_LIB = _ROOT / ".devcontainer" / "lib" / "fs.sh"
 
 
 def _sync_config_in(fake_home: Path, relpath: str) -> None:
-    # sync_config_in() calls is_bind_mounted() without defining or sourcing
-    # it itself -- postCreate.sh sources lib/is-bind-mounted.sh first (see
-    # that script), so this must too.
     subprocess.run(
-        [
-            "bash",
-            "-c",
-            f'. "{_IS_BIND_MOUNTED_LIB}"; . "{_LIB}"; sync_config_in "$1"',
-            "--",
-            relpath,
-        ],
+        ["bash", "-c", f'. "{_LIB}"; sync_config_in "$1"', "--", relpath],
         env={**os.environ, "HOME": str(fake_home)},
         capture_output=True,
         text=True,
