@@ -31,25 +31,6 @@ jobs:
           cache-dependency-glob: |
             requirements*.txt
 
-      - name: Close stale minimum-version PR (open >7 days)
-        env:
-          GH_TOKEN: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
-          BRANCH: automation/min-ha-version-update
-        # Runs before the refresh below so that if the existing PR is stale,
-        # it's already closed by the time "Open or update" looks for one —
-        # otherwise it would just keep editing a PR nobody's merging. Keeps
-        # at most one open PR from this automation at a time: either the
-        # current (not yet stale) one gets updated in place, or a fresh one
-        # opens next once this step has retired the old one.
-        run: |
-          stale_pr="$(gh pr list --head "$BRANCH" --state open --json number,createdAt \
-            --jq '.[] | select((now - (.createdAt | fromdateiso8601)) > (7 * 24 * 60 * 60)) | .number')"
-          if [ -n "$stale_pr" ]; then
-            echo "Closing stale PR #$stale_pr (open more than 7 days without merging)."
-            gh pr close "$stale_pr" --comment \
-              "Closing automatically: this PR has been open more than 7 days without merging. Keeping at most one open minimum-HA-version PR at a time — a fresh one (reflecting whatever's current) will open on the next scheduled run."
-          fi
-
       - name: Refresh minimum supported HA version
         run: python3 scripts/update_dependencies.py --min-ha-version-only
 
