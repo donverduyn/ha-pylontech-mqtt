@@ -52,9 +52,13 @@ if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
 fi
 echo $$ > "$pidfile"
 
-is_bind_mounted() {
-  mountpoint -q "$1" 2>/dev/null
-}
+# is_bind_mounted/atomic_copy are shared with postCreate.sh (via
+# lib/sync-config-in.sh) and seedHostConfig.sh respectively -- see those
+# lib files.
+# shellcheck disable=SC1091 # path is repo-local and always present
+. "$(dirname "$0")/lib/is-bind-mounted.sh"
+# shellcheck disable=SC1091 # path is repo-local and always present
+. "$(dirname "$0")/lib/atomic-write.sh"
 
 sync_path() {
   relpath="$1"
@@ -67,10 +71,7 @@ sync_path() {
     rsync -a --delete "$live/" "$staged/"
   else
     if [ ! -f "$staged" ] || ! cmp -s "$live" "$staged"; then
-      mkdir -p "$(dirname "$staged")"
-      tmp="$staged.tmp.$$"
-      cp -p "$live" "$tmp"
-      mv -f "$tmp" "$staged"
+      atomic_copy "$live" "$staged"
     fi
   fi
 }

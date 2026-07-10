@@ -3,10 +3,13 @@
 # tests can source just this -- postCreate.sh's own top-level body runs
 # real installs/downloads/sudo calls unconditionally the moment it's
 # invoked, which a unit test has no business triggering.
-
-is_bind_mounted() {
-  mountpoint -q "$1" 2>/dev/null
-}
+#
+# is_bind_mounted() is expected to already be defined by the time
+# sync_config_in() below is called -- sourced from lib/is-bind-mounted.sh
+# by whatever sources this file (postCreate.sh; tests do the same -- see
+# test_devcontainer_sync_config_in.py), not re-sourced here, since
+# is-bind-mounted.sh is also shared with syncConfigOut.sh and has no
+# reason to know this file's location to find it.
 
 full_ownership_walk() {
   walk_relpath=$1

@@ -23,11 +23,18 @@ Two regressions this guards:
    invents content of its own, so something has to already be staged
    for it to copy.
 
+3. is_declared_dir_mount()'s field parsing must not depend on target=
+   sitting immediately before type=bind in a mount spec -- Docker mount
+   strings don't guarantee field order, so a spec with an extra field
+   wedged between them (e.g. consistency=cached) must still be recognized
+   as a directory mount, not silently fall through to the bare-file case.
+
 These tests exercise the real script and the real devcontainer.json/
 config-files.txt, not a reimplementation of the logic.
 """
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -141,3 +148,43 @@ def test_already_seeded_path_is_left_alone(fake_host):
     _run_seed(fake_home, project_dir)  # second run must not touch it again
 
     assert (staged / "marker").read_text() == "from a prior container run"
+
+
+def test_dir_mount_detected_despite_extra_field_between_target_and_type(
+    fake_host, tmp_path
+):
+    fake_home, project_dir = fake_host
+
+    devcontainer_copy = tmp_path / "devcontainer_copy"
+    shutil.copytree(_DEVCONTAINER_DIR, devcontainer_copy)
+
+    devcontainer_json = devcontainer_copy / "devcontainer.json"
+    original = devcontainer_json.read_text()
+    target_field = "target=/home/vscode/.config/gh/,type=bind"
+    assert target_field in original, (
+        "fixture assumption broken: devcontainer.json's .config/gh mount "
+        "spec no longer matches this test's expected format"
+    )
+    modified = original.replace(
+        target_field,
+        "target=/home/vscode/.config/gh/,consistency=cached,type=bind",
+    )
+    assert modified != original
+    devcontainer_json.write_text(modified)
+
+    subprocess.run(
+        ["bash", str(devcontainer_copy / "seedHostConfig.sh")],
+        cwd=project_dir,
+        env={**os.environ, "HOME": str(fake_home)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    staged = _staged_path(fake_home, project_dir, ".config/gh")
+    assert staged.is_dir(), (
+        "a mount spec with a field (e.g. consistency=cached) between "
+        "target= and type=bind must still be recognized as a directory "
+        "bind mount, not mis-seeded as a bare file"
+    )
+    assert not staged.is_file()

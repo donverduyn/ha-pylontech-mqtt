@@ -29,6 +29,10 @@ disable_copilot_cli_auto_update
 prepare_agent_sync
 
 script_dir=$(dirname "$0")
+# Absolute, unlike $script_dir above: this one gets written into .bashrc
+# below, read back by a future interactive shell whose cwd has no relation
+# to wherever postCreate.sh itself was invoked from.
+script_dir_abs=$(cd "$script_dir" && pwd)
 
 # Mounted from this project's host-side sync directory so VS Code Local
 # History survives devcontainer rebuilds. Docker can create bind mount
@@ -36,11 +40,16 @@ script_dir=$(dirname "$0")
 # sudo mkdir -p "$HOME/.vscode-server/data/User/History"
 # sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
 
-# is_bind_mounted/full_ownership_walk/default_content_for_relpath/
-# write_placeholder/sync_config_in live in lib/sync-config-in.sh, not here
-# -- kept sourceable on their own so tests can exercise them directly
-# without triggering this script's own top-level installs/downloads/sudo
-# calls (see that file).
+# is_bind_mounted lives in lib/is-bind-mounted.sh, shared with
+# syncConfigOut.sh -- sourced first since sync-config-in.sh's
+# sync_config_in() below calls it without defining or sourcing it itself.
+# shellcheck disable=SC1091 # path is repo-local and always present
+. "$(dirname "$0")/lib/is-bind-mounted.sh"
+
+# full_ownership_walk/default_content_for_relpath/write_placeholder/
+# sync_config_in live in lib/sync-config-in.sh, not here -- kept sourceable
+# on their own so tests can exercise them directly without triggering this
+# script's own top-level installs/downloads/sudo calls (see that file).
 # shellcheck disable=SC1091 # path is repo-local and always present
 . "$(dirname "$0")/lib/sync-config-in.sh"
 
@@ -119,12 +128,12 @@ setsid nohup bash "$script_dir/syncConfigOut.sh" > /tmp/sync-config-out.log 2>&1
 # the same source tests.yaml's meta-lint job installs them from (see that
 # job's identical curl+checksum steps) -- kept in sync by `make
 # update-deps` instead of two independently hand-maintained version/hash
-# pairs. Installed to /usr/local/bin rather than the .local/bin used for
-# opencode/kilo below: that path isn't guaranteed on PATH for every
-# shell/tool-invocation context (only a login shell's ~/.profile default
-# adds it), while /usr/local/bin always is -- and .pre-commit-config.yaml's
-# local/language:system hooks for both linters need to resolve them
-# regardless of how pre-commit itself gets invoked.
+# pairs. Installed to /usr/local/bin rather than ~/.local/bin: that path
+# isn't guaranteed on PATH for every shell/tool-invocation context (only a
+# login shell's ~/.profile default adds it), while /usr/local/bin always is
+# -- and .pre-commit-config.yaml's local/language:system hooks for both
+# linters need to resolve them regardless of how pre-commit itself gets
+# invoked.
 curl -sSfLo /tmp/actionlint.tar.gz \
   "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 echo "$ACTIONLINT_SHA256  /tmp/actionlint.tar.gz" | sha256sum -c
@@ -163,51 +172,6 @@ pnpm add -g \
   --allow-build=@kilocode/cli \
   "@openai/codex@$CODEX_VERSION" \
   "@kilocode/cli@$KILO_VERSION"
-
-# Keep OpenCode/Kilo plugin installs in their home-backed global config.
-# Both CLIs already use XDG home paths for normal config/data/state, but their
-# plugin command defaults to project-local config unless --global is supplied.
-mkdir -p /home/vscode/.local/bin
-cat > /home/vscode/.local/bin/opencode <<'EOF'
-#!/bin/sh
-if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
-  command_name="$1"
-  shift
-  has_global=0
-  for arg in "$@"; do
-    case "$arg" in
-      -g|--global) has_global=1 ;;
-    esac
-  done
-  if [ "$has_global" -eq 0 ]; then
-    exec /usr/local/bin/opencode "$command_name" --global "$@"
-  fi
-  exec /usr/local/bin/opencode "$command_name" "$@"
-fi
-exec /usr/local/bin/opencode "$@"
-EOF
-cat > /home/vscode/.local/bin/kilo <<'EOF'
-#!/bin/sh
-# kilo itself is installed by `pnpm install -g` below into pnpm's own global
-# bin dir, not nvm's -- unlike npm, pnpm never symlinks global packages into
-# the Node install it ran from.
-if [ "$1" = "plugin" ] || [ "$1" = "plug" ]; then
-  command_name="$1"
-  shift
-  has_global=0
-  for arg in "$@"; do
-    case "$arg" in
-      -g|--global) has_global=1 ;;
-    esac
-  done
-  if [ "$has_global" -eq 0 ]; then
-    exec /home/vscode/.local/share/pnpm/bin/kilo "$command_name" --global "$@"
-  fi
-  exec /home/vscode/.local/share/pnpm/bin/kilo "$command_name" "$@"
-fi
-exec /home/vscode/.local/share/pnpm/bin/kilo "$@"
-EOF
-chmod +x /home/vscode/.local/bin/opencode /home/vscode/.local/bin/kilo
 
 # /usr/local's site-packages is root-owned, so deps can't install into the base image's
 # system Python as the vscode user. Use a uv-managed venv instead: uv is fast enough that
@@ -258,31 +222,15 @@ EOF
 # shellcheck disable=SC2016 # $PATH must stay literal here — it's expanded later when .bashrc is sourced, not now
 grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_modules/.bin:$PATH"' >> /home/vscode/.bashrc
 
-# Auto mode ("--permission-mode auto") biases Claude Code toward acting
-# without stopping for clarifying questions. Default MCP additions to user
-# scope so they stay under ~/.claude instead of the workspace.
-grep -qF '# Devcontainer AI CLI home-config defaults' /home/vscode/.bashrc || cat >> /home/vscode/.bashrc <<'EOF'
+# The claude/opencode/kilo shell function shims themselves live in
+# lib/agent-cli-shims.sh, not inlined here as heredoc text -- that keeps
+# them real, shellcheck-linted, independently testable bash instead of an
+# opaque string literal only this script ever sees (see that file). This
+# step's only job is making sure a future interactive shell sources it.
+grep -qF '# Devcontainer AI CLI home-config defaults' /home/vscode/.bashrc || cat >> /home/vscode/.bashrc <<EOF
 
 # Devcontainer AI CLI home-config defaults
-unalias claude 2>/dev/null || true
-function claude {
-  local real_claude=/home/vscode/.local/bin/claude
-  if [ "$1" = "mcp" ] && { [ "$2" = "add" ] || [ "$2" = "add-json" ]; }; then
-    local arg has_scope=0 subcommand
-    for arg in "$@"; do
-      case "$arg" in
-        -s|--scope|--scope=*) has_scope=1 ;;
-      esac
-    done
-    if [ "$has_scope" -eq 0 ]; then
-      subcommand="$2"
-      shift 2
-      "$real_claude" --permission-mode auto mcp "$subcommand" --scope user "$@"
-      return
-    fi
-  fi
-  "$real_claude" --permission-mode auto "$@"
-}
+. "$script_dir_abs/lib/agent-cli-shims.sh"
 EOF
 
 # Same idea for the Antigravity CLI (agy): --dangerously-skip-permissions

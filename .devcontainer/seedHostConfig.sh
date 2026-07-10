@@ -67,15 +67,13 @@ mkdir -p "$sync_dir"
 # host-side source before Docker evaluates the mount.
 mkdir -p "$sync_dir/.vscode-server/data/User/History"
 
-# Rename onto $2 instead of writing $2 directly, so a concurrent run of this
-# same script (another project restarting at the same moment) can never
-# observe or produce a half-written file.
-atomic_cp() {
-  tmp="$2.tmp.$$"
-  mkdir -p "$(dirname "$2")"
-  cp -p "$1" "$tmp"
-  mv -f "$tmp" "$2"
-}
+# atomic_copy/atomic_write (write onto a temp file next to the destination,
+# then `mv -f` onto it, so a concurrent run of this same script -- another
+# project restarting at the same moment -- can never observe or produce a
+# half-written file) are shared with syncConfigOut.sh -- see
+# lib/atomic-write.sh.
+# shellcheck disable=SC1091 # path is repo-local and always present
+. "$(dirname "$0")/lib/atomic-write.sh"
 
 # Whether $1 (a relpath from config-files.txt) is declared as a directory
 # bind mount under $HOME in devcontainer.json's "mounts" array, for the
@@ -119,15 +117,52 @@ atomic_cp() {
 # first call and cached in _dir_mount_relpaths, since every call after the
 # first just needs the same unchanging set devcontainer.json already had
 # at the start of this run.
+#
+# Each mount spec's comma-separated fields are read by key (target=.../,
+# type=bind), not matched as one glued "target=...,/type=bind" substring --
+# that used to require type=bind to sit immediately after target= with
+# nothing else in between, so a hypothetical third field wedged between
+# them (e.g. consistency=cached) would silently fall through to "not a
+# declared dir mount" even though the mount really is one. Docker mount
+# strings don't guarantee field order, so this must not either. This
+# mirrors tests/test_devcontainer_jsonc_to_json.py's own
+# _declared_dir_mount_relpaths() Python helper, which already parsed it
+# this way.
 is_declared_dir_mount() {
+  # Saved before the loop below: it does `set -- $mount_str` to split each
+  # mount spec's fields, which overwrites this function's own positional
+  # params -- $1 itself would otherwise be clobbered by the last mount spec
+  # processed, breaking the case check at the bottom on this (first,
+  # cache-populating) call.
+  relpath_to_check="$1"
   if [ -z "${_dir_mount_relpaths+x}" ]; then
-    _dir_mount_relpaths=" $(bash "$(dirname "$0")/lib/jsonc-to-json.sh" "$(dirname "$0")/devcontainer.json" |
-      grep -oE 'target=/home/vscode/[^,"]+/,type=bind' |
-      sed -E 's#target=/home/vscode/(.*)/,type=bind#\1#' |
-      tr '\n' ' ') "
+    _dir_mount_relpaths=" "
+    while IFS= read -r mount_str; do
+      [ -n "$mount_str" ] || continue
+      is_bind=0
+      target_relpath=""
+      old_ifs=$IFS
+      IFS=,
+      # shellcheck disable=SC2086 # intentional word-splitting: this is how the comma-separated fields get split into positional params
+      set -- $mount_str
+      IFS=$old_ifs
+      for field in "$@"; do
+        case "$field" in
+          type=bind) is_bind=1 ;;
+          target=/home/vscode/*/) target_relpath=${field#target=/home/vscode/} ;;
+        esac
+      done
+      if [ "$is_bind" -eq 1 ] && [ -n "$target_relpath" ]; then
+        _dir_mount_relpaths="$_dir_mount_relpaths${target_relpath%/} "
+      fi
+    done <<EOF
+$(bash "$(dirname "$0")/lib/jsonc-to-json.sh" "$(dirname "$0")/devcontainer.json" |
+      grep -oE '"[^"]*target=/home/vscode/[^"]*"' |
+      sed -E 's/^"//; s/"$//')
+EOF
   fi
   case "$_dir_mount_relpaths" in
-    *" $1 "*) return 0 ;;
+    *" $relpath_to_check "*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -177,7 +212,7 @@ while IFS= read -r relpath; do
   elif [ -f "$host_path" ]; then
     # A real, existing bare file (.claude.json, almost always) -- only ever
     # read from the host here, never written to it.
-    atomic_cp "$host_path" "$sync_path"
+    atomic_copy "$host_path" "$sync_path"
   elif is_declared_dir_mount "$relpath"; then
     # Nothing on the host yet -- a tool that's simply never been used on
     # this host (gh/kilo/opencode are all plausible first-run-on-this-
@@ -200,9 +235,6 @@ while IFS= read -r relpath; do
     # sometime after this project's first-ever container build), this
     # project's staged copy won't pick that up on its own; deleting
     # $sync_path forces a fresh re-seed.
-    mkdir -p "$(dirname "$sync_path")"
-    tmp="$sync_path.tmp.$$"
-    default_content_for_relpath "$relpath" > "$tmp"
-    mv -f "$tmp" "$sync_path"
+    default_content_for_relpath "$relpath" | atomic_write "$sync_path"
   fi
 done < "$list_file"
