@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths   = ["tests"]
-pythonpath  = ["tests", ".", "src"]     # "." makes custom_components importable; "src" exposes pylontech_parser and structs
+pythonpath  = ["tests", ".", "src"]     # "." makes custom_components importable; "src" exposes parser/parser_schema/structs/main
 # "-m 'not e2e'" keeps a bare `pytest` fast and deterministic (no
 # containers, no real broker, no waiting out real timeouts/retries); run
 # the e2e suite explicitly with `pytest -m e2e`.
@@ -29,12 +29,6 @@ target-version = "py313"
 # deliberately relax for tests above — an unsorted import or a bare
 # try/except/pass is just as much a real issue in test code.
 select = ["E", "F", "I", "B", "UP", "SIM"]
-
-[tool.ruff.lint.per-file-ignores]
-# docstring reproduces two real, verbatim BMS wire-protocol header/data lines
-# (see parse_bat's docstring) — rewording or rewrapping them would misrepresent
-# the actual firmware output they document.
-"src/pylontech_parser.py" = ["E501"]
 
 [tool.mypy]
 # Scoped to production code only (not tests): this is what Home Assistant's
@@ -76,7 +70,7 @@ include = ["custom_components", "src", "scripts", "tests"]
 exclude = ["**/__pycache__", "**/.pytest_cache"]
 typeCheckingMode = "strict"
 # Mirrors [tool.pytest.ini_options].pythonpath above: "src" exposes
-# pylontech_parser/structs/main, "." makes custom_components importable,
+# parser/parser_schema/structs/main, "." makes custom_components importable,
 # matching how the test suite itself resolves these bare imports.
 extraPaths = ["src", "tests", "."]
 # Deliberately no venvPath/venv here: pyright falls back to whatever
@@ -137,7 +131,7 @@ reportUnnecessaryIsInstance = "none"
 # the repo root (e.g. "src.main.x_foo"), and hardcodes stripping a leading
 # "src." from that key to match how a src-layout package is actually
 # imported. It has no equivalent for any other directory name. The sidecar's
-# tests (and the Docker image) import main.py/pylontech_parser.py/structs.py
+# tests (and the Docker image) import main.py/parser.py/parser_schema.py/structs.py
 # as bare top-level modules via pytest's `pythonpath`/the image's flat COPY
 # layout — not as "docker.main" — so when this directory was named "docker",
 # mutmut's key ("docker.main.x_foo") never matched the key recorded at test

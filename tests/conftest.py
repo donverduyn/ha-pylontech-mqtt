@@ -1,9 +1,10 @@
 """
 Shared pytest fixtures and import bootstrap for ha-pylontech-mqtt tests.
 
-`pyproject.toml` puts the repo root and `docker/` on ``pythonpath``, so both
-`custom_components.pylontech_mqtt.*` and the HA-independent `pylontech_parser` /
-`structs` modules import normally with no manual sys.modules wiring needed.
+`pyproject.toml` puts the repo root and `src/` on ``pythonpath``, so both
+`custom_components.pylontech_mqtt.*` and the HA-independent `parser` /
+`parser_schema` / `structs` modules import normally with no manual
+sys.modules wiring needed.
 """
 
 import re
@@ -225,6 +226,42 @@ def start_stub(*extra_args: str, port: int = 0) -> StubProcess:
     return stub
 
 
+def _start_variant_stub(*extra_args: str) -> StubProcess:
+    """Start pylon_stub.py (on an OS-assigned port) with fixed base config
+    + *extra_args*. Shared by every test module that needs a stub instance
+    configured differently from the session-scoped ``stub_server`` (new
+    firmware, multi-group topology, etc.) — each gets its own process on its
+    own port, fully independent of the session stub and of each other."""
+    return start_stub(
+        "--batteries",
+        "2",
+        "--model",
+        "US5000",
+        "--soc",
+        "75",
+        *extra_args,
+    )
+
+
+@pytest.fixture(scope="module")
+def new_fw_stub():
+    """Stub with --firmware new (23-column layout, *.Id columns present)."""
+    _enable_sockets()
+    stub = _start_variant_stub("--firmware", "new")
+    try:
+        yield stub.port
+    finally:
+        stub.stop()
+
+
+@pytest.fixture
+def new_fw_conn(new_fw_stub):
+    s = socket.create_connection((STUB_HOST, new_fw_stub), timeout=3)
+    _drain_prompt(s)
+    yield s
+    s.close()
+
+
 @pytest.fixture(scope="session")
 def stub_server():
     """Start pylon_stub.py once for the whole test session; yield the port."""
@@ -325,52 +362,132 @@ def stub_conn(stub_server):
     s.close()
 
 
-# Convenience: parsed objects ready for assertions
-@pytest.fixture(scope="session")
-def pwr_system(_session_conn):
-    from pylontech_parser import PylontechParser
+class _SchemaParserAdapter:
+    """Test-only adapter exposing per-command method names (parse_pwr,
+    parse_bat, ...) on top of src/parser.py's schema-driven Parser +
+    src/parser_schema.py's schemas — the exact parser src/main.py runs in
+    production. Test bodies across this file call e.g. ``PylontechParser.
+    parse_pwr(raw)`` (see test_parser.py's top-of-file import alias) purely
+    because that's a convenient, familiar shape for a test to call; src/
+    main.py itself never shapes its calls this way — it instantiates
+    ``Parser(SOME_SCHEMA)`` directly, once per BMS command, at import time.
+    """
 
+    @staticmethod
+    def has_pwr_header(raw_text):
+        from parser import has_header
+        from parser_schema import PWR_TABLE_SCHEMA
+
+        return has_header(raw_text, PWR_TABLE_SCHEMA)
+
+    @staticmethod
+    def parse_pwr(raw_text, current_system=None):
+        from parser import Parser
+        from parser_schema import PWR_TABLE_SCHEMA
+        from structs import PylontechSystem
+
+        if current_system is None:
+            current_system = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
+        Parser(PWR_TABLE_SCHEMA).parse(raw_text, target=current_system)
+        return current_system
+
+    @staticmethod
+    def parse_number(value):
+        from parser import parse_number
+
+        return parse_number(value)
+
+    @staticmethod
+    def parse_pwr_indexed(raw_text, bat_id):
+        from parser import Parser
+        from parser_schema import PWR_INDEXED_SCHEMA
+
+        return Parser(PWR_INDEXED_SCHEMA).parse(raw_text, extra={"sys_id": bat_id})
+
+    @staticmethod
+    def parse_info(raw_text, system):
+        from parser import Parser
+        from parser_schema import INFO_SCHEMA
+
+        Parser(INFO_SCHEMA).parse(raw_text, target=system)
+        return system
+
+    @staticmethod
+    def parse_stat(raw_text, system):
+        from parser import Parser
+        from parser_schema import STAT_FIELDS
+
+        Parser(STAT_FIELDS).parse(raw_text, target=system)
+        return system
+
+    @staticmethod
+    def parse_time(raw_text, system):
+        from parser import Parser
+        from parser_schema import TIME_FIELDS
+
+        Parser(TIME_FIELDS).parse(raw_text, target=system)
+        return system
+
+    @staticmethod
+    def generate_time_command(timestamp):
+        from parser_schema import generate_time_command
+
+        return generate_time_command(timestamp)
+
+    @staticmethod
+    def parse_bat(raw_text, battery):
+        from parser import Parser
+        from parser_schema import BAT_TABLE_SCHEMA
+
+        Parser(BAT_TABLE_SCHEMA).parse(raw_text, target=battery)
+        return battery
+
+
+# Convenience: parsed objects ready for assertions, via _SchemaParserAdapter
+# (the exact parser src/main.py runs in production, see above).
+@pytest.fixture(scope="session")
+def parser_impl():
+    return _SchemaParserAdapter
+
+
+@pytest.fixture(scope="session")
+def pwr_system(parser_impl, _session_conn):
     raw = _raw_command(_session_conn, "pwr")
-    return PylontechParser.parse_pwr(raw)
+    return parser_impl.parse_pwr(raw)
 
 
 @pytest.fixture(scope="session")
-def info_system(_session_conn):
-    from pylontech_parser import PylontechParser
+def info_system(parser_impl, _session_conn):
     from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "info")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
-    return PylontechParser.parse_info(raw, sys)
+    return parser_impl.parse_info(raw, sys)
 
 
 @pytest.fixture(scope="session")
-def stat_system(_session_conn):
-    from pylontech_parser import PylontechParser
+def stat_system(parser_impl, _session_conn):
     from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "stat")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
-    return PylontechParser.parse_stat(raw, sys)
+    return parser_impl.parse_stat(raw, sys)
 
 
 @pytest.fixture(scope="session")
-def time_system(_session_conn):
-    from pylontech_parser import PylontechParser
+def time_system(parser_impl, _session_conn):
     from structs import PylontechSystem
 
     raw = _raw_command(_session_conn, "time")
     sys = PylontechSystem(0, 0, 0, 0, 0, 0, 0)
-    return PylontechParser.parse_time(raw, sys)
+    return parser_impl.parse_time(raw, sys)
 
 
 @pytest.fixture(scope="session")
-def bat_battery(_session_conn, pwr_system):
+def bat_battery(parser_impl, _session_conn, pwr_system):
     """Return the first battery from pwr_system with its cells populated
     by parsing the 'bat 1' response from the stub."""
-    from pylontech_parser import PylontechParser
-
     bat = pwr_system.batteries[0]
     raw = _raw_command(_session_conn, f"bat {bat.sys_id}")
-    PylontechParser.parse_bat(raw, bat)
+    parser_impl.parse_bat(raw, bat)
     return bat

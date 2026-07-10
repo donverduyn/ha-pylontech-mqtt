@@ -2,7 +2,13 @@
 Parser tests against the live TCP stub.
 
 Every test in this file sends a real command to pylon_stub.py and verifies
-that the parser correctly extracts every field it is responsible for.
+that the parser correctly extracts every field it is responsible for,
+against ``_SchemaParserAdapter`` (conftest.py) — src/parser.py's
+schema-driven engine bound to src/parser_schema.py's Pylontech schemas, the
+exact parser src/main.py runs in production. ``PylontechParser`` below is a
+local alias for that adapter, kept because it reads naturally at every call
+site in this file (``PylontechParser.parse_pwr(raw)`` etc.) — there is no
+longer a hand-written parser class of that name anywhere in the codebase.
 """
 
 import re
@@ -16,8 +22,8 @@ from conftest import (
     STUB_SOC_START,
     _raw_command,
 )
+from conftest import _SchemaParserAdapter as PylontechParser
 
-from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
 
@@ -172,6 +178,31 @@ class TestParsePwr:
         system = PylontechParser.parse_pwr(stripped)
         # Should still parse the data rows (defaults kick in)
         assert len(system.batteries) == STUB_BATTERIES
+
+    def test_parses_new_firmware_id_and_sysalarm_columns(self, new_fw_conn):
+        """The 23-column 'new' firmware layout (scripts/pylon_stub.py
+        --firmware new) inserts a Tlow.Id/Thigh.Id/Vlow.Id/Vhigh.Id column
+        after each of Tlow/Thigh/Vlow/Vhigh, and appends MosTempr/M.T.St/
+        SysAlarm.St after B.T.St — none of which parse_pwr's header lookup
+        targets by name. test_stub.py's TestStubNewFirmware only checks that
+        these columns are present in the raw text; nothing previously ran
+        that layout through the real parser, so a header/data-index mismatch
+        introduced by the extra columns would have gone unnoticed."""
+        raw = _raw_command(new_fw_conn, "pwr")
+        system = PylontechParser.parse_pwr(raw)
+
+        assert len(system.batteries) == STUB_BATTERIES
+        for bat in system.batteries:
+            assert bat.voltage > 0
+            assert bat.temp_low is not None
+            assert bat.temp_high is not None
+            assert bat.volt_low is not None
+            assert bat.volt_high is not None
+            assert bat.volt_status == "Normal"
+            assert bat.curr_status == "Normal"
+            assert bat.temp_status == "Normal"
+            assert bat.batt_volt_status == "Normal"
+            assert bat.batt_temp_status == "Normal"
 
 
 # parse_pwr_indexed — vertical 'pwr N' block (fallback battery discovery)
@@ -839,7 +870,6 @@ class TestParseBat:
 
     def test_absent_battery_has_no_cells(self, stub_conn):
         """Requesting 'bat N' for an absent/unknown slot must yield no cells."""
-        from pylontech_parser import PylontechParser
         from structs import PylontechBattery
 
         # Slot 99 does not exist in the stub → "Battery 99 not found" response
@@ -852,7 +882,6 @@ class TestParseBat:
         """A non-numeric voltage in a cell row must be skipped, not crash."""
         import logging
 
-        from pylontech_parser import PylontechParser
         from structs import PylontechBattery
 
         raw = (
@@ -880,7 +909,6 @@ class TestParseBat:
         for the missing header token, int(parts[cap_idx]) reads "67%" and
         raises ValueError, silently dropping the row.
         """
-        from pylontech_parser import PylontechParser
         from structs import PylontechBattery
 
         raw = (
@@ -907,7 +935,6 @@ class TestParseBat:
         branch, leaving the previous values on the system object intact while
         setting batteries = []  — an inconsistent state.
         """
-        from pylontech_parser import PylontechParser
         from structs import PylontechSystem
 
         raw = (

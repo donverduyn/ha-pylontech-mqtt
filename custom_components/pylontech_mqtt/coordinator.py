@@ -477,7 +477,8 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # Per-module / per-cell presence
     #
     # The sidecar's "pwr" parser drops "Absent" module rows from the
-    # payload entirely (see pylontech_parser.parse_pwr), so a module that
+    # payload entirely (see src/parser_schema.py's PWR_TABLE_SCHEMA
+    # skip_row), so a module that
     # drops out simply stops appearing in system["batteries"] on the next
     # message — it is never reported as present-but-errored. Entities for
     # that module and its cells are deliberately NOT removed from the

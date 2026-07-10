@@ -31,8 +31,9 @@ WORKDIR /app
 COPY requirements_runtime.lock.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements_runtime.lock.txt
 
-# Copy parser, structs, and the sidecar entry point
-COPY src/pylontech_parser.py .
+# Copy the parsing engine, Pylontech schemas, structs, and the sidecar entry point
+COPY src/parser.py .
+COPY src/parser_schema.py .
 COPY src/structs.py .
 COPY src/main.py .
 

@@ -19,43 +19,14 @@ import pytest
 from conftest import (
     STUB_HOST,
     STUB_SOC_START,
-    StubProcess,
     _drain_prompt,
     _raw_command,
-    start_stub,
+    _start_variant_stub,
 )
 
-# Helpers: spin up extra stub instances for variant configurations
-
-
-def _start_variant_stub(*extra_args: str) -> StubProcess:
-    """Start pylon_stub.py (on an OS-assigned port) with fixed base config
-    + *extra_args*."""
-    return start_stub(
-        "--batteries",
-        "2",
-        "--model",
-        "US5000",
-        "--soc",
-        "75",
-        *extra_args,
-    )
-
-
-# Module-scoped fixtures for variant stubs
-
-
-@pytest.fixture(scope="module")
-def new_fw_stub():
-    """Stub with --firmware new (23-column layout, *.Id columns present)."""
-    from conftest import _enable_sockets
-
-    _enable_sockets()
-    stub = _start_variant_stub("--firmware", "new")
-    try:
-        yield stub.port
-    finally:
-        stub.stop()
+# new_fw_stub/new_fw_conn live in conftest.py (shared with test_parser.py's
+# parser-level coverage of the new-firmware column layout); only the
+# multi-group variant is specific to this file.
 
 
 @pytest.fixture(scope="module")
@@ -69,14 +40,6 @@ def multi_grp_stub():
         yield stub.port
     finally:
         stub.stop()
-
-
-@pytest.fixture
-def new_fw_conn(new_fw_stub):
-    s = socket.create_connection((STUB_HOST, new_fw_stub), timeout=3)
-    _drain_prompt(s)
-    yield s
-    s.close()
 
 
 @pytest.fixture

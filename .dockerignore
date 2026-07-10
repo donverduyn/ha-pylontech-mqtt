@@ -1,7 +1,7 @@
-# docker/Dockerfile only COPYs src/pylontech_parser.py, src/structs.py,
-# and src/main.py — everything else here was still entering the build
-# context (git history, caches, local venvs, the HA integration itself)
-# because release.yaml builds with `context: .`, the repo root.
+# docker/Dockerfile only COPYs src/parser.py, src/parser_schema.py,
+# src/structs.py, and src/main.py — everything else here was still entering
+# the build context (git history, caches, local venvs, the HA integration
+# itself) because release.yaml builds with `context: .`, the repo root.
 .git/
 .github/
 .devcontainer/

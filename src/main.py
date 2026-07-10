@@ -53,8 +53,35 @@ from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode
 from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 
-from pylontech_parser import PylontechParser
+from parser import Parser, has_header
+from parser_schema import (
+    BAT_TABLE_SCHEMA,
+    CMD_INFO,
+    CMD_PWR,
+    CMD_STAT,
+    CMD_TIME,
+    CONSOLE_ALT_TERMINATOR,
+    CONSOLE_PROMPT,
+    INFO_SCHEMA,
+    PWR_INDEXED_SCHEMA,
+    PWR_TABLE_SCHEMA,
+    STAT_FIELDS,
+    TIME_FIELDS,
+    cmd_bat,
+    cmd_pwr_indexed,
+    generate_time_command,
+)
 from structs import PylontechBattery, PylontechSystem
+
+# One Parser per BMS command, bound to its schema (src/parser_schema.py)
+# at import time — src/parser.py's engine has no Pylontech-specific knowledge of
+# its own, so this is the one place a schema and the engine that walks it meet.
+_pwr_parser = Parser(PWR_TABLE_SCHEMA)
+_pwr_indexed_parser = Parser(PWR_INDEXED_SCHEMA)
+_info_parser = Parser(INFO_SCHEMA)
+_stat_parser = Parser(STAT_FIELDS)
+_time_parser = Parser(TIME_FIELDS)
+_bat_parser = Parser(BAT_TABLE_SCHEMA)
 
 # Logging
 
@@ -154,17 +181,12 @@ GIT_SHA = os.getenv("GIT_SHA", "unknown")
 # BMS connection
 
 
-PROMPT = b"pylon>"
-# Some Pytes/Pylontech firmware variants complete a command without ever
-# emitting the "pylon>" prompt. Accepting this alternate terminator too keeps
-# those consoles from timing out on every single command.
-_ALT_TERMINATOR = b"Command completed"
-# Once _ALT_TERMINATOR shows up without PROMPT, wait this much longer for a
-# trailing "pylon>" that arrived in a separate read before accepting the
-# response as-is — this is just a short best-effort wait, not a correctness
-# guarantee: if the prompt is slower than this, _stray_prompt_pending (see
-# BmsConnection) is what actually prevents it from leaking into whatever
-# gets read next, however late it eventually arrives.
+# Once CONSOLE_ALT_TERMINATOR shows up without CONSOLE_PROMPT, wait this much
+# longer for a trailing "pylon>" that arrived in a separate read before
+# accepting the response as-is — this is just a short best-effort wait, not a
+# correctness guarantee: if the prompt is slower than this,
+# _stray_prompt_pending (see BmsConnection) is what actually prevents it from
+# leaking into whatever gets read next, however late it eventually arrives.
 _ALT_TERMINATOR_GRACE = 0.3
 _READ_TIMEOUT = 5.0  # overall deadline waiting for a complete response
 _POLL_INTERVAL = 0.1  # per-read timeout while polling for more data
@@ -186,7 +208,7 @@ class BmsConnection:
     def __init__(self) -> None:
         self._tcp: socket.socket | None = None
         self._serial: serial.Serial | None = None
-        # Set when a response was accepted via _ALT_TERMINATOR without ever
+        # Set when a response was accepted via CONSOLE_ALT_TERMINATOR without ever
         # seeing "pylon>" — the BMS may still emit that trailing prompt after
         # we've already moved on. It can arrive interleaved with the *next*
         # command's response instead of before it (a fixed flush-before-write
@@ -266,17 +288,17 @@ class BmsConnection:
                 chunk = self._serial.read(4096)  # b"" on timeout; serial has no EOF
             if chunk:
                 data += chunk
-            if self._stray_prompt_pending and data.startswith(PROMPT):
+            if self._stray_prompt_pending and data.startswith(CONSOLE_PROMPT):
                 # A real response never begins with the prompt itself (the
                 # console only ever prints it after content) — a leading
                 # occurrence here can only be the previous exchange's
                 # straggler. Strip it once and keep reading for *this*
                 # command's own terminator.
-                data = data[len(PROMPT) :]
+                data = data[len(CONSOLE_PROMPT) :]
                 self._stray_prompt_pending = False
-            if PROMPT in data:
+            if CONSOLE_PROMPT in data:
                 return data
-            if _ALT_TERMINATOR in data:
+            if CONSOLE_ALT_TERMINATOR in data:
                 if grace_deadline is None:
                     grace_deadline = time.monotonic() + _ALT_TERMINATOR_GRACE
                 elif time.monotonic() >= grace_deadline:
@@ -284,8 +306,8 @@ class BmsConnection:
                     return data
         raise TimeoutError(
             f"Timed out after {_READ_TIMEOUT}s waiting for the "
-            f"{PROMPT.decode()!r} prompt or {_ALT_TERMINATOR.decode()!r} "
-            f"({len(data)} bytes received)"
+            f"{CONSOLE_PROMPT.decode()!r} prompt or "
+            f"{CONSOLE_ALT_TERMINATOR.decode()!r} ({len(data)} bytes received)"
         )
 
     def _flush_stale_input(self) -> None:
@@ -552,10 +574,10 @@ def _fetch_batteries_indexed(bms: _CommandSender, system: PylontechSystem) -> No
     """
     batteries: list[PylontechBattery] = []
     for bat_id in range(1, MAX_BATTERIES + 1):
-        raw = bms.send_command(f"pwr {bat_id}")
-        if "not found" in raw:
+        raw = bms.send_command(cmd_pwr_indexed(bat_id))
+        if PWR_INDEXED_SCHEMA.not_found_marker in raw:
             break
-        bat = PylontechParser.parse_pwr_indexed(raw, bat_id)
+        bat = _pwr_indexed_parser.parse(raw, extra={"sys_id": bat_id})
         if bat is not None:
             batteries.append(bat)
 
@@ -584,13 +606,13 @@ def _enrich_batteries_indexed(bms: _CommandSender, system: PylontechSystem) -> N
     """
     for bat in system.batteries:
         try:
-            raw = bms.send_command(f"pwr {bat.sys_id}")
+            raw = bms.send_command(cmd_pwr_indexed(bat.sys_id))
         except Exception as err:
             _LOGGER.warning(
                 "Could not fetch indexed detail for battery %d: %s", bat.sys_id, err
             )
             continue
-        indexed = PylontechParser.parse_pwr_indexed(raw, bat.sys_id)
+        indexed = _pwr_indexed_parser.parse(raw, extra={"sys_id": bat.sys_id})
         if indexed is None:
             continue
         bat.coul_status = indexed.coul_status
@@ -823,46 +845,44 @@ def main() -> None:
         try:
             if not info_fetched:
                 _LOGGER.info("Fetching device info...")
-                raw_info = bms.send_command("info")
+                raw_info = bms.send_command(CMD_INFO)
                 if system is None:
                     system = PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
-                PylontechParser.parse_info(raw_info, system)
+                _info_parser.parse(raw_info, target=system)
                 info_fetched = True
 
                 if AUTO_SYNC_TIME:
                     _LOGGER.info("Syncing BMS time...")
-                    bms.send_command(
-                        PylontechParser.generate_time_command(datetime.now())
-                    )
+                    bms.send_command(generate_time_command(datetime.now()))
 
             _LOGGER.debug("Polling BMS...")
-            raw_pwr = bms.send_command("pwr")
-            if "Power Volt" not in raw_pwr:
+            raw_pwr = bms.send_command(CMD_PWR)
+            if not has_header(raw_pwr, PWR_TABLE_SCHEMA):
                 time.sleep(1.0)
-                raw_pwr = bms.send_command("pwr")
+                raw_pwr = bms.send_command(CMD_PWR)
 
             if system is None:
                 system = PylontechSystem(0, 0, 0, 0, 0.0, 0.0, 0.0)
 
-            pwr_parsed = "Power Volt" in raw_pwr
+            pwr_parsed = has_header(raw_pwr, PWR_TABLE_SCHEMA)
             if pwr_parsed:
-                PylontechParser.parse_pwr(raw_pwr, system)
+                _pwr_parser.parse(raw_pwr, target=system)
 
             if not system.batteries or not pwr_parsed:
                 # Either the aggregate table's header is missing entirely, or
                 # it's present but every data row failed to parse (wrong
                 # column count, corrupt firmware output, etc.) — parse_pwr
                 # resets system.batteries to [] in both cases. A response
-                # still missing "Power Volt" after the retry above means
+                # still missing a 'pwr' header after the retry above means
                 # parse_pwr was skipped this iteration too, so system.batteries
                 # (and voltage/current/soc/power) may just be leftovers from
                 # the previous poll — always refall back to indexed probing in
                 # that case rather than silently republishing stale readings.
                 # "pwr N" uses a completely different (vertical) response
-                # format — see PylontechParser.parse_pwr_indexed. This
-                # correctness fallback runs regardless of MONITORING_LEVEL —
-                # without it there would be zero/stale battery data on such
-                # firmware at any detail level.
+                # format — see _pwr_indexed_parser above. This correctness
+                # fallback runs regardless of MONITORING_LEVEL — without it
+                # there would be zero/stale battery data on such firmware at
+                # any detail level.
                 _LOGGER.warning(
                     "Aggregate 'pwr' response missing or yielded no valid "
                     "batteries — falling back to per-battery 'pwr N' polling"
@@ -875,14 +895,14 @@ def main() -> None:
             elif MONITORING_LEVEL in ("medium", "high"):
                 _enrich_batteries_indexed(bms, system)
 
-            raw_stat = bms.send_command("stat")
-            raw_time = bms.send_command("time")
+            raw_stat = bms.send_command(CMD_STAT)
+            raw_time = bms.send_command(CMD_TIME)
 
             if MONITORING_LEVEL == "high":
                 for bat in system.batteries:
                     try:
-                        raw_bat = bms.send_command(f"bat {bat.sys_id}")
-                        PylontechParser.parse_bat(raw_bat, bat)
+                        raw_bat = bms.send_command(cmd_bat(bat.sys_id))
+                        _bat_parser.parse(raw_bat, target=bat)
                     except Exception as bat_err:
                         _LOGGER.warning(
                             "Could not fetch cell data for battery %d: %s",
@@ -890,8 +910,8 @@ def main() -> None:
                             bat_err,
                         )
 
-            PylontechParser.parse_stat(raw_stat, system)
-            PylontechParser.parse_time(raw_time, system)
+            _stat_parser.parse(raw_stat, target=system)
+            _time_parser.parse(raw_time, target=system)
 
             energy.update(system.power)
             system.energy_in = round(energy.energy_in, 3)

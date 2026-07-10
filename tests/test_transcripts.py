@@ -1,5 +1,7 @@
 """Replay real-hardware transcripts (tests/fixtures/transcripts/*.json)
-through the real PylontechParser.
+through the real parser — src/parser.py's schema-driven engine bound to
+src/parser_schema.py's Pylontech schemas, the exact parser src/main.py
+runs in production.
 
 Every other parser test uses hand-built response strings written to match
 our own understanding of the protocol (or scripts/pylon_stub.py, itself
@@ -16,7 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from pylontech_parser import PylontechParser
+from parser import Parser
+from parser_schema import (
+    BAT_TABLE_SCHEMA,
+    INFO_SCHEMA,
+    PWR_INDEXED_SCHEMA,
+    PWR_TABLE_SCHEMA,
+    STAT_FIELDS,
+    TIME_FIELDS,
+)
 from structs import PylontechBattery, PylontechSystem
 
 _TRANSCRIPT_DIR = Path(__file__).parent / "fixtures" / "transcripts"
@@ -34,13 +44,13 @@ def _replay(transcript_path: Path) -> None:
     system = _new_system()
 
     if "info" in commands:
-        PylontechParser.parse_info(commands["info"], system)
+        Parser(INFO_SCHEMA).parse(commands["info"], target=system)
     if "pwr" in commands:
-        PylontechParser.parse_pwr(commands["pwr"], system)
+        Parser(PWR_TABLE_SCHEMA).parse(commands["pwr"], target=system)
     if "stat" in commands:
-        PylontechParser.parse_stat(commands["stat"], system)
+        Parser(STAT_FIELDS).parse(commands["stat"], target=system)
     if "time" in commands:
-        PylontechParser.parse_time(commands["time"], system)
+        Parser(TIME_FIELDS).parse(commands["time"], target=system)
 
     for cmd, raw in commands.items():
         match = _BATTERY_INDEX_RE.match(cmd)
@@ -49,13 +59,13 @@ def _replay(transcript_path: Path) -> None:
         kind, index_str = match.groups()
         bat_id = int(index_str)
         if kind == "pwr":
-            PylontechParser.parse_pwr_indexed(raw, bat_id)
+            Parser(PWR_INDEXED_SCHEMA).parse(raw, extra={"sys_id": bat_id})
         else:
             existing = next((b for b in system.batteries if b.sys_id == bat_id), None)
             battery = existing or PylontechBattery(
                 bat_id, 0.0, 0.0, 0.0, 0, "", 0.0, 0.0
             )
-            PylontechParser.parse_bat(raw, battery)
+            Parser(BAT_TABLE_SCHEMA).parse(raw, target=battery)
 
     if "pwr" in commands:
         assert system.voltage >= 0
