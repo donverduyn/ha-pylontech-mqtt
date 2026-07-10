@@ -1,4 +1,4 @@
-"""Unit tests for main._warn_if_cycle_too_slow (docker/main.py).
+"""Unit tests for main._warn_if_cycle_too_slow (src/main.py).
 
 POLL_INTERVAL is validated at startup against _MAX_POLL_INTERVAL, but that
 only bounds the configured sleep — not how long a poll cycle's actual BMS

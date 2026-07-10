@@ -1,4 +1,4 @@
-"""Regression test for docker/main.py's reconnect-sleep SIGTERM bypass.
+"""Regression test for src/main.py's reconnect-sleep SIGTERM bypass.
 
 The `except (serial.SerialException, OSError, IOError)` branch used to call
 `time.sleep(5)` unprotected. A KeyboardInterrupt (raised by the SIGTERM
@@ -13,8 +13,9 @@ bms.close(), no energy.flush()).
 import signal
 from unittest.mock import MagicMock
 
-import main
 import pytest
+
+import main
 
 
 class _RaisingBmsConnection:

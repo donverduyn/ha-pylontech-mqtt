@@ -1,4 +1,4 @@
-"""Unit tests for main._publish_succeeded (docker/main.py).
+"""Unit tests for main._publish_succeeded (src/main.py).
 
 client.publish() returns MQTT_ERR_NO_CONN rather than raising when the
 client isn't currently connected, so the poll loop must check the return
@@ -8,8 +8,9 @@ sidecar silently claims delivery for data that never left the process.
 
 from dataclasses import dataclass
 
-from main import _publish_succeeded
 from paho.mqtt.enums import MQTTErrorCode
+
+from main import _publish_succeeded
 
 
 @dataclass

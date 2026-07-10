@@ -1,4 +1,4 @@
-"""Tests for BmsConnection (docker/main.py) against the real TCP stub server.
+"""Tests for BmsConnection (src/main.py) against the real TCP stub server.
 
 These exercise the terminator-based read loop end-to-end over an actual
 socket, rather than mocking send/recv — the whole point of the fix is
@@ -9,9 +9,10 @@ import socket
 import threading
 import time
 
-import main
 import pytest
 from conftest import STUB_HOST
+
+import main
 
 
 @pytest.fixture

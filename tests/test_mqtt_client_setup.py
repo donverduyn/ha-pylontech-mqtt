@@ -1,4 +1,4 @@
-"""Unit tests for main._build_mqtt_client (docker/main.py).
+"""Unit tests for main._build_mqtt_client (src/main.py).
 
 Both MQTT clients in this repo (the sidecar and the HA-side coordinator)
 connected over plaintext by default with no way to opt into TLS, so a

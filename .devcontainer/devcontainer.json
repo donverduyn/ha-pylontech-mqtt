@@ -233,17 +233,15 @@
         "ms-python.python",
         "ms-python.pylance",
         "charliermarsh.ruff",
-        // Matches [tool.mypy] in pyproject.toml, the strict-typing gate CI
-        // enforces on custom_components/docker/scripts.
         "ms-python.mypy-type-checker",
         "tamasfe.even-better-toml",
         "redhat.vscode-yaml",
-        // Workflow schema validation/autocomplete for .github/workflows/*.yaml.
         "github.vscode-github-actions",
         "ms-azuretools.vscode-docker",
-        // Matches the hadolint-docker and shellcheck pre-commit hooks.
         "exiasr.hadolint",
-        "timonwong.shellcheck"
+        "timonwong.shellcheck",
+        "openai.chatgpt",
+        "Anthropic.claude-code"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",

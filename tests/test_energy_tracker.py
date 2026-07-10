@@ -1,10 +1,11 @@
-"""Unit tests for EnergyTracker (docker/main.py)."""
+"""Unit tests for EnergyTracker (src/main.py)."""
 
 import json
 import os
 from unittest.mock import patch
 
 import pytest
+
 from main import EnergyTracker
 
 
@@ -63,7 +64,7 @@ class TestEnergyTrackerCumulative:
 class TestEnergyTrackerTrapezoidalIntegration:
     """EnergyTracker averages the two endpoint power samples of each interval
     (trapezoidal) instead of assuming the whole interval was at the latest
-    reading (rectangular/step) — see docker/main.py EnergyTracker.update()."""
+    reading (rectangular/step) — see src/main.py EnergyTracker.update()."""
 
     def test_ramp_uses_average_of_endpoints_not_latest_sample(self):
         """1000 W → 2000 W over 1 h must integrate to 1.5 kWh, not 2.0 kWh.

@@ -37,7 +37,7 @@
 
 3. **REST API for sidecar** — Add a REST API to configure settings from
    Home Assistant. Today all sidecar config is env-var only
-   (`docker/main.py`: `CONNECTION_TYPE`, `TCP_HOST`, `MQTT_*`,
+   (`src/main.py`: `CONNECTION_TYPE`, `TCP_HOST`, `MQTT_*`,
    `POLL_INTERVAL`, `MONITORING_LEVEL`, etc.), and the HA integration side
    only has a `ConfigFlow` (`custom_components/pylontech_mqtt/config_flow.py`)
    with no `OptionsFlow` — a comment in `__init__.py:121` notes a former
@@ -56,7 +56,7 @@
 
 19. **Multi-battery support** — Connect multiple batteries (serial + TCP
     simultaneously) via one multiplexing sidecar or multiple sidecar
-    instances in the HA integration. Today `docker/main.py` takes a single
+    instances in the HA integration. Today `src/main.py` takes a single
     `CONNECTION_TYPE`/`TCP_HOST`/`SERIAL_PORT` set per sidecar process, so
     this is currently done (if at all) by running multiple sidecar
     containers, each with its own `MQTT_TOPIC_PREFIX`.
@@ -113,7 +113,7 @@
 
 5. **Device response capture** — Add a Make command + scripts to automate
    retrieving responses from real devices. `scripts/capture_transcript.py`
-   already exists and does exactly this (connects like `docker/main.py`
+   already exists and does exactly this (connects like `src/main.py`
    does, via the same env vars and `BmsConnection`, records raw responses,
    redacts the `Barcode` field). What's missing is a `make` target wrapping
    it, and — per `tests/fixtures/transcripts/README.md` — an actual

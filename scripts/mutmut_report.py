@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run mutmut across custom_components/docker and write a human-readable report.
+"""Run mutmut across custom_components/src and write a human-readable report.
 
 Mutation testing answers a different question than line coverage: not "did
 this line run during the tests" but "would the tests notice if this line's
@@ -20,7 +20,7 @@ survivors are real gaps worth a new test versus equivalent mutants worth a
 Usage
 -----
     python scripts/mutmut_report.py                    # full run, all of
-                                                         # custom_components + docker
+                                                         # custom_components + src
     python scripts/mutmut_report.py --only-mutate \\
         custom_components/pylontech_mqtt/coordinator.py  # scope to one file
 

@@ -52,6 +52,7 @@ from paho.mqtt.client import ConnectFlags, DisconnectFlags
 from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode
 from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
+
 from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 
@@ -782,18 +783,31 @@ def main() -> None:
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
 
+    # A SIGTERM landing here (before bms/energy exist and before the MQTT
+    # client ever connected) has nothing for _clean_shutdown() to close or
+    # publish through — just log and exit(0) directly rather than letting
+    # the KeyboardInterrupt raised by _handle_sigterm propagate uncaught.
+    def _abort_before_connected() -> None:
+        _LOGGER.info("Shutting down...")
+        sys.exit(0)
+
     _retry_delay = 5
     while True:
         try:
             client.connect(MQTT_BROKER, MQTT_PORT_ENV, 60)
             break
+        except KeyboardInterrupt:
+            _abort_before_connected()
         except Exception as err:
             _LOGGER.error(
                 "Cannot connect to MQTT broker: %s — retrying in %d s",
                 err,
                 _retry_delay,
             )
-            time.sleep(_retry_delay)
+            try:
+                time.sleep(_retry_delay)
+            except KeyboardInterrupt:
+                _abort_before_connected()
             _retry_delay = min(_retry_delay * 2, 120)
 
     client.loop_start()

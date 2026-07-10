@@ -7,7 +7,7 @@ name: Release
 # that way), so re-testing here would only re-verify what was verified
 # minutes earlier. What this workflow does own: baking the release version
 # into the image (SIDECAR_VERSION/GIT_SHA build args — see
-# docker/Dockerfile and docker/main.py's diagnostics fields), scanning and
+# docker/Dockerfile and src/main.py's diagnostics fields), scanning and
 # SBOM-ing the artifact actually being shipped, pushing it to GHCR, and
 # publishing the GitHub Release. That pairing is what lets a user match a
 # specific HACS release with a specific, reproducible sidecar image.
