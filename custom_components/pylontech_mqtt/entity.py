@@ -1,10 +1,30 @@
 import hashlib
+from typing import Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import PylontechCoordinator
+
+
+def discover_new_ids(
+    items: list[dict[str, Any]], id_key: str, seen_ids: set[int]
+) -> list[int]:
+    """Return id_key values in items not yet in seen_ids, adding them to it.
+
+    Shared by sensor.py and number.py's async_setup_entry: both dynamically
+    add entities as new battery/cell ids show up in successive MQTT payloads,
+    rather than all at once, since module/cell counts aren't known upfront.
+    """
+    new_ids: list[int] = []
+    for item in items:
+        item_id = item.get(id_key)
+        if item_id is None or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        new_ids.append(item_id)
+    return new_ids
 
 
 def stack_id_from_topic(topic_prefix: str) -> str:

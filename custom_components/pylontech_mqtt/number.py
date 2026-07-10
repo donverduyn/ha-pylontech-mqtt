@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import PylontechCoordinator
-from .entity import PylontechBatteryEntity
+from .entity import PylontechBatteryEntity, discover_new_ids
 
 
 async def async_setup_entry(
@@ -24,18 +24,12 @@ async def async_setup_entry(
     def _add_new_batteries() -> None:
         if not coordinator.data:
             return
-        new_entities: list[PylontechBatteryCapacityNumber] = []
-        for bat in coordinator.data.get("batteries", []):
-            bat_id = bat.get("sys_id")
-            if bat_id is None:
-                continue
-            if bat_id not in seen_bat_ids:
-                seen_bat_ids.add(bat_id)
-                new_entities.append(
-                    PylontechBatteryCapacityNumber(
-                        coordinator, coordinator.stack_id, bat_id
-                    )
-                )
+        new_entities = [
+            PylontechBatteryCapacityNumber(coordinator, coordinator.stack_id, bat_id)
+            for bat_id in discover_new_ids(
+                coordinator.data.get("batteries", []), "sys_id", seen_bat_ids
+            )
+        ]
         if new_entities:
             async_add_entities(new_entities)
 

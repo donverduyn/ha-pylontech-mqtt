@@ -1,0 +1,68 @@
+name: Create or update automation PR
+description: >
+  Commits any working-tree changes to a dedicated branch, force-pushes it,
+  and opens a PR for that branch or edits one already open. Shared by
+  dependency-updates.yaml and min-ha-version-update.yaml, which previously
+  each carried an identical copy of this commit + push + find-or-create PR
+  sequence, differing only in branch name, commit message, and PR text.
+
+inputs:
+  branch:
+    required: true
+    description: "Branch to commit and push changes to"
+  base-branch:
+    required: true
+    description: "Base branch for the pull request"
+  commit-message:
+    required: true
+  pr-title:
+    required: true
+  pr-body:
+    required: true
+  gh-token:
+    required: true
+    description: "Token used by git push and the gh CLI"
+
+outputs:
+  changed:
+    description: "'true' if there were working-tree changes to commit, 'false' otherwise"
+    value: ${{ steps.commit.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: commit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+        BRANCH: ${{ inputs.branch }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY: ${{ inputs.pr-body }}
+      run: |
+        if git diff --quiet; then
+          echo "No changes found."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -B "$BRANCH"
+        git add .
+        git commit -m "$COMMIT_MESSAGE"
+        git push --force-with-lease origin "$BRANCH"
+
+        pr_number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""')"
+        if [ -n "$pr_number" ]; then
+          gh pr edit "$pr_number" --title "$PR_TITLE" --body "$PR_BODY"
+        else
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY"
+        fi
+
+        echo "changed=true" >> "$GITHUB_OUTPUT"

@@ -55,6 +55,26 @@ _REQUIRED_BATTERY_NUMERIC_FIELDS: dict[str, tuple[float | None, float | None]] =
 _MAX_CELLS_PER_BATTERY = 32
 
 
+def find_battery(data: dict[str, Any] | None, bat_id: int) -> dict[str, Any] | None:
+    """Return the battery entry with sys_id == bat_id from a state payload, or None."""
+    if not data:
+        return None
+    for bat in data.get("batteries", []):
+        if bat.get("sys_id") == bat_id:
+            return cast(dict[str, Any], bat)
+    return None
+
+
+def find_cell(battery: dict[str, Any] | None, cell_id: int) -> dict[str, Any] | None:
+    """Return the cell entry with cell_id == cell_id from a battery entry, or None."""
+    if not battery:
+        return None
+    for cell in battery.get("cells", []):
+        if cell.get("cell_id") == cell_id:
+            return cast(dict[str, Any], cell)
+    return None
+
+
 def _validate_number(
     value: object, low: float | None, high: float | None
 ) -> str | None:
@@ -470,19 +490,8 @@ class PylontechCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def is_battery_present(self, bat_id: int) -> bool:
         """Return whether *bat_id* appears in the most recent payload."""
-        if not self.data:
-            return False
-        return any(
-            bat.get("sys_id") == bat_id for bat in self.data.get("batteries", [])
-        )
+        return find_battery(self.data, bat_id) is not None
 
     def is_cell_present(self, bat_id: int, cell_id: int) -> bool:
         """Return whether *cell_id* of *bat_id* appears in the most recent payload."""
-        if not self.data:
-            return False
-        for bat in self.data.get("batteries", []):
-            if bat.get("sys_id") == bat_id:
-                return any(
-                    cell.get("cell_id") == cell_id for cell in bat.get("cells", [])
-                )
-        return False
+        return find_cell(find_battery(self.data, bat_id), cell_id) is not None

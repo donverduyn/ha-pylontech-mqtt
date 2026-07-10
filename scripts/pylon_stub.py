@@ -245,6 +245,24 @@ def _unknown(cmd: str) -> bytes:
     return f"{cmd}\r\nUnknown command '{base}'\r\n\r$$\r\n\rpylon>".encode("ascii")
 
 
+def _parse_bat_id_arg(cmd: str, default: int = 1) -> int:
+    """Parse an optional battery-id argument from a command like 'bat 3'."""
+    parts = cmd.split()
+    if len(parts) > 1:
+        with contextlib.suppress(ValueError):
+            return int(parts[1])
+    return default
+
+
+def _battery_slot_status(bat_id: int) -> tuple[bool, str | None]:
+    """Return (present, fault) for bat_id under the current group/slot config."""
+    slots_per_group = _cfg["slots"]
+    batt_per_group = _cfg["batteries"]
+    slot_in_group = ((bat_id - 1) % slots_per_group) + 1
+    present = slot_in_group <= batt_per_group
+    return present, _faults.get(bat_id)
+
+
 # pwr N (indexed) — vertical per-battery key:value block
 # This is a completely different response shape from the tabular `pwr` output.
 # Real firmware returns this block when an index argument is given:
@@ -271,14 +289,12 @@ def _resp_pwr_indexed(cmd: str, bat_id: int) -> bytes:
 
     n_groups = _cfg["groups"]
     slots_per_group = _cfg["slots"]
-    batt_per_group = _cfg["batteries"]
     m = MODELS[_cfg["model"]]
 
     if bat_id < 1 or bat_id > n_groups * slots_per_group:
         return _wrap(cmd, f"Power {bat_id} not found", kv=True)
 
-    slot_in_group = ((bat_id - 1) % slots_per_group) + 1
-    present = slot_in_group <= batt_per_group
+    present, fault = _battery_slot_status(bat_id)
 
     SEP = "----------------------------"
 
@@ -289,7 +305,6 @@ def _resp_pwr_indexed(cmd: str, bat_id: int) -> bytes:
         #   line_str[19:27] == f'{value:<8}'  ← 8-char value field
         return f"{key:<16}: {str(value):<8}{unit}"
 
-    fault = _faults.get(bat_id)
     if not present or fault == "absent":
         lines = [SEP, f"Power {bat_id}", kv("Basic Status", "Absent"), SEP]
     else:
@@ -629,20 +644,13 @@ def _resp_bat(cmd: str) -> bytes:
 
     n_groups = _cfg["groups"]
     slots_per_group = _cfg["slots"]
-    batt_per_group = _cfg["batteries"]
 
-    parts = cmd.split()
-    bat_id = 1
-    if len(parts) > 1:
-        with contextlib.suppress(ValueError):
-            bat_id = int(parts[1])
+    bat_id = _parse_bat_id_arg(cmd)
 
     if bat_id < 1 or bat_id > n_groups * slots_per_group:
         return _wrap(cmd, f"Battery {bat_id} not found")
 
-    slot_in_group = ((bat_id - 1) % slots_per_group) + 1
-    present = slot_in_group <= batt_per_group
-    fault = _faults.get(bat_id)
+    present, fault = _battery_slot_status(bat_id)
 
     if not present or fault == "absent":
         return _wrap(cmd, f"Battery {bat_id}\r\r\nAbsent")
@@ -694,20 +702,13 @@ def _resp_soh(cmd: str) -> bytes:
 
     n_groups = _cfg["groups"]
     slots_per_group = _cfg["slots"]
-    batt_per_group = _cfg["batteries"]
 
-    parts = cmd.split()
-    bat_id = 1
-    if len(parts) > 1:
-        with contextlib.suppress(ValueError):
-            bat_id = int(parts[1])
+    bat_id = _parse_bat_id_arg(cmd)
 
     if bat_id < 1 or bat_id > n_groups * slots_per_group:
         return _wrap(cmd, f"Battery {bat_id} not found")
 
-    slot_in_group = ((bat_id - 1) % slots_per_group) + 1
-    present = slot_in_group <= batt_per_group
-    fault = _faults.get(bat_id)
+    present, fault = _battery_slot_status(bat_id)
 
     if not present or fault == "absent":
         return _wrap(cmd, f"Power   {bat_id}\r\r\nAbsent")

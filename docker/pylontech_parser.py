@@ -7,6 +7,11 @@ from structs import PylontechBattery, PylontechCell, PylontechSystem
 _LOGGER = logging.getLogger(__name__)
 
 
+def _header_idx(parts: list[str], name: str, default: int) -> int:
+    """Return the index of *name* in a header row, or *default* if absent."""
+    return parts.index(name) if name in parts else default
+
+
 class PylontechParser:
     """Parser for Pylontech BMS serial data."""
 
@@ -50,30 +55,18 @@ class PylontechParser:
             parts = line.split()
             # Header line starts with "Power" and always contains "Coulomb"
             if parts and parts[0] == "Power" and "Coulomb" in parts:
-                volt_idx = parts.index("Volt") if "Volt" in parts else volt_idx
-                curr_idx = parts.index("Curr") if "Curr" in parts else curr_idx
-                temp_idx = parts.index("Tempr") if "Tempr" in parts else temp_idx
-                temp_low_idx = parts.index("Tlow") if "Tlow" in parts else temp_low_idx
-                temp_high_idx = (
-                    parts.index("Thigh") if "Thigh" in parts else temp_high_idx
-                )
-                volt_low_idx = parts.index("Vlow") if "Vlow" in parts else volt_low_idx
-                volt_high_idx = (
-                    parts.index("Vhigh") if "Vhigh" in parts else volt_high_idx
-                )
-                status_idx = (
-                    parts.index("Base.St") if "Base.St" in parts else status_idx
-                )
-                volt_st_idx = (
-                    parts.index("Volt.St") if "Volt.St" in parts else volt_st_idx
-                )
-                curr_st_idx = (
-                    parts.index("Curr.St") if "Curr.St" in parts else curr_st_idx
-                )
-                temp_st_idx = (
-                    parts.index("Temp.St") if "Temp.St" in parts else temp_st_idx
-                )
-                soc_idx = parts.index("Coulomb") if "Coulomb" in parts else soc_idx
+                volt_idx = _header_idx(parts, "Volt", volt_idx)
+                curr_idx = _header_idx(parts, "Curr", curr_idx)
+                temp_idx = _header_idx(parts, "Tempr", temp_idx)
+                temp_low_idx = _header_idx(parts, "Tlow", temp_low_idx)
+                temp_high_idx = _header_idx(parts, "Thigh", temp_high_idx)
+                volt_low_idx = _header_idx(parts, "Vlow", volt_low_idx)
+                volt_high_idx = _header_idx(parts, "Vhigh", volt_high_idx)
+                status_idx = _header_idx(parts, "Base.St", status_idx)
+                volt_st_idx = _header_idx(parts, "Volt.St", volt_st_idx)
+                curr_st_idx = _header_idx(parts, "Curr.St", curr_st_idx)
+                temp_st_idx = _header_idx(parts, "Temp.St", temp_st_idx)
+                soc_idx = _header_idx(parts, "Coulomb", soc_idx)
                 if "B.V.St" in parts:
                     hdr_i = parts.index("B.V.St")
                     # Each "Time" header column expands to two data tokens

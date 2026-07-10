@@ -23,8 +23,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
 from .const import DOMAIN
-from .coordinator import PylontechCoordinator
-from .entity import PylontechBatteryEntity, PylontechCellEntity, PylontechSystemEntity
+from .coordinator import PylontechCoordinator, find_battery, find_cell
+from .entity import (
+    PylontechBatteryEntity,
+    PylontechCellEntity,
+    PylontechSystemEntity,
+    discover_new_ids,
+)
 
 # Descriptor tables — one row per sensor, no entity subclass per sensor needed.
 # `key`             — attribute name on PylontechSystem / PylontechBattery.
@@ -481,35 +486,24 @@ async def async_setup_entry(
         if not coordinator.data:
             return
         new_entities: list[SensorEntity] = []
-        for bat in coordinator.data.get("batteries", []):
+        batteries = coordinator.data.get("batteries", [])
+        for bat_id in discover_new_ids(batteries, "sys_id", seen_bat_ids):
+            new_entities.extend(
+                PylontechBatterySensor(coordinator, coordinator.stack_id, bat_id, desc)
+                for desc in BATTERY_SENSORS
+            )
+        for bat in batteries:
             bat_id = bat.get("sys_id")
             if bat_id is None:
                 continue
-            if bat_id not in seen_bat_ids:
-                seen_bat_ids.add(bat_id)
-                new_entities.extend(
-                    PylontechBatterySensor(
-                        coordinator, coordinator.stack_id, bat_id, desc
-                    )
-                    for desc in BATTERY_SENSORS
-                )
             bat_cells = seen_cell_ids.setdefault(bat_id, set())
-            for cell in bat.get("cells", []):
-                cell_id = cell.get("cell_id")
-                if cell_id is None:
-                    continue
-                if cell_id not in bat_cells:
-                    bat_cells.add(cell_id)
-                    new_entities.extend(
-                        PylontechCellSensor(
-                            coordinator,
-                            coordinator.stack_id,
-                            bat_id,
-                            cell_id,
-                            desc,
-                        )
-                        for desc in CELL_SENSORS
+            for cell_id in discover_new_ids(bat.get("cells", []), "cell_id", bat_cells):
+                new_entities.extend(
+                    PylontechCellSensor(
+                        coordinator, coordinator.stack_id, bat_id, cell_id, desc
                     )
+                    for desc in CELL_SENSORS
+                )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -560,12 +554,8 @@ class PylontechBatterySensor(PylontechBatteryEntity, SensorEntity):
 
     @property
     def native_value(self) -> StateType:
-        if not self.coordinator.data:
-            return None
-        for bat in self.coordinator.data.get("batteries", []):
-            if bat.get("sys_id") == self._bat_id:
-                return cast(StateType, bat.get(self.entity_description.key))
-        return None
+        bat = find_battery(self.coordinator.data, self._bat_id)
+        return cast(StateType, bat.get(self.entity_description.key)) if bat else None
 
 
 class PylontechCellSensor(PylontechCellEntity, SensorEntity):
@@ -590,11 +580,6 @@ class PylontechCellSensor(PylontechCellEntity, SensorEntity):
 
     @property
     def native_value(self) -> StateType:
-        if not self.coordinator.data:
-            return None
-        for bat in self.coordinator.data.get("batteries", []):
-            if bat.get("sys_id") == self._bat_id:
-                for cell in bat.get("cells", []):
-                    if cell.get("cell_id") == self._cell_id:
-                        return cast(StateType, cell.get(self.entity_description.key))
-        return None
+        bat = find_battery(self.coordinator.data, self._bat_id)
+        cell = find_cell(bat, self._cell_id)
+        return cast(StateType, cell.get(self.entity_description.key)) if cell else None
