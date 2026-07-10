@@ -1,0 +1,49 @@
+name: Dependabot Auto-merge
+
+# Dependabot's own security-update PRs (CVE-driven, separate from
+# dependency-updates.yaml's own bulk uv refresh — see
+# close-stale-automation-prs.yaml's top comment) had no merge path at all
+# before this workflow existed: they either got closed as a known
+# min-HA-version-floor conflict, closed once stale, or just sat open until
+# a human noticed. This closes that gap for the common, low-risk case —
+# patch/minor bumps — the same way dependency-updates.yaml auto-merges its
+# own PR.
+#
+# Deliberately excludes major bumps: those can carry breaking API changes
+# that passing tests don't necessarily cover, so they still need a human to
+# look at the diff before merging.
+#
+# No explicit min-HA-version-floor check is needed here: a PR that
+# conflicts with the frozen floor (requirements_dev_min.txt) simply never
+# passes tests-finished/HACS Action/validate, so `gh pr merge --auto` has
+# nothing to act on — it stays open (and pending) until
+# close-stale-automation-prs.yaml eventually retires it.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'app/dependabot'
+    runs-on: "ubuntu-latest"
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: "dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a" # v2.5.0
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Enable auto-merge for patch/minor updates
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
