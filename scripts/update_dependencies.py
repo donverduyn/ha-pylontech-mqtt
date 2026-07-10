@@ -473,6 +473,19 @@ def compile_python_lock(requirements: str, output: str, python_version: str) -> 
             "pip",
             "compile",
             "--quiet",
+            # Without --upgrade, uv reuses the existing lockfile's pins for
+            # any package whose constraint is still satisfiable, even when
+            # a newer compatible version exists, so unconstrained packages
+            # can sit stale indefinitely despite this compiling weekly.
+            # Confirmed by recompiling requirements_dev.lock.txt against
+            # its own committed content as a baseline: boto3, mypy, ruff,
+            # grpcio, filelock, tzdata, and virtualenv all had newer
+            # compatible versions available that a prior run without
+            # --upgrade had left on the table. (Note this does *not* apply
+            # to every stale-looking package — some, like pyjwt, are
+            # pinned exactly by homeassistant's own requires_dist and stay
+            # put either way; see dependabot.yml's ignore list for those.)
+            "--upgrade",
             requirements,
             "--generate-hashes",
             "--python-version",
@@ -580,6 +593,12 @@ def try_compile_min_lock(phacc_version: str, python_version: str) -> bool:
                 "pip",
                 "compile",
                 "--quiet",
+                # See compile_python_lock's identical --upgrade comment —
+                # same reasoning applies here: without it, a transitive
+                # dependency's version could stay frozen at whatever a
+                # previous attempt happened to pick, even when a newer
+                # version compatible with *this* candidate HA pin exists.
+                "--upgrade",
                 str(REQUIREMENTS_DEV_MIN_TXT),
                 "--generate-hashes",
                 "--python-version",
