@@ -14,9 +14,18 @@
   "sandbox": {
     "credentials": {
       "files": [
-        { "path": "secrets.env", "mode": "deny" },
-        { "path": "secrets.env.local", "mode": "deny" }
+        {
+          "path": "secrets.env",
+          "mode": "deny"
+        },
+        {
+          "path": "secrets.env.local",
+          "mode": "deny"
+        }
       ]
     }
+  },
+  "enabledPlugins": {
+    "commit-commands@claude-plugins-official": true
   }
 }

@@ -2,8 +2,9 @@
 used when the aggregate 'pwr' response doesn't look valid.
 """
 
-import main
 import pytest
+
+import main
 from structs import PylontechBattery, PylontechSystem
 
 

@@ -122,15 +122,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
           lockfile: ${{ matrix.lockfile }}
       - name: Run test suite
-        # --cov-fail-under is a non-regression floor (current combined coverage is
-        # ~89%), not a target — it catches a change that quietly drops coverage,
-        # not a mandate to hit 100%. Scoped to custom_components + docker since
-        # that's the shipped code; scripts/ (e2e-only helpers) is excluded.
+        # --cov-fail-under is a non-regression floor (current combined
+        # statement+branch coverage is ~94%), not a target — it catches a
+        # change that quietly drops coverage, not a mandate to hit 100%.
+        # --cov-branch is included, not just statements: a line can run
+        # (satisfying statement coverage) while one of its branches never
+        # does, e.g. an `if`/`or` condition where only one side is ever
+        # exercised — exactly the shape of gap a statement-only gate misses.
+        # 88 (statement-only) previously left ~90 statements' worth of slack
+        # before the gate would even notice; 92 (branch-inclusive) leaves a
+        # couple of points of headroom for normal variance without hiding a
+        # real regression the way the old floor did. Scoped to
+        # custom_components + src since that's the shipped code; scripts/
+        # (e2e-only helpers) is excluded.
         # No e2e here: the e2e suite runs against the *built* sidecar image,
         # so it lives in the e2e job below, downstream of docker-build.
         run: >
-          pytest --cov=custom_components --cov=docker
-          --cov-report=term-missing --cov-fail-under=88
+          pytest --cov=custom_components --cov=src --cov-branch
+          --cov-report=term-missing --cov-fail-under=92
 
   lint:
     runs-on: "ubuntu-latest"

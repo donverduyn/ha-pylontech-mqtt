@@ -32,9 +32,9 @@ COPY requirements_runtime.lock.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements_runtime.lock.txt
 
 # Copy parser, structs, and the sidecar entry point
-COPY docker/pylontech_parser.py .
-COPY docker/structs.py .
-COPY docker/main.py .
+COPY src/pylontech_parser.py .
+COPY src/structs.py .
+COPY src/main.py .
 
 ENV PYTHONUNBUFFERED=1 \
     GIT_SHA=${GIT_SHA} \

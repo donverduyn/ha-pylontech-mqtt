@@ -21,7 +21,7 @@ from .const import DEFAULT_BATTERY_CAPACITY, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Bumped in lockstep with the sidecar's own SCHEMA_VERSION (docker/main.py)
+# Bumped in lockstep with the sidecar's own SCHEMA_VERSION (src/main.py)
 # whenever the state payload's shape changes in a way this integration needs
 # to know about. The sidecar and integration are installed independently (one
 # via Docker, one via HACS), so there is no other way to detect a mismatched

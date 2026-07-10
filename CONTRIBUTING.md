@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide covers adding translatio
 
 This integration works in two parts:
 
-1. **Docker sidecar** (`docker/main.py`) — runs alongside Home Assistant, connects to the Pylontech BMS over serial or TCP, and publishes parsed data to an MQTT broker.
+1. **Docker sidecar** (`src/main.py`) — runs alongside Home Assistant, connects to the Pylontech BMS over serial or TCP, and publishes parsed data to an MQTT broker.
 2. **Home Assistant integration** (`custom_components/pylontech_mqtt/`) — subscribes to the MQTT broker and exposes the data as HA entities.
 
 The parsing logic (`parser.py`, `structs.py`) lives inside the integration and is copied into the Docker image at build time, ensuring both sides always use identical logic.

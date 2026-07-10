@@ -51,7 +51,7 @@ The sidecar and HA are completely decoupled. You can run the sidecar on any mach
 
 The `docker/` directory contains the sidecar. All configuration is through environment variables — no editing of source files is needed.
 
-No pre-built image is published yet, so `docker-compose.yml`'s `build:` context needs the rest of the repo (`docker/pylontech_parser.py` and `docker/structs.py`) alongside it — copying just the compose file will not build. Clone the whole repository onto your Docker host instead:
+No pre-built image is published yet, so `docker-compose.yml`'s `build:` context needs the rest of the repo (`src/pylontech_parser.py` and `src/structs.py`) alongside it — copying just the compose file will not build. Clone the whole repository onto your Docker host instead:
 
 ```bash
 git clone https://github.com/donverduyn/ha-pylontech-mqtt.git

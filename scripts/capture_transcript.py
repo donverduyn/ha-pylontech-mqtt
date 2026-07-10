@@ -4,14 +4,14 @@
 The test suite's BMS stub (scripts/pylon_stub.py) is hand-authored from the
 documented protocol, not recorded from real hardware — there is currently no
 checked-in corpus of actual US2000/3000/5000 (or Pytes-branded) firmware
-responses. This script connects to a real BMS exactly the way docker/main.py
+responses. This script connects to a real BMS exactly the way src/main.py
 does (same env vars, same BmsConnection) and records the raw response to
 every command the sidecar issues, so a contributor with real hardware can
 submit one as tests/fixtures/transcripts/<name>.json.
 
 Usage
 -----
-  # Serial (defaults, same as docker/main.py):
+  # Serial (defaults, same as src/main.py):
   python scripts/capture_transcript.py --out my_us3000_transcript.json
 
   # TCP:
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "docker"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import main  # noqa: E402  (must follow the sys.path insert above)
 

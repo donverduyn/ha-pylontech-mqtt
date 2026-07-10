@@ -16,6 +16,7 @@ from conftest import (
     STUB_SOC_START,
     _raw_command,
 )
+
 from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 

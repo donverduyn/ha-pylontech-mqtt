@@ -1,7 +1,7 @@
-"""Tests for BmsConnection's serial branch (docker/main.py) against a real
+"""Tests for BmsConnection's serial branch (src/main.py) against a real
 PTY-backed port.
 
-CONNECTION_TYPE=serial is the sidecar's *default* (see docker/main.py's
+CONNECTION_TYPE=serial is the sidecar's *default* (see src/main.py's
 module docstring and CONNECTION_TYPE's os.getenv fallback), yet
 test_bms_connection.py only ever exercises the "tcp" branch — every real
 connection test in that file wires BmsConnection to the stub server over
@@ -19,8 +19,9 @@ import pty
 import select
 import threading
 
-import main
 import pytest
+
+import main
 
 
 @pytest.fixture

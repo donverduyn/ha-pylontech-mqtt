@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths   = ["tests"]
-pythonpath  = ["tests", ".", "docker"]     # "." makes custom_components importable; "docker" exposes pylontech_parser and structs
+pythonpath  = ["tests", ".", "src"]     # "." makes custom_components importable; "src" exposes pylontech_parser and structs
 # "-m 'not e2e'" keeps a bare `pytest` fast and deterministic (no
 # containers, no real broker, no waiting out real timeouts/retries); run
 # the e2e suite explicitly with `pytest -m e2e`.
@@ -34,7 +34,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 # docstring reproduces two real, verbatim BMS wire-protocol header/data lines
 # (see parse_bat's docstring) — rewording or rewrapping them would misrepresent
 # the actual firmware output they document.
-"docker/pylontech_parser.py" = ["E501"]
+"src/pylontech_parser.py" = ["E501"]
 
 [tool.mypy]
 # Scoped to production code only (not tests): this is what Home Assistant's
@@ -47,8 +47,8 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 # flat top-level module (test_foo, not tests.test_foo) because tests/ is on
 # pytest's pythonpath directly — so there's no pattern that matches "test
 # modules" as a group without hardcoding and maintaining every filename.
-mypy_path = "docker"
-files = ["custom_components", "docker", "scripts"]
+mypy_path = "src"
+files = ["custom_components", "src", "scripts"]
 # `exclude` (not just `files`) needs to skip tests/: `files` is only consulted
 # for a bare `mypy` with no path arguments — `mypy .` (or any explicit path)
 # overrides `files` entirely but still walks directories through `exclude`,
@@ -72,13 +72,13 @@ warn_unused_configs = true
 explicit_package_bases = true
 
 [tool.pyright]
-include = ["custom_components", "docker", "scripts", "tests"]
+include = ["custom_components", "src", "scripts", "tests"]
 exclude = ["**/__pycache__", "**/.pytest_cache"]
 typeCheckingMode = "strict"
-# Mirrors [tool.pytest.ini_options].pythonpath above: "docker" exposes
+# Mirrors [tool.pytest.ini_options].pythonpath above: "src" exposes
 # pylontech_parser/structs/main, "." makes custom_components importable,
 # matching how the test suite itself resolves these bare imports.
-extraPaths = ["docker", "tests", "."]
+extraPaths = ["src", "tests", "."]
 # Deliberately no venvPath/venv here: pyright falls back to whatever
 # interpreter is first on PATH, which is already correct in both places this
 # runs (the devcontainer's activated .venv, and CI's actions/setup-python
@@ -98,7 +98,7 @@ pythonVersion = "3.14"
 # with per-line ignores across entity.py/number.py/sensor.py.
 reportIncompatibleVariableOverride = false
 
-# Production code (custom_components/docker/scripts) is held to strict typing
+# Production code (custom_components/src/scripts) is held to strict typing
 # above; tests lean on untyped mocks/fixtures and intentionally reach into
 # private members (coordinator._process_payload etc.), so strict there is
 # mostly noise rather than real bug-catching. pyright's executionEnvironments
@@ -131,7 +131,20 @@ reportUnnecessaryIsInstance = "none"
 # with ModuleNotFoundError. `only_mutate` (set per-run by the wrapper script,
 # not here) narrows which files actually get mutated without narrowing what
 # gets copied.
-source_paths = ["custom_components", "docker"]
+#
+# The sidecar's source directory is genuinely named "src", not an alias:
+# mutmut derives each mutant's tracking key from the file's path relative to
+# the repo root (e.g. "src.main.x_foo"), and hardcodes stripping a leading
+# "src." from that key to match how a src-layout package is actually
+# imported. It has no equivalent for any other directory name. The sidecar's
+# tests (and the Docker image) import main.py/pylontech_parser.py/structs.py
+# as bare top-level modules via pytest's `pythonpath`/the image's flat COPY
+# layout — not as "docker.main" — so when this directory was named "docker",
+# mutmut's key ("docker.main.x_foo") never matched the key recorded at test
+# run time (main.x_foo, from the function's real __module__), and every
+# mutant in these two files was misclassified "no tests" regardless of
+# actual coverage. See git history for the migration from "docker/".
+source_paths = ["custom_components", "src"]
 # tests/conftest.py's stub_server fixture spawns scripts/pylon_stub.py as a
 # real subprocess; without this it's missing from the copied workspace and
 # every test that starts the stub fails with FileNotFoundError before a

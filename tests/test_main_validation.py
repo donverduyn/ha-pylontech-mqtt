@@ -1,11 +1,12 @@
-"""Unit tests for main()'s startup config validation (docker/main.py).
+"""Unit tests for main()'s startup config validation (src/main.py).
 
 Every check here runs and exits(1) before any socket/MQTT connection is
 attempted, so these are safe to exercise directly without mocking I/O.
 """
 
-import main
 import pytest
+
+import main
 
 
 def test_int_env_falls_back_to_default_on_non_numeric_value(

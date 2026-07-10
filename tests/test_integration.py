@@ -382,10 +382,80 @@ class TestRegistryIdentityMigration:
         assert migrated.unique_id == f"{new_stack_id}_voltage"
 
 
+class TestCoordinatorWiring:
+    """Drive a real config entry through async_setup_entry with *only* the
+    paho Client class mocked (at the same boundary test_mqtt_client_setup.py
+    uses for the sidecar) — unlike every other test in this file,
+    PylontechCoordinator.setup() itself is NOT patched here.
+
+    create_config_entry's blanket PATCH_SETUP is right for tests that only
+    care about entities/state handling, but it means no test anywhere
+    exercised the real constructor-argument and paho wiring in __init__.py's
+    ``PylontechCoordinator(hass=hass, mqtt_host=mqtt_host, ...)`` call and
+    coordinator.py's ``setup()``. A mutation that dropped or swapped any of
+    host/port/user/pass/tls (e.g. ``mqtt_host=mqtt_host`` -> ``mqtt_host=
+    None``) passed the full suite because nothing asserted on those values.
+    """
+
+    async def test_entry_data_reaches_coordinator_and_paho_client(
+        self, hass: HomeAssistant
+    ) -> None:
+        from homeassistant import config_entries as ce
+
+        entry_data: dict[str, Any] = {
+            "mqtt_host": "broker.example",
+            "mqtt_port": 8883,
+            "mqtt_user": "alice",
+            "mqtt_pass": "secret",
+            "mqtt_topic": "pylontech/stack",
+            "mqtt_tls": True,
+        }
+
+        with (
+            patch(_PATCH_CONN, return_value=None),
+            patch(
+                "custom_components.pylontech_mqtt.coordinator.mqtt.Client"
+            ) as mock_client_cls,
+        ):
+            init = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": ce.SOURCE_USER}
+            )
+            await hass.config_entries.flow.async_configure(init["flow_id"], entry_data)
+            await hass.async_block_till_done()
+
+        entries = hass.config_entries.async_entries(DOMAIN)
+        assert entries, "Config entry was not created"
+        entry = entries[0]
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+
+        # __init__.py's PylontechCoordinator(...) call: entry.data must reach
+        # the coordinator's constructor arguments unchanged.
+        assert coordinator._mqtt_host == "broker.example"
+        assert coordinator._mqtt_port == 8883
+        assert coordinator._mqtt_user == "alice"
+        assert coordinator._mqtt_pass == "secret"
+        assert coordinator._mqtt_tls is True
+        assert coordinator.topic_prefix == "pylontech/stack"
+
+        # coordinator.setup() ran for real: assert what it did to the (mocked)
+        # paho client.
+        client = mock_client_cls.return_value
+        client.username_pw_set.assert_called_once_with("alice", "secret")
+        client.tls_set.assert_called_once()
+        client.connect_async.assert_called_once_with("broker.example", 8883, 60)
+        client.loop_start.assert_called_once()
+        assert client.on_connect == coordinator._on_connect
+        assert client.on_message == coordinator._on_message
+        assert client.on_disconnect == coordinator._on_disconnect
+
+        coordinator.shutdown()
+        await hass.async_block_till_done()
+
+
 @pytest.mark.e2e
 class TestLargeStackScale:
     """A 16-module stack with per-cell (MONITORING_LEVEL=high) detail is the
-    largest configuration the sidecar documents (see docker/main.py's
+    largest configuration the sidecar documents (see src/main.py's
     MAX_BATTERIES default). Cell entity creation is driven purely by what
     shows up in the payload, independent of the sidecar's own
     MONITORING_LEVEL default, so this exercises the entity-registry/platform

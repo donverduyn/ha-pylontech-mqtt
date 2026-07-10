@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 import pytest
+
 from pylontech_parser import PylontechParser
 from structs import PylontechBattery, PylontechSystem
 

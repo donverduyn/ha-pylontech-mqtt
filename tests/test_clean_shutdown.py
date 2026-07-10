@@ -1,4 +1,4 @@
-"""Unit tests for main._clean_shutdown (docker/main.py).
+"""Unit tests for main._clean_shutdown (src/main.py).
 
 _clean_shutdown is the single graceful-shutdown path shared by every point
 in the poll loop that can observe a KeyboardInterrupt (raised by the SIGTERM
@@ -10,6 +10,7 @@ sleep bypass "offline" publication, MQTT shutdown, and BMS cleanup entirely.
 from unittest.mock import MagicMock
 
 import pytest
+
 from main import _clean_shutdown
 
 
