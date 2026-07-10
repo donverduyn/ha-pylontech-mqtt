@@ -1,0 +1,151 @@
+name: Close Stale Automation PRs
+
+# Two independent reasons a bot/automation-authored PR should be closed
+# without a human doing it by hand:
+#
+# 1. Known-superseded (dependabot only, closes fast, regardless of age):
+#    Dependabot security updates (CVE-driven) fire independently of
+#    dependabot.yml's schedule/ecosystem list — they've repeatedly opened
+#    isolated single-package pip bumps (e.g. #66-69, #74) that conflict with
+#    the frozen requirements_dev_min.txt/hacs.json HA-version floor, since a
+#    lone package bump can't satisfy a resolver that also has to respect a
+#    transitive pin from that floor's homeassistant release.
+#    dependency-updates.yaml / min-ha-version-update.yaml already supersede
+#    these by refreshing the whole dependency set together with uv, so this
+#    closes the now-redundant PR as soon as its CI failure confirms that's
+#    what happened, instead of waiting on reason 2 below.
+#
+# 2. Stale (dependabot or our own dependency-update automation, any reason,
+#    only once 7+ days old AND not pushed to in the last day): a PR nobody
+#    has acted on in a week, regardless of why — checks never passed,
+#    auto-merge never had a green run to trigger on, or a human just hasn't
+#    gotten to it. Closing these keeps at most one meaningfully-current PR
+#    open per automation branch; the next scheduled run of that automation
+#    opens a fresh one reflecting whatever's current. This also covers
+#    min-ha-version-update.yaml's own branch, which used to self-close its
+#    stale PR inline right before each weekly run — centralized here
+#    instead so the reaction time is hours, not up to a week plus the next
+#    Monday. The "not pushed to in the last day" guard matters because
+#    branch-based automations (dependency-updates.yaml,
+#    min-ha-version-update.yaml) update the *same* PR in place rather than
+#    opening a new one each run, which doesn't reset createdAt — without
+#    this guard, a PR sitting at ~7 days old that a weekly job refreshes
+#    with new content could get closed by this workflow's very next tick
+#    hours later, discarding a just-updated PR instead of one nobody
+#    touched.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 6 hours, offset from the top of the hour.
+    - cron: "45 */6 * * *"
+
+permissions: {}
+
+concurrency:
+  group: close-stale-automation-prs
+  cancel-in-progress: true
+
+jobs:
+  close-stale:
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Close known-superseded or stale dependency-automation PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          close_pr() {
+            local pr="$1" head_ref="$2" reason="$3"
+            gh pr close "$pr" --repo "$REPO" --comment "$reason"
+            # Best-effort: Dependabot-owned branches sometimes can't be
+            # deleted by another actor even with contents: write, so this
+            # must never abort the loop the way `gh pr close --delete-branch`
+            # failing partway through did the first time this ran.
+            gh api "repos/$REPO/git/refs/heads/$head_ref" -X DELETE >/dev/null 2>&1 \
+              && echo "Deleted branch $head_ref." \
+              || echo "Could not delete branch $head_ref (leaving it; PR is already closed)."
+          }
+
+          prs="$(gh pr list --repo "$REPO" --state open --json number,author,headRefName,createdAt,updatedAt)"
+
+          if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
+            echo "No open PRs."
+            exit 0
+          fi
+
+          echo "$prs" | jq -c '.[]' | while read -r pr; do
+            number="$(echo "$pr" | jq -r .number)"
+            author="$(echo "$pr" | jq -r .author.login)"
+            head_ref="$(echo "$pr" | jq -r .headRefName)"
+            created_at="$(echo "$pr" | jq -r .createdAt)"
+            updated_at="$(echo "$pr" | jq -r .updatedAt)"
+
+            is_dependabot=0
+            if [ "$author" = "dependabot[bot]" ] || [ "$author" = "app/dependabot" ]; then
+              is_dependabot=1
+            fi
+            is_our_automation=0
+            if [ "$head_ref" = "automation/dependency-updates" ] || [ "$head_ref" = "automation/min-ha-version-update" ]; then
+              is_our_automation=1
+            fi
+
+            if [ "$is_dependabot" != "1" ] && [ "$is_our_automation" != "1" ]; then
+              continue
+            fi
+
+            echo "::group::PR #$number ($author, $head_ref)"
+
+            now="$(date +%s)"
+            age_days=$(( ( now - $(date -d "$created_at" +%s) ) / 86400 ))
+            updated_hours_ago=$(( ( now - $(date -d "$updated_at" +%s) ) / 3600 ))
+            if [ "$age_days" -ge 7 ] && [ "$updated_hours_ago" -ge 24 ]; then
+              echo "Open $age_days days, last pushed to $updated_hours_ago hours ago — closing as stale."
+              if [ "$is_dependabot" = "1" ]; then
+                reopen_note="Dependabot will reopen or recreate this on its own if the underlying update is still needed."
+              else
+                reopen_note="The next scheduled run of this automation will open a fresh PR reflecting whatever's current."
+              fi
+              close_pr "$number" "$head_ref" \
+                "Closing automatically: open more than 7 days without merging, with no new commits pushed in the last 24 hours. Keeping at most one meaningfully-current PR open per dependency-automation branch. $reopen_note"
+              echo "::endgroup::"
+              continue
+            fi
+
+            if [ "$is_dependabot" != "1" ]; then
+              echo "Not yet stale, and not a dependabot PR (no conflict-signature check applies)."
+              echo "::endgroup::"
+              continue
+            fi
+
+            job_urls="$(gh pr view "$number" --repo "$REPO" --json statusCheckRollup \
+              -q '.statusCheckRollup[]? | select(.conclusion == "FAILURE") | .detailsUrl // empty')"
+
+            matched=0
+            for url in $job_urls; do
+              job_id="$(echo "$url" | grep -oE '[0-9]+$' || true)"
+              [ -z "$job_id" ] && continue
+
+              log="$(gh run view --repo "$REPO" --job "$job_id" --log 2>/dev/null || true)"
+              if echo "$log" | grep -q "No solution found when resolving dependencies" \
+                 && echo "$log" | grep -q "homeassistant=="; then
+                matched=1
+                break
+              fi
+            done
+
+            if [ "$matched" = "1" ]; then
+              echo "PR #$number matches the known min-HA-version-floor conflict — closing."
+              close_pr "$number" "$head_ref" \
+                "Closing automatically: this PR's CI failure is the known conflict between an isolated single-package bump and the frozen \`requirements_dev_min.txt\`/hacs.json HA-version floor — a transitive pin from that floor's homeassistant release disagrees with the version this PR wants. \`dependency-updates.yaml\`/\`min-ha-version-update.yaml\` resolve the whole dependency set together with \`uv\` on their own weekly schedule and supersede single-package bumps like this one; Dependabot will reopen or recreate this PR on its own if the conflict is somehow still unresolved after those run."
+            else
+              echo "PR #$number: no matching conflict signature found, leaving open (not yet stale)."
+            fi
+            echo "::endgroup::"
+          done
