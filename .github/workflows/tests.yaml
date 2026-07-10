@@ -241,9 +241,13 @@ jobs:
     # event, independently), this job just waits for that result and
     # fails on an open high/critical alert.
     if: *skip_unless_real_check
+    # Must match (or exceed) codeql-gate.yaml's own job permissions: a
+    # reusable workflow's effective token permissions are the intersection
+    # of what the caller grants here and what the callee requests, not
+    # just the callee's own permissions: block.
     permissions:
       security-events: read
-      actions: read
+      checks: read
     uses: ./.github/workflows/codeql-gate.yaml
 
   docker-build:

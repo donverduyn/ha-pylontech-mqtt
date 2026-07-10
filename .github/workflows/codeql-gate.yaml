@@ -24,9 +24,16 @@ permissions: {}
 jobs:
   gate:
     runs-on: "ubuntu-latest"
+    # checks: read is what the check-runs API (below) actually needs — not
+    # actions: read, which only covers the separate Actions/workflow-runs
+    # API. Getting this wrong doesn't error, it just makes GH_TOKEN see an
+    # empty check-runs list forever: confirmed live on PR #96, where the
+    # "Wait for CodeQL" step looped "0 found, 0 pending" indefinitely even
+    # after codeql.yml had genuinely finished, because the token couldn't
+    # see its check-runs at all.
     permissions:
       security-events: read
-      actions: read
+      checks: read
     steps:
       - name: Wait for CodeQL to finish analyzing this commit
         env:
