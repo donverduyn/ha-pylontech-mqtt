@@ -31,9 +31,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Every real job below (pytest/lint/docker-build/meta-lint/e2e) is gated
-# on the "skip-ci" PR label so a maintainer can fast-track a merge (e.g.
-# an environment-settings-only change) without waiting on the full
+# Every real job below (pytest/lint/docker-build/meta-lint/e2e/codeql-gate)
+# is gated on the "skip-ci" PR label so a maintainer can fast-track a merge
+# (e.g. an environment-settings-only change) without waiting on the full
 # matrix. A skipped job still reports a "skipped" conclusion for its
 # required-status-check context, which branch protection treats as
 # satisfied — it does not disable branch protection itself, so applying
@@ -49,9 +49,16 @@ concurrency:
 # failed), or skip-ci on a *confirmed* release — still dispatches the
 # job. The confirmed-release case is caught by an explicit early bail
 # step (see detect-release and tests-finished below), not by silently
-# running the real steps.
+# running the real steps. This means codeql-gate (calling
+# codeql-gate.yaml, which waits for codeql.yml's scan of this PR's merge
+# commit and fails on an open high/critical alert) is skippable too on a
+# non-release PR — deliberately: skip-ci is refused on release PRs, so
+# every PR that can actually reach autorelease.yaml still goes through
+# codeql-gate for real, which is what actually matters (see
+# codeql-gate.yaml's own top comment).
 # pytest defines this condition once as a YAML anchor (&skip_unless_real_check);
-# lint/meta-lint/docker-build alias it rather than repeating the string.
+# lint/meta-lint/docker-build/codeql-gate alias it rather than repeating
+# the string.
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
@@ -226,6 +233,19 @@ jobs:
         # auto-discovers the same way via `types: [dockerfile]`.
         run: git ls-files '*Dockerfile*' | xargs /tmp/hadolint
 
+  codeql-gate:
+    needs: [detect-release]
+    # See pytest's identical condition/comment above, and codeql-gate.yaml
+    # for why this doesn't run codeql.yml's scan itself — codeql.yml
+    # already scans this exact PR (it triggers on the same pull_request
+    # event, independently), this job just waits for that result and
+    # fails on an open high/critical alert.
+    if: *skip_unless_real_check
+    permissions:
+      security-events: read
+      actions: read
+    uses: ./.github/workflows/codeql-gate.yaml
+
   docker-build:
     # Runs concurrently with pytest rather than gated behind it: pytest
     # (~40s) is slower than this job (~20s), so waiting for it serially
@@ -381,7 +401,7 @@ jobs:
   tests-finished:
     # Branch protection needs one fixed required-status-check context per
     # workflow (mirroring hacs.yaml/hassfest.yaml, which each only have one
-    # job and so already look like this for free). tests.yaml has five real
+    # job and so already look like this for free). tests.yaml has six real
     # jobs, two of them matrixed (pytest, e2e) — a job-level skip never
     # expands a matrix, so a skipped pytest/e2e never posts under
     # "pytest (current)"/"pytest (min)"/"e2e (current)"/"e2e (min)" (those
@@ -392,20 +412,20 @@ jobs:
     # Tests" against the workflow's own name.
     #
     # Skips at the job level (→ a real "skipped" conclusion, matching the
-    # five jobs it summarizes, which all skip the same way) in the one
+    # six jobs it summarizes, which all skip the same way) in the one
     # legitimate case: skip-ci is set AND detect-release confirmed this is
     # NOT a release. Every other combination still dispatches this job —
     # see hacs.yaml's validate job for the full reasoning (same formula):
     # a confirmed release needs to hit the bail step below (this is
     # branch protection's actual required context, so it's the one place
-    # that has to fail loudly instead of the five jobs' quiet skip being
+    # that has to fail loudly instead of the six jobs' quiet skip being
     # mistaken for "all good"); an unconfirmed verdict fails closed to
     # checking the real results below; !cancelled() backs this off if a
     # second triggering event superseded this run, rather than reporting
     # a spurious FAILURE from a run that's about to be discarded (as
     # happened once with the old always()-based version of this job).
     runs-on: "ubuntu-latest"
-    needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e]
+    needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e, codeql-gate]
     if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
     steps:
       - name: Refuse skip-ci on a release PR
@@ -417,7 +437,7 @@ jobs:
         run: |
           for r in "${{ needs.pytest.result }}" "${{ needs.lint.result }}" \
                    "${{ needs.docker-build.result }}" "${{ needs.meta-lint.result }}" \
-                   "${{ needs.e2e.result }}"; do
+                   "${{ needs.e2e.result }}" "${{ needs.codeql-gate.result }}"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::a required job did not pass (result: $r)"
               exit 1
