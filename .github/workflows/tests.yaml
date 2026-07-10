@@ -31,13 +31,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Every real job below (pytest/lint/docker-build/meta-lint/e2e/codeql-gate)
-# is gated on the "skip-ci" PR label so a maintainer can fast-track a merge
-# (e.g. an environment-settings-only change) without waiting on the full
-# matrix. A skipped job still reports a "skipped" conclusion for its
-# required-status-check context, which branch protection treats as
-# satisfied — it does not disable branch protection itself, so applying
-# the label is the only way to bypass these checks.
+# Every real job below (pytest/lint/docker-build/meta-lint/e2e/
+# codeql-analyze) is gated on the "skip-ci" PR label so a maintainer can
+# fast-track a merge (e.g. an environment-settings-only change) without
+# waiting on the full matrix. A skipped job still reports a "skipped"
+# conclusion for its required-status-check context, which branch
+# protection treats as satisfied — it does not disable branch protection
+# itself, so applying the label is the only way to bypass these checks.
 # skip-ci on a release PR is refused, not silently ignored: a version
 # bump merged to master auto-releases via autorelease.yaml with no
 # further checks downstream, so that's the one PR shape that must never
@@ -49,16 +49,18 @@ concurrency:
 # failed), or skip-ci on a *confirmed* release — still dispatches the
 # job. The confirmed-release case is caught by an explicit early bail
 # step (see detect-release and tests-finished below), not by silently
-# running the real steps. This means codeql-gate (calling
-# codeql-gate.yaml, which waits for codeql.yml's scan of this PR's merge
-# commit and fails on an open high/critical alert) is skippable too on a
-# non-release PR — deliberately: skip-ci is refused on release PRs, so
-# every PR that can actually reach autorelease.yaml still goes through
-# codeql-gate for real, which is what actually matters (see
-# codeql-gate.yaml's own top comment).
+# running the real steps. This means codeql-analyze (the actual CodeQL
+# scan, run directly here rather than as a separate workflow — see its
+# own comment for why) is skippable too on a non-release PR, same as
+# every other real job: skip-ci is refused on release PRs, so every PR
+# that can actually reach autorelease.yaml still gets scanned for real.
+# codeql-gate then checks the scan's result for an open high/critical
+# alert, deriving its own skip from codeql-analyze's result rather than
+# repeating this condition — same pattern as e2e deriving from
+# pytest/docker-build below.
 # pytest defines this condition once as a YAML anchor (&skip_unless_real_check);
-# lint/meta-lint/docker-build/codeql-gate alias it rather than repeating
-# the string.
+# lint/meta-lint/docker-build/codeql-analyze alias it rather than
+# repeating the string.
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
@@ -233,31 +235,95 @@ jobs:
         # auto-discovers the same way via `types: [dockerfile]`.
         run: git ls-files '*Dockerfile*' | xargs /tmp/hadolint
 
-  codeql-gate:
+  codeql-analyze:
+    name: "codeql-analyze (${{ matrix.language }})"
     needs: [detect-release]
-    # See pytest's identical condition/comment above, and codeql-gate.yaml
-    # for why this doesn't run codeql.yml's scan itself — codeql.yml
-    # already scans this exact PR (it triggers on the same pull_request
-    # event, independently), this job just waits for that result and
-    # fails on an open high/critical alert.
+    # See pytest's identical condition/comment above. Runs the actual scan
+    # directly in this workflow (previously a separate codeql.yml, called
+    # via a reusable codeql-gate.yaml that polled its check-runs across
+    # workflows) so that a single needs: dependency below is enough to
+    # know the scan has finished — no cross-workflow polling, and no
+    # separate checks:read permission to query check-runs by SHA, both of
+    # which were real sources of bugs the old design hit in practice.
+    # Trades away codeql.yml's weekly schedule (re-scans unchanged code
+    # against newer CodeQL query packs) and its push:master trigger —
+    # accepted deliberately: this workflow only runs on PR pushes, and
+    # tests.yaml already holds that master commits are covered by the PR
+    # that merged them (see this file's "on:" comment).
     if: *skip_unless_real_check
-    # Must match (or exceed) codeql-gate.yaml's own job permissions: a
-    # reusable workflow's effective token permissions are the intersection
-    # of what the caller grants here and what the callee requests, not
-    # just the callee's own permissions: block.
+    runs-on: "ubuntu-latest"
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Initialize CodeQL
+        uses: "github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9" # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Perform CodeQL Analysis
+        uses: "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9" # v4.37.0
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  codeql-gate:
+    needs: [codeql-analyze]
+    # codeql-analyze's own condition already fully encodes skip-ci's
+    # effect — same pattern as e2e deriving from pytest/docker-build
+    # rather than repeating the skip-ci/detect-release logic itself. Runs
+    # once the scan completed for real, or was legitimately skip-ci'd;
+    # does NOT run if the scan itself failed — tests-finished catches
+    # that directly via codeql-analyze's own result below, not through
+    # this job silently skipping.
+    if: "needs.codeql-analyze.result == 'success' || needs.codeql-analyze.result == 'skipped'"
+    runs-on: "ubuntu-latest"
     permissions:
       security-events: read
-      checks: read
-    uses: ./.github/workflows/codeql-gate.yaml
-    with:
-      # github.sha/github.ref are NOT used here on purpose — see
-      # codeql-gate.yaml's top comment for why they resolve to an
-      # ephemeral merge-preview commit under pull_request, not the PR's
-      # real head commit codeql.yml's check-runs are actually posted
-      # against. Falls back to github.sha/github.ref for workflow_dispatch
-      # (no pull_request object to read a head sha/number from).
-      sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      ref: ${{ (github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number)) || github.ref }}
+    steps:
+      - name: Refuse if this PR has an open high/critical CodeQL alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # refs/pull/<n>/merge under pull_request, matching what
+          # codeql-analyze's SARIF upload associates its alerts with;
+          # falls back to github.ref for workflow_dispatch (no
+          # pull_request object to read a number from).
+          REF: ${{ (github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number)) || github.ref }}
+        # Checks *all* currently-open high/critical alerts on this ref,
+        # not just ones newly introduced by this push — an old alert
+        # already present should block exactly as much as a brand-new
+        # one.
+        run: |
+          set -euo pipefail
+          # -X GET is required: gh api defaults to POST whenever -f params
+          # are present, which 404s on this GET-only endpoint.
+          # --jq '.[]' (rather than a `[...]`-wrapped filter) matters under
+          # --paginate: it emits one alert object per line across all
+          # pages, which `jq -s` below can slurp into a single array
+          # regardless of how many pages came back — a `[...]`-wrapped
+          # filter would instead print one array *per page*, concatenated
+          # as separate top-level JSON values that `jq length` can't sum
+          # correctly.
+          alerts="$(gh api "repos/$REPO/code-scanning/alerts" -X GET -f "ref=$REF" -f state=open --paginate --jq '.[]' \
+            | jq -s '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")]')"
+          count="$(echo "$alerts" | jq 'length')"
+          if [ "$count" != "0" ]; then
+            echo "$alerts" | jq -r '.[] | "#\(.number) [\(.rule.security_severity_level)] \(.rule.description) — \(.html_url)"'
+            echo "::error::$count open high/critical CodeQL alert(s) on $REF — refusing to proceed until resolved or dismissed."
+            exit 1
+          fi
+          echo "No open high/critical CodeQL alerts on $REF."
 
   docker-build:
     # Runs concurrently with pytest rather than gated behind it: pytest
@@ -414,31 +480,32 @@ jobs:
   tests-finished:
     # Branch protection needs one fixed required-status-check context per
     # workflow (mirroring hacs.yaml/hassfest.yaml, which each only have one
-    # job and so already look like this for free). tests.yaml has six real
-    # jobs, two of them matrixed (pytest, e2e) — a job-level skip never
-    # expands a matrix, so a skipped pytest/e2e never posts under
-    # "pytest (current)"/"pytest (min)"/"e2e (current)"/"e2e (min)" (those
-    # literal names only come into existence once the matrix actually
-    # runs), which would leave a skip-ci PR permanently blocked waiting on
-    # names that never appear. No `name:` override here (unlike
-    # hacs.yaml/hassfest.yaml's jobs) so this doesn't display as "Tests /
-    # Tests" against the workflow's own name.
+    # job and so already look like this for free). tests.yaml has seven
+    # real jobs, three of them matrixed (pytest, e2e, codeql-analyze) — a
+    # job-level skip never expands a matrix, so a skipped pytest/e2e/
+    # codeql-analyze never posts under "pytest (current)"/"e2e (min)"/
+    # "codeql-analyze (python)" etc. (those literal names only come into
+    # existence once the matrix actually runs), which would leave a
+    # skip-ci PR permanently blocked waiting on names that never appear.
+    # No `name:` override here (unlike hacs.yaml/hassfest.yaml's jobs) so
+    # this doesn't display as "Tests / Tests" against the workflow's own
+    # name.
     #
     # Skips at the job level (→ a real "skipped" conclusion, matching the
-    # six jobs it summarizes, which all skip the same way) in the one
+    # seven jobs it summarizes, which all skip the same way) in the one
     # legitimate case: skip-ci is set AND detect-release confirmed this is
     # NOT a release. Every other combination still dispatches this job —
     # see hacs.yaml's validate job for the full reasoning (same formula):
     # a confirmed release needs to hit the bail step below (this is
     # branch protection's actual required context, so it's the one place
-    # that has to fail loudly instead of the six jobs' quiet skip being
+    # that has to fail loudly instead of the seven jobs' quiet skip being
     # mistaken for "all good"); an unconfirmed verdict fails closed to
     # checking the real results below; !cancelled() backs this off if a
     # second triggering event superseded this run, rather than reporting
     # a spurious FAILURE from a run that's about to be discarded (as
     # happened once with the old always()-based version of this job).
     runs-on: "ubuntu-latest"
-    needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e, codeql-gate]
+    needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e, codeql-analyze, codeql-gate]
     if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
     steps:
       - name: Refuse skip-ci on a release PR
@@ -450,7 +517,8 @@ jobs:
         run: |
           for r in "${{ needs.pytest.result }}" "${{ needs.lint.result }}" \
                    "${{ needs.docker-build.result }}" "${{ needs.meta-lint.result }}" \
-                   "${{ needs.e2e.result }}" "${{ needs.codeql-gate.result }}"; do
+                   "${{ needs.e2e.result }}" "${{ needs.codeql-analyze.result }}" \
+                   "${{ needs.codeql-gate.result }}"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::a required job did not pass (result: $r)"
               exit 1
