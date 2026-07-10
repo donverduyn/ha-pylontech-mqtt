@@ -204,14 +204,18 @@ jobs:
         run: /tmp/actionlint -color .github/workflows/*.yaml
       - name: ShellCheck
         # Preinstalled on ubuntu-latest runners; covers every shell script in
-        # the repo (docker/Dockerfile has no other shell to lint).
-        run: |
-          shellcheck scripts/clean.sh \
-            .devcontainer/postCreate.sh \
-            .devcontainer/seedHostConfig.sh \
-            .devcontainer/syncConfigOut.sh
+        # the repo (docker/Dockerfile has no other shell to lint). Discovered
+        # via git ls-files rather than a hand-maintained path list, so new
+        # scripts are covered automatically instead of silently skipped --
+        # mirrors pre-commit's shellcheck hook, which auto-discovers the same
+        # way via `types: [shell]`.
+        run: git ls-files '*.sh' | xargs shellcheck
       - name: Hadolint
-        run: /tmp/hadolint docker/Dockerfile docker/Dockerfile.stub
+        # Discovered via git ls-files rather than a hand-maintained path
+        # list, so a new Dockerfile is covered automatically instead of
+        # silently skipped -- mirrors pre-commit's hadolint hook, which
+        # auto-discovers the same way via `types: [dockerfile]`.
+        run: git ls-files '*Dockerfile*' | xargs /tmp/hadolint
 
   docker-build:
     # Runs concurrently with pytest rather than gated behind it: pytest
