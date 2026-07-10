@@ -19,18 +19,18 @@ name: Dependabot Auto-merge
 # nothing to act on — it stays open (and pending) until
 # close-stale-automation-prs.yaml eventually retires it.
 #
-# pull_request_target, not pull_request: workflows triggered by a plain
-# pull_request event from a Dependabot-authored PR run with a read-only
-# GITHUB_TOKEN, regardless of what this file's own permissions: block
-# declares -- a hard GitHub platform restriction, not something workflow
-# config can override. gh pr merge --auto below needs write access, so
-# this has to be pull_request_target instead. Safe here specifically
-# because nothing in this job checks out or executes the PR's own code
-# (fetch-metadata and gh operate purely via the API/event context) --
-# pull_request_target's danger is normally running untrusted PR code with
-# privileged secrets, which never happens in this job.
+# Plain pull_request, not pull_request_target: deliberately reverted
+# (2026-07-10) after confirming that a plain pull_request event from a
+# Dependabot-authored PR runs with a read-only GITHUB_TOKEN regardless of
+# this file's permissions: block — a hard GitHub platform restriction, not
+# something workflow config can override. That means `gh pr merge --auto`
+# below cannot actually enable auto-merge against a real Dependabot PR
+# under this trigger; pull_request_target would fix that (and was briefly
+# used here) but was intentionally backed out in favor of staying off that
+# trigger type. Until this job's write path is redesigned, treat it as
+# checking the semver type only — it does not reliably merge anything.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 permissions: {}
