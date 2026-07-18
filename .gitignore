@@ -51,8 +51,8 @@ Thumbs.db
 # Docker
 docker/*.env
 
-# Local secret values (e.g. UPDATE_PR_TOKEN) staged for `gh secret set
-# --env-file`. Never commit actual secret values — see secrets.env.example.
+# Local secret values retained only for migration/rotation. Remove secrets.env
+# after the GitHub App configuration is tested; never commit actual values.
 secrets.env
 
 # Home Assistant / HACS

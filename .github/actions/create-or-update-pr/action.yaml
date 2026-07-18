@@ -19,6 +19,9 @@ inputs:
     required: true
   pr-body:
     required: true
+  app-slug:
+    required: true
+    description: "Slug of the GitHub App used as the commit author"
   gh-token:
     required: true
     description: "Token used by git push and the gh CLI"
@@ -35,6 +38,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh-token }}
+        APP_SLUG: ${{ inputs.app-slug }}
         BRANCH: ${{ inputs.branch }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
@@ -47,8 +51,9 @@ runs:
           exit 0
         fi
 
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        app_user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+        git config user.name "${APP_SLUG}[bot]"
+        git config user.email "${app_user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
         git checkout -B "$BRANCH"
         git add .
         git commit -m "$COMMIT_MESSAGE"
