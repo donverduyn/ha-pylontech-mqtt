@@ -16,11 +16,18 @@ concurrency:
 jobs:
   update:
     runs-on: "ubuntu-latest"
+    # scripts/update_dependencies.py's subprocess calls (uv pip compile,
+    # npm view, docker CLI inspects) have no timeout of their own, unlike
+    # its urllib calls (which all pass timeout=) — a hung registry/network
+    # call here would otherwise run until GitHub's 6-hour job default,
+    # consuming a runner slot for a routine weekly job. Generous relative
+    # to the normal ~1-2 minute run, but bounds the worst case.
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
         with:
           fetch-depth: 0
           # Optional: set UPDATE_PR_TOKEN to a PAT or GitHub App token if PRs
