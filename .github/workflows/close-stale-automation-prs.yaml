@@ -3,7 +3,7 @@ name: Close Stale Automation PRs
 # Two independent reasons a bot/automation-authored PR should be closed
 # without a human doing it by hand:
 #
-# 1. Known-superseded (dependabot only, closes fast, regardless of age):
+# 1. Known-superseded (dependabot only, regardless of age):
 #    Dependabot security updates (CVE-driven) fire independently of
 #    dependabot.yml's schedule/ecosystem list — they've repeatedly opened
 #    isolated single-package pip bumps (e.g. #66-69, #74) that conflict with
@@ -12,8 +12,8 @@ name: Close Stale Automation PRs
 #    transitive pin from that floor's homeassistant release.
 #    dependency-updates.yaml / min-ha-version-update.yaml already supersede
 #    these by refreshing the whole dependency set together with uv, so this
-#    closes the now-redundant PR as soon as its CI failure confirms that's
-#    what happened, instead of waiting on reason 2 below.
+#    closes the now-redundant PR once its CI failure confirms that's what
+#    happened, instead of waiting on reason 2 below.
 #
 # 2. Stale (dependabot or our own dependency-update automation, any reason,
 #    only once 7+ days old AND not pushed to in the last day): a PR nobody
@@ -24,21 +24,26 @@ name: Close Stale Automation PRs
 #    opens a fresh one reflecting whatever's current. This also covers
 #    min-ha-version-update.yaml's own branch, which used to self-close its
 #    stale PR inline right before each weekly run — centralized here
-#    instead so the reaction time is hours, not up to a week plus the next
-#    Monday. The "not pushed to in the last day" guard matters because
+#    instead. The "not pushed to in the last day" guard matters because
 #    branch-based automations (dependency-updates.yaml,
 #    min-ha-version-update.yaml) update the *same* PR in place rather than
 #    opening a new one each run, which doesn't reset createdAt — without
 #    this guard, a PR sitting at ~7 days old that a weekly job refreshes
-#    with new content could get closed by this workflow's very next tick
-#    hours later, discarding a just-updated PR instead of one nobody
-#    touched.
-
+#    with new content could get closed by this workflow's very next tick,
+#    discarding a just-updated PR instead of one nobody touched.
+#
+# Weekly, not 6-hourly (changed 2026-07-18): both reasons above tolerate a
+# week's delay just fine — reason 2 is itself keyed to a 7-day threshold,
+# and reason 1's "closes fast" property only mattered relative to a human
+# noticing the redundant PR first, which doesn't happen faster than this
+# job now runs either. Scheduled after dependency-updates.yaml (08:17) and
+# min-ha-version-update.yaml (08:30) on the same Monday, so anything those
+# two runs just superseded is already stale/redundant by the time this
+# checks.
 on:
   workflow_dispatch:
   schedule:
-    # Every 6 hours, offset from the top of the hour.
-    - cron: "45 */6 * * *"
+    - cron: "50 8 * * 1"
 
 permissions: {}
 
