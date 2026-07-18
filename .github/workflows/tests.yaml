@@ -341,79 +341,20 @@ jobs:
     if: *skip_unless_real_check
     steps:
       - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
-      - name: Cache the built sidecar image
-        # Keyed only on the image's actual inputs (Dockerfile — which embeds
-        # the base image's pinned digest — plus the runtime lockfile and
-        # everything under src/), deliberately excluding github.sha: a PR
-        # that doesn't touch any of these (docs, workflows,
-        # custom_components/, tests/) reuses byte-identical image bytes
-        # from a prior run instead of rebuilding. The one consequence: a
-        # cache hit's baked-in GIT_SHA/SIDECAR_VERSION env vars (below) are
-        # from whichever commit last changed one of these inputs, not this
-        # commit — fine today since this is the CI-only image (release.yaml
-        # builds and tags the real one separately) and tests only assert
-        # sidecar_version is truthy, never an exact value.
-        # src/** (the whole directory) rather than the Dockerfile's four
-        # current COPY targets by name: a new src/ file only affects the
-        # built image once the Dockerfile is also edited to COPY it, but
-        # hashing the directory means that file's *later* edits keep busting
-        # the cache without this key needing to be kept in sync with
-        # Dockerfile's COPY list by hand. The tradeoff is a file added to
-        # src/ that the Dockerfile never COPYs (e.g. a future non-shipped
-        # helper) would still bust the cache unnecessarily — acceptable
-        # since src/ today is exactly the sidecar's shipped source.
-        id: image-cache
-        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
-        with:
-          path: /tmp/pylon2mqtt-ci.tar.gz
-          key: docker-image-${{ runner.os }}-${{ hashFiles('docker/Dockerfile', 'requirements_runtime.lock.txt', 'src/**') }}
-      - name: Build the sidecar image
-        if: steps.image-cache.outputs.cache-hit != 'true'
-        run: |
-          docker build -f docker/Dockerfile \
-            --build-arg GIT_SHA="${{ github.sha }}" \
-            --build-arg SIDECAR_VERSION="ci-${{ github.sha }}" \
-            -t pylon2mqtt:ci .
-      - name: Smoke test the built image
-        # Skipped on a cache hit: the tar.gz being reused already passed
-        # this exact smoke test in the run that first built and cached it,
-        # and the cache key guarantees byte-identical image contents, so
-        # re-running it here would only re-verify the same bytes.
-        if: steps.image-cache.outputs.cache-hit != 'true'
-        # Cheap fail-fast before the image is shipped off to the e2e job's
-        # compose stack: proves it runs under its pinned Python 3.13 runtime
-        # (not just that `docker build` succeeds), that main.py's entry point
-        # and its pinned deps (paho-mqtt, pyserial) import cleanly, and that
-        # missing config fails fast (exit 1, clear log) instead of hanging
-        # forever waiting on hardware that isn't there.
-        run: |
-          set +e
-          output="$(docker run --rm pylon2mqtt:ci 2>&1)"
-          code=$?
-          set -e
-          echo "$output"
-          if [ "$code" -ne 1 ]; then
-            echo "::error::Expected exit code 1 (fail-fast config validation), got $code"
-            exit 1
-          fi
-          if ! echo "$output" | grep -q "MQTT_BROKER environment variable is required"; then
-            echo "::error::Expected fail-fast MQTT_BROKER validation message was not logged"
-            exit 1
-          fi
-      - name: Save the image for the e2e job
-        # Skipped on a cache hit: the cache step above already restored this
-        # exact tar.gz to /tmp, so there's nothing new to save.
-        if: steps.image-cache.outputs.cache-hit != 'true'
-        # `docker save` + artifact (rather than each e2e matrix leg running
-        # its own `docker build`) so both legs assert against the *identical*
-        # bytes that were just built and smoke-tested here — a per-leg
-        # rebuild would technically be a different artifact, and would race
-        # ahead even when this job's smoke test failed.
-        run: docker save pylon2mqtt:ci | gzip > /tmp/pylon2mqtt-ci.tar.gz
+      # Build/cache/smoke-test logic lives in this composite action, shared
+      # with autorelease.yaml's populate-docker-build-cache job — see its
+      # own comment for why a PR-scoped cache alone was never actually
+      # getting reused across PRs, and why that job exists.
+      - uses: ./.github/actions/build-sidecar-image
       - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7.0.1
         with:
           name: sidecar-image
           path: /tmp/pylon2mqtt-ci.tar.gz
+          # `docker save` + artifact (rather than each e2e matrix leg running
+          # its own `docker build`) so both legs assert against the
+          # *identical* bytes that were just built and smoke-tested here —
+          # a per-leg rebuild would technically be a different artifact, and
+          # would race ahead even when this job's smoke test failed.
           # Only consumed by the e2e job minutes later; no reason to hold
           # ~50 MB against the artifact quota for the default 90 days.
           retention-days: 1

@@ -26,9 +26,9 @@ name: Auto-release
 # here: every commit on master already passed the full unit → build →
 # e2e pipeline on its PR (see tests.yaml), enforced by branch
 # protection's required status checks.
-# Also carries refresh-dependabot-branch (unrelated to releasing, but
-# shares this exact push:master trigger, which is the natural signal for
-# it — see that job's own comment for why).
+# Also carries refresh-dependabot-branch and populate-docker-build-cache
+# (both unrelated to releasing, but share this exact push:master trigger,
+# which is the natural signal for each — see their own comments for why).
 on:
   push:
     branches:
@@ -155,3 +155,28 @@ jobs:
             echo "  already up to date, or has a real conflict — trying the next oldest."
           done < <(echo "$prs" | jq -c '.[]')
           echo "No open Dependabot PR needed rebasing."
+
+  populate-docker-build-cache:
+    # tests.yaml's docker-build job caches the built sidecar image keyed on
+    # its actual inputs (Dockerfile, requirements_runtime.lock.txt, src/**),
+    # but GitHub Actions cache entries are scoped to the ref that created
+    # them — a PR's refs/pull/<n>/merge cache is invisible to every OTHER
+    # PR's ref, even with an identical key. Confirmed live: many PRs in a
+    # row computed the exact same cache key (none touched these inputs)
+    # yet every single one still rebuilt from scratch, each saving its own
+    # now-unreachable copy under its own ref — the caching had no cross-PR
+    # effect at all, only ever helping a single PR across its own re-pushes
+    # to the same ref. The one scope every PR CAN fall back to is the base
+    # branch's cache — but tests.yaml never runs on push:master
+    # (deliberately, per its own "on:" comment), so that scope was never
+    # actually being populated. This job exists purely to populate it: the
+    # same build+smoke-test+cache sequence as tests.yaml's docker-build
+    # (shared via build-sidecar-image so the two can't drift out of sync —
+    # see its own comment on why a cached image must always have actually
+    # been smoke-tested), run here instead so the *next* PR gets a real
+    # cache hit when these inputs haven't changed, rather than every
+    # single PR rebuilding unconditionally.
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
+      - uses: ./.github/actions/build-sidecar-image
