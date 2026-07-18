@@ -108,9 +108,13 @@ FEATURE_OPTION_REFS: dict[str, OrderedDict[str, str | bool]] = {
     ),
 }
 
+# requirements_dev_min.lock.txt is deliberately excluded here: unlike the
+# other two (whose floors are hardcoded full patches that never drift), its
+# homeassistant pin is frozen ~months behind current, so its *actual*
+# Python floor drifts independently — see min_lock_python_floor(), which
+# resolves it fresh from that pin instead of a hardcoded bare minor.
 PYTHON_LOCKS: tuple[tuple[str, str, str], ...] = (
     ("requirements_dev.txt", "requirements_dev.lock.txt", "3.14.6"),
-    ("requirements_dev_min.txt", "requirements_dev_min.lock.txt", "3.13"),
     ("requirements_runtime.txt", "requirements_runtime.lock.txt", "3.13.14"),
 )
 
@@ -508,6 +512,11 @@ def compile_python_lock(requirements: str, output: str, python_version: str) -> 
 def refresh_python_locks() -> None:
     for requirements, output, python_version in PYTHON_LOCKS:
         compile_python_lock(requirements, output, python_version)
+    compile_python_lock(
+        "requirements_dev_min.txt",
+        "requirements_dev_min.lock.txt",
+        min_lock_python_floor(),
+    )
 
 
 def months_ago(months: int) -> str:
@@ -568,6 +577,30 @@ def homeassistant_requires_python(version: str) -> str:
         )
     major, minor, patch = match.group(1), match.group(2), match.group(3) or "0"
     return f"{major}.{minor}.{patch}"
+
+
+def current_min_phacc_pin() -> str:
+    match = re.search(
+        r"pytest-homeassistant-custom-component==(\S+)",
+        REQUIREMENTS_DEV_MIN_TXT.read_text(),
+    )
+    if not match:
+        raise SystemExit(
+            "could not find a pytest-homeassistant-custom-component== pin in "
+            f"{REQUIREMENTS_DEV_MIN_TXT}"
+        )
+    return match.group(1)
+
+
+def min_lock_python_floor() -> str:
+    """The min lock's *currently pinned* homeassistant release's own Python
+    floor — resolved fresh rather than hardcoded, since that pin is frozen
+    ~months behind current (see MIN_HA_VERSION_MONTHS_BEHIND) and each
+    min-ha-version bump can move its floor to a later patch.
+    """
+    phacc_version = current_min_phacc_pin()
+    ha_version = homeassistant_pin_for_phacc(phacc_version)
+    return homeassistant_requires_python(ha_version)
 
 
 def major_minor_python(version: str) -> str:
