@@ -19,31 +19,36 @@ name: Dependabot Auto-merge
 # nothing to act on — it stays open (and pending) until
 # close-stale-automation-prs.yaml eventually retires it.
 #
-# The pull-request trigger enables auto-merge as soon as an eligible PR is
-# opened or updated. The weekly trigger owns the related branch maintenance:
-# it rebases every open Dependabot PR that needs it so an otherwise-ready PR
-# cannot remain blocked forever on an out-of-date branch. Keeping both
-# operations in this workflow prevents unrelated push/release workflows from
-# also owning Dependabot lifecycle work.
+# schedule/workflow_dispatch only — deliberately NOT pull_request_target.
+# This used to fire on every PR open/synchronize/reopen so auto-merge got
+# enabled immediately rather than waiting up to a week. Reworked to run
+# only on the weekly cadence below, in the same pass as the branch-rebase
+# step: enabling auto-merge a few days late costs nothing (the PR just
+# merges once this job next runs and checks are green), and running
+# exclusively on a schedule means this workflow's behavior no longer
+# depends on Dependabot's own PR-event timing at all.
 #
-# pull_request_target, not pull_request: a plain pull_request event from
-# a Dependabot-authored PR runs with a read-only GITHUB_TOKEN and no
-# access to user-defined secrets at all, regardless of this file's
-# permissions: block — a hard GitHub platform restriction, confirmed by
-# trying it. gh pr merge --auto below needs write access, so this has to
-# be pull_request_target instead — this is also the pattern
-# dependabot/fetch-metadata's own docs use for exactly this case; the
-# alternative (workflow_run) would mean fetch-metadata has no PR context
-# to read at all under that trigger, since it relies on the pull_request
-# event object/checked-out commits, not just workflow completion — not a
-# simple trigger swap. Safe here specifically because nothing in this
-# job checks out or executes the PR's own code (fetch-metadata and gh
-# operate purely via the API/event context) — pull_request_target's
-# danger is normally running untrusted PR code with privileged secrets,
-# which never happens in this job.
+# This also sidesteps the read-only-GITHUB_TOKEN restriction that
+# Dependabot-authored `pull_request` events carry (see this repo's
+# project_gha_gotchas memory, point 4) — that restriction is specific to
+# runs *triggered by* a pull_request/pull_request_target event, not to
+# what a schedule-triggered run's API calls target. A schedule/
+# workflow_dispatch run gets the full token from this file's `permissions:`
+# block regardless of which PRs it then acts on, so there's no need for
+# pull_request_target's write-token workaround at all once nothing here
+# reacts to PR events directly.
+#
+# Dropping pull_request_target also drops dependabot/fetch-metadata, since
+# that action reads `github.event.pull_request` to determine the semver
+# update type — a field that only exists on pull_request-family events.
+# Instead, update type is derived from the compatibility-score badge
+# Dependabot embeds in every PR body (a Markdown image link containing
+# `previous-version=X&new-version=Y` per dependency): extract those pairs
+# and compare each pair's leading major-version segment. A PR with no
+# badge, or any dependency whose major segment changed, is treated as a
+# major bump and skipped — conservative by design, matching the "only the
+# common low-risk case" scope above.
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
   schedule:
     # Monday 08:22 UTC; after dependency-updates.yaml (08:17) and well ahead
@@ -54,91 +59,73 @@ on:
 
 permissions: {}
 
-# PR runs are grouped by PR number; weekly/manual runs fall back to a fixed
-# literal (not github.ref) so every non-PR trigger — the schedule, or a
-# workflow_dispatch fired against any ref — always shares one group,
-# cancelling a stale run of the same kind regardless of which ref triggered
-# it. This cancels only an older run of the same kind, not a scheduled
-# refresh and the synchronize event that refresh can produce.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'scheduled' }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
-  auto-merge:
-    if: >-
-      github.event_name == 'pull_request_target' &&
-      (github.event.pull_request.user.login == 'dependabot[bot]' ||
-      github.event.pull_request.user.login == 'app/dependabot')
-    runs-on: "ubuntu-latest"
-    permissions:
-      pull-requests: write
-      contents: write
-    steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: "dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a" # v2.5.0
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Enable auto-merge for patch/minor updates
-        if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
-
-  refresh-dependabot-branch:
-    # Auto-merge waits for required checks and an up-to-date branch; it does
-    # not update a stale Dependabot branch itself. This used to advance only
-    # the oldest queued PR per run, relying on each PR's own merge (a push to
-    # master) to re-trigger the next rebase in cascade — that cascade only
-    # existed while this job ran on push:master. Now that it's weekly-only
-    # (see this file's "on:" comment for why that trigger moved here), one
-    # PR per run would leave any PR behind the front of the queue untouched
-    # for a full week — long enough for close-stale-automation-prs.yaml's
-    # 7-day rule to close it before it was ever rebased even once. So this
-    # rebases every open Dependabot PR that needs it, oldest first, in the
-    # same run. Trade-off: a rare batch of multiple simultaneously-open
-    # Dependabot PRs (grouped security updates mean there's usually at most
-    # one — see dependabot.yml) are all rebased onto the same pre-run master
-    # rather than each testing against the others' changes in sequence;
-    # accepted because a PR that's never rebased at all (and gets closed as
-    # stale) is strictly worse than one rebased but not cross-tested, and
-    # dependency-updates.yaml/min-ha-version-update.yaml already resolve the
-    # whole dependency set together weekly regardless.
-    #
-    # Continues (rather than stops) on a PR that fails to rebase — already
-    # current, or a real conflict update-branch cannot resolve — so one stuck
-    # PR does not block the rest of the queue.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  maintain-dependabot-prs:
     runs-on: "ubuntu-latest"
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - name: Rebase every open Dependabot PR that needs it
+      - name: Enable auto-merge and rebase every open Dependabot PR
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          prs="$(gh pr list --repo "$REPO" --state open --json number,author,createdAt \
+
+          is_major_bump() {
+            # Reads $body from the caller's scope. Echoes "true"/"false".
+            local badges major_bump prev new prev_major new_major
+            badges="$(grep -oP 'previous-version=[^&]+&new-version=[^&\s")]+' <<<"$body" || true)"
+            if [ -z "$badges" ]; then
+              echo "true" # no compatibility metadata at all — be conservative
+              return
+            fi
+            major_bump="false"
+            while IFS= read -r badge; do
+              prev="$(grep -oP 'previous-version=\K[^&]+' <<<"$badge")"
+              new="$(grep -oP 'new-version=\K[^&\s")]+' <<<"$badge")"
+              prev_major="$(grep -oP '^v?\K\d+' <<<"$prev" || true)"
+              new_major="$(grep -oP '^v?\K\d+' <<<"$new" || true)"
+              if [ -z "$prev_major" ] || [ -z "$new_major" ] || [ "$prev_major" != "$new_major" ]; then
+                major_bump="true"
+              fi
+            done <<<"$badges"
+            echo "$major_bump"
+          }
+
+          prs="$(gh pr list --repo "$REPO" --state open --json number,author,url,createdAt \
             --jq '[.[] | select(.author.login == "dependabot[bot]" or .author.login == "app/dependabot")] | sort_by(.createdAt)')"
           count="$(echo "$prs" | jq 'length')"
           if [ "$count" = "0" ]; then
             echo "No open Dependabot PRs."
             exit 0
           fi
+
           # Process substitution (< <(...)), not a `| while` pipe: a piped
           # while loop runs in a subshell, where a mid-loop failure under
           # `set -e` would only terminate that subshell, silently skipping
           # the rest of the queue instead of failing the job.
           while read -r pr; do
             number="$(echo "$pr" | jq -r .number)"
-            echo "Attempting to rebase PR #$number..."
+            url="$(echo "$pr" | jq -r .url)"
+
+            body="$(gh pr view "$number" --repo "$REPO" --json body --jq .body)"
+            if [ "$(is_major_bump)" = "false" ]; then
+              echo "PR #$number: patch/minor — enabling auto-merge."
+              # Not fatal on failure (e.g. already merged/closed by the time
+              # this runs, or a real merge conflict): one PR's failure here
+              # must not abort the loop and skip every later PR's rebase.
+              gh pr merge --auto --squash "$url" || echo "  could not enable auto-merge — leaving for manual review."
+            else
+              echo "PR #$number: major bump (or no compatibility metadata) — leaving for manual review."
+            fi
+
+            echo "PR #$number: attempting rebase..."
             if gh api "repos/$REPO/pulls/$number/update-branch" -X PUT >/dev/null 2>&1; then
               echo "  updated."
             else
