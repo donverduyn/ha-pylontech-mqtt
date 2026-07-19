@@ -48,7 +48,7 @@ jobs:
       # fetch-depth: 0 (full history) so the merge-base check below can
       # actually walk back to origin/master instead of hitting a shallow
       # clone's history boundary.
-      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
+      - uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" # v7.0.0
         with:
           fetch-depth: 0
 
@@ -231,7 +231,7 @@ jobs:
             --tag "ghcr.io/${{ github.repository }}:latest" \
             "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
 
-      - uses: "softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b" # v3.0.1
+      - uses: "softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228" # v3.0.2
         with:
           # This is the step that mints the v<version> tag (at the commit
           # this run checked out) — deliberately the pipeline's last act,
