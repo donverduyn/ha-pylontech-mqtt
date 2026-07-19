@@ -52,10 +52,10 @@ if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
 fi
 echo $$ > "$pidfile"
 
-# is_bind_mounted/atomic_copy live in lib/fs.sh, shared with postCreate.sh
+# is_bind_mounted/atomic_copy live in utils/fs.sh, shared with postCreate.sh
 # and seedHostConfig.sh respectively -- see that file.
 # shellcheck disable=SC1091 # path is repo-local and always present
-. "$(dirname "$0")/lib/fs.sh"
+. "$(dirname "$0")/utils/fs.sh"
 
 sync_path() {
   relpath="$1"

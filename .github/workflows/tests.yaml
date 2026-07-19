@@ -268,7 +268,7 @@ jobs:
     steps:
       - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
       - name: Initialize CodeQL
-        uses: "github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9" # v4.37.0
+        uses: "github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a" # v4.37.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -278,14 +278,23 @@ jobs:
         # alerts from *this* push (not just older, already-processed ones)
         # because this action's own `wait-for-processing` input defaults to
         # "true" (confirmed against analyze/action.yml for this pinned
-        # v4.37.0): the step itself polls
+        # v4.37.1): the step itself polls
         # `code-scanning/sarifs/{sarif_id}` internally and doesn't return
         # success until GitHub reports the upload fully processed, not
         # merely accepted. Investigated as a suspected race (SARIF
         # processing is normally async) and confirmed a non-issue given
         # this default; don't set `wait-for-processing: false` here without
         # adding an explicit poll/delay in codeql-gate to replace it.
-        uses: "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9" # v4.37.0
+        #
+        # init and analyze must always be pinned to the exact same
+        # codeql-action version together — analyze refuses to process a
+        # config init wrote at a different version ("Loaded a
+        # configuration file for version 'X', but running version 'Y'").
+        # Dependabot doesn't know that: it proposed this bump and init's
+        # above as two independent PRs (one per action subpath), and each
+        # one alone mismatches the other still sitting at the old pin. See
+        # .github/dependabot.yml's github-actions group for the fix.
+        uses: "github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a" # v4.37.1
         with:
           category: "/language:${{ matrix.language }}"
 

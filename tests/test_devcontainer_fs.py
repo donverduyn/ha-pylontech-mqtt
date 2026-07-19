@@ -1,5 +1,5 @@
 """
-Tests for .devcontainer/lib/fs.sh's sync_config_in(), the container-side
+Tests for .devcontainer/utils/fs.sh's sync_config_in(), the container-side
 half of getting a config path into place (the host-side half is
 seedHostConfig.sh -- see test_devcontainer_seed_host_config.py).
 
@@ -9,7 +9,7 @@ its own. seedHostConfig.sh is solely responsible for deciding real-vs-
 default content and staging it into .agent-sync; if nothing was staged
 there, sync_config_in must do nothing, not fabricate a placeholder itself.
 
-Sources the real lib file directly via a tiny bash wrapper rather than
+Sources the real utils file directly via a tiny bash wrapper rather than
 running postCreate.sh as a whole -- that script's top-level body triggers
 real installs/downloads/sudo calls unconditionally the moment it's
 invoked, which has no place in a unit test. mountpoint -q naturally
@@ -24,12 +24,12 @@ import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
-_LIB = _ROOT / ".devcontainer" / "lib" / "fs.sh"
+_UTILS = _ROOT / ".devcontainer" / "utils" / "fs.sh"
 
 
 def _sync_config_in(fake_home: Path, relpath: str) -> None:
     subprocess.run(
-        ["bash", "-c", f'. "{_LIB}"; sync_config_in "$1"', "--", relpath],
+        ["bash", "-c", f'. "{_UTILS}"; sync_config_in "$1"', "--", relpath],
         env={**os.environ, "HOME": str(fake_home)},
         capture_output=True,
         text=True,

@@ -11,7 +11,7 @@ Two regressions this guards:
    directory" check falls through to seeding a bogus `{}` JSON *file*
    where a directory belongs, which the real directory bind mount then
    can't attach to correctly. seedHostConfig.sh instead falls back to
-   devcontainer.json's own mount declarations (via lib/json.sh)
+   devcontainer.json's own mount declarations (via utils/json.sh)
    for exactly this case.
 
 2. This script must never create anything on the real host -- only ever

@@ -67,7 +67,7 @@
    workflows inside the container. Both are already installed and
    persisted: `.devcontainer/tool-versions.env` constrains
    `OPENCODE_VERSION` and `KILO_VERSION`; `postCreate.sh` wires both up via
-   `.devcontainer/lib/cli.sh`'s generic `_devcontainer_define_cli_shim`
+   `.devcontainer/utils/cli.sh`'s generic `_devcontainer_define_cli_shim`
    factory so global plugin installs land in home-backed config instead of
    the image layer; `.devcontainer/config-files.txt` persists
    `.config/opencode`, `.local/share/opencode`, `.config/kilo`,
@@ -134,7 +134,7 @@
 8. **Agent configs** — Fix the remaining issues in the agent configs folder.
    No standalone "agent configs" folder exists at the repo root; agent CLI
    config lives under `.devcontainer/` (`config-files.txt`, `tool-versions.env`,
-   `lib/cli.sh`, `postCreate.sh`, `seedHostConfig.sh`,
+   `utils/cli.sh`, `postCreate.sh`, `seedHostConfig.sh`,
    `syncConfigOut.sh`) plus `.claude/settings.json`. Needs scoping — check
    with whoever filed this what "remaining issues" refers to.
 

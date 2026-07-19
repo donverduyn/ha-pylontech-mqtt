@@ -1,5 +1,5 @@
 """
-Tests for .devcontainer/lib/json.sh, the pure-bash JSONC-to-JSON
+Tests for .devcontainer/utils/json.sh, the pure-bash JSONC-to-JSON
 converter seedHostConfig.sh depends on to read devcontainer.json's "mounts"
 array on the host -- before anything else (jq, python, @devcontainers/cli)
 could ever be installed there, since this runs via initializeCommand,
@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).parent.parent
-_SCRIPT = _ROOT / ".devcontainer" / "lib" / "json.sh"
+_SCRIPT = _ROOT / ".devcontainer" / "utils" / "json.sh"
 _DEVCONTAINER_JSON = _ROOT / ".devcontainer" / "devcontainer.json"
 
 

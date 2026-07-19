@@ -1,5 +1,5 @@
 """
-Tests for .devcontainer/lib/cli.sh, the generic engine behind the
+Tests for .devcontainer/utils/cli.sh, the generic engine behind the
 claude/opencode/kilo shell function shims.
 
 Three layers, tested separately:
@@ -19,7 +19,7 @@ Three layers, tested separately:
 - _devcontainer_define_cli_shim: generates a same-named shell function
   from that mechanic via eval (see that function's own comment for why).
   The real per-CLI wiring -- which binary, which trigger, which flags --
-  is deliberately not in this lib file at all; it's plain data supplied at
+  is deliberately not in this utils file at all; it's plain data supplied at
   postCreate.sh's own call site (its "Devcontainer AI CLI home-config
   defaults" step). test_claude_*/test_opencode_*/test_kilo_* extract
   those exact calls out of postCreate.sh and run them for real, so this
@@ -32,7 +32,7 @@ import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
-_LIB = _ROOT / ".devcontainer" / "lib" / "cli.sh"
+_UTILS = _ROOT / ".devcontainer" / "utils" / "cli.sh"
 _POSTCREATE = _ROOT / ".devcontainer" / "postCreate.sh"
 
 _REAL_CLAUDE = "/home/vscode/.local/share/pnpm/bin/claude"
@@ -43,7 +43,7 @@ _REAL_KILO = "/home/vscode/.local/share/pnpm/bin/kilo"
 def _extract_shim_calls() -> str:
     """Pull the _devcontainer_define_cli_shim lines straight out of
     postCreate.sh -- the only CLI-specific data that exists anywhere (see
-    that script and lib/cli.sh)."""
+    that script and utils/cli.sh)."""
     lines = [
         line
         for line in _POSTCREATE.read_text().splitlines()
@@ -62,14 +62,14 @@ def _write_fake_bin(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _shimmed_lib(tmp_path: Path) -> Path:
+def _shimmed_utils(tmp_path: Path) -> Path:
     fake_claude = tmp_path / "fake" / "claude"
     fake_opencode = tmp_path / "fake" / "opencode"
     fake_kilo = tmp_path / "fake" / "kilo"
     for fake_bin in (fake_claude, fake_opencode, fake_kilo):
         _write_fake_bin(fake_bin)
 
-    combined = _LIB.read_text() + "\n" + _extract_shim_calls()
+    combined = _UTILS.read_text() + "\n" + _extract_shim_calls()
     patched = (
         combined.replace(_REAL_CLAUDE, str(fake_claude))
         .replace(_REAL_OPENCODE, str(fake_opencode))
@@ -86,9 +86,9 @@ def _shimmed_lib(tmp_path: Path) -> Path:
 
 
 def _run(tmp_path: Path, *args: str) -> str:
-    lib = _shimmed_lib(tmp_path)
+    utils = _shimmed_utils(tmp_path)
     result = subprocess.run(
-        ["bash", "-c", f'. "{lib}"; "$@"', "--", *args],
+        ["bash", "-c", f'. "{utils}"; "$@"', "--", *args],
         capture_output=True,
         text=True,
         check=True,
@@ -98,7 +98,7 @@ def _run(tmp_path: Path, *args: str) -> str:
 
 def _has_flag(*args: str) -> bool:
     result = subprocess.run(
-        ["bash", "-c", f'. "{_LIB}"; _devcontainer_args_has_flag "$@"', "--", *args],
+        ["bash", "-c", f'. "{_UTILS}"; _devcontainer_args_has_flag "$@"', "--", *args],
         capture_output=True,
         text=True,
     )
@@ -112,7 +112,7 @@ def _shim_run(tmp_path: Path, config: tuple[str, ...], *args: str) -> str:
         [
             "bash",
             "-c",
-            f'. "{_LIB}"; _devcontainer_cli_shim_run "$@"',
+            f'. "{_UTILS}"; _devcontainer_cli_shim_run "$@"',
             "--",
             str(fake_bin),
             *config,

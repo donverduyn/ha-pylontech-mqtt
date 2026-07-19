@@ -21,7 +21,7 @@ prepare_agent_sync
 # ~/.config pre-exists there, vscode-owned -- ~/.local, ~/.local/share, and
 # ~/.local/state do not exist at all. So mounting .local/share/{opencode,kilo}
 # and .local/state/{opencode,kilo} (see devcontainer.json's "mounts") leaves
-# all three of those *parents* root-owned; full_ownership_walk (lib/fs.sh)
+# all three of those *parents* root-owned; full_ownership_walk (utils/fs.sh)
 # only fixes ownership inside each mount's own leaf target, never its
 # parents. That silently breaks anything else that later tries to create a
 # sibling as the vscode user -- confirmed in practice for `pnpm add -g`
@@ -54,13 +54,13 @@ script_dir_abs=$(cd "$script_dir" && pwd)
 # sudo mkdir -p "$HOME/.vscode-server/data/User/History"
 # sudo chown -R vscode:vscode "$HOME/.vscode-server/data/User/History"
 
-# is_bind_mounted/full_ownership_walk/sync_config_in live in lib/fs.sh
+# is_bind_mounted/full_ownership_walk/sync_config_in live in utils/fs.sh
 # (shared with syncConfigOut.sh, which needs is_bind_mounted too), not here
 # -- kept sourceable on its own so tests can exercise sync_config_in
 # directly without triggering this script's own top-level
 # installs/downloads/sudo calls (see that file).
 # shellcheck disable=SC1091 # path is repo-local and always present
-. "$(dirname "$0")/lib/fs.sh"
+. "$(dirname "$0")/utils/fs.sh"
 
 tool_versions_file="$script_dir/tool-versions.env"
 
@@ -227,11 +227,19 @@ EOF
 # shellcheck disable=SC2016 # $PATH must stay literal here — it's expanded later when .bashrc is sourced, not now
 grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_modules/.bin:$PATH"' >> /home/vscode/.bashrc
 
-# lib/cli.sh's _devcontainer_define_cli_shim (see that file) is a generic
+# Same cwd-relative reasoning as node_modules/.bin above, for this repo's own
+# dev tools: .devcontainer/bin/pylon_cli (a symlink to scripts/pylon_cli.py,
+# the interactive BMS/stub console client) can then be run as a bare
+# `pylon_cli` from a terminal opened at the repo root, without
+# `python scripts/pylon_cli.py`.
+# shellcheck disable=SC2016 # $PATH must stay literal here — it's expanded later when .bashrc is sourced, not now
+grep -qF './.devcontainer/bin:' /home/vscode/.bashrc || echo 'export PATH="./.devcontainer/bin:$PATH"' >> /home/vscode/.bashrc
+
+# utils/cli.sh's _devcontainer_define_cli_shim (see that file) is a generic
 # factory: given a CLI name plus its trigger words, override flag, default
 # flag, and any unconditional prefix flags, it defines a same-named shell
 # function that applies them. The three calls below are the only
-# CLI-specific knowledge that exists anywhere -- lib/cli.sh has no idea
+# CLI-specific knowledge that exists anywhere -- utils/cli.sh has no idea
 # what claude, opencode, kilo, --scope, or --global are.
 #
 # claude: auto mode ("--permission-mode auto") biases Claude Code toward
@@ -254,7 +262,7 @@ grep -qF 'node_modules/.bin' /home/vscode/.bashrc || echo 'export PATH="./node_m
 grep -qF '# Devcontainer AI CLI home-config defaults' /home/vscode/.bashrc || cat >> /home/vscode/.bashrc <<EOF
 
 # Devcontainer AI CLI home-config defaults
-. "$script_dir_abs/lib/cli.sh"
+. "$script_dir_abs/utils/cli.sh"
 _devcontainer_define_cli_shim claude /home/vscode/.local/share/pnpm/bin/claude "mcp add|mcp add-json" -s --scope "--scope user" "--permission-mode auto"
 _devcontainer_define_cli_shim opencode /home/vscode/.local/share/pnpm/bin/opencode "plugin|plug" -g --global --global ""
 _devcontainer_define_cli_shim kilo /home/vscode/.local/share/pnpm/bin/kilo "plugin|plug" -g --global --global ""

@@ -41,13 +41,10 @@ name: Dependabot Auto-merge
 # Dropping pull_request_target also drops dependabot/fetch-metadata, since
 # that action reads `github.event.pull_request` to determine the semver
 # update type — a field that only exists on pull_request-family events.
-# Instead, update type is derived from the compatibility-score badge
-# Dependabot embeds in every PR body (a Markdown image link containing
-# `previous-version=X&new-version=Y` per dependency): extract those pairs
-# and compare each pair's leading major-version segment. A PR with no
-# badge, or any dependency whose major segment changed, is treated as a
-# major bump and skipped — conservative by design, matching the "only the
-# common low-risk case" scope above.
+# Instead, update type comes from .github/scripts/dependabot-bump-kind.sh
+# (shared with close-stale-automation-prs.yaml's exemption check) — "major"
+# or "unknown" is treated as a major bump and skipped here, conservative by
+# design, matching the "only the common low-risk case" scope above.
 on:
   workflow_dispatch:
   schedule:
@@ -70,6 +67,11 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # Needed only to fetch .github/scripts/dependabot-bump-kind.sh --
+      # this job otherwise works entirely through the gh API against
+      # $GITHUB_REPOSITORY, not the checked-out tree.
+      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
+
       - name: Enable auto-merge and rebase every open Dependabot PR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,28 +79,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          is_major_bump() {
-            # Reads $body from the caller's scope. Echoes "true"/"false".
-            local badges major_bump prev new prev_major new_major
-            badges="$(grep -oP 'previous-version=[^&]+&new-version=[^&\s")]+' <<<"$body" || true)"
-            if [ -z "$badges" ]; then
-              echo "true" # no compatibility metadata at all — be conservative
-              return
-            fi
-            major_bump="false"
-            while IFS= read -r badge; do
-              prev="$(grep -oP 'previous-version=\K[^&]+' <<<"$badge")"
-              new="$(grep -oP 'new-version=\K[^&\s")]+' <<<"$badge")"
-              prev_major="$(grep -oP '^v?\K\d+' <<<"$prev" || true)"
-              new_major="$(grep -oP '^v?\K\d+' <<<"$new" || true)"
-              if [ -z "$prev_major" ] || [ -z "$new_major" ] || [ "$prev_major" != "$new_major" ]; then
-                major_bump="true"
-              fi
-            done <<<"$badges"
-            echo "$major_bump"
-          }
-
-          prs="$(gh pr list --repo "$REPO" --state open --json number,author,url,createdAt \
+          prs="$(gh pr list --repo "$REPO" --state open --json number,author,url,title,createdAt \
             --jq '[.[] | select(.author.login == "dependabot[bot]" or .author.login == "app/dependabot")] | sort_by(.createdAt)')"
           count="$(echo "$prs" | jq 'length')"
           if [ "$count" = "0" ]; then
@@ -113,16 +94,18 @@ jobs:
           while read -r pr; do
             number="$(echo "$pr" | jq -r .number)"
             url="$(echo "$pr" | jq -r .url)"
+            title="$(echo "$pr" | jq -r .title)"
 
             body="$(gh pr view "$number" --repo "$REPO" --json body --jq .body)"
-            if [ "$(is_major_bump)" = "false" ]; then
+            bump_kind="$(.github/scripts/dependabot-bump-kind.sh "$title" "$body")"
+            if [ "$bump_kind" = "minor-or-patch" ]; then
               echo "PR #$number: patch/minor — enabling auto-merge."
               # Not fatal on failure (e.g. already merged/closed by the time
               # this runs, or a real merge conflict): one PR's failure here
               # must not abort the loop and skip every later PR's rebase.
               gh pr merge --auto --squash "$url" || echo "  could not enable auto-merge — leaving for manual review."
             else
-              echo "PR #$number: major bump (or no compatibility metadata) — leaving for manual review."
+              echo "PR #$number: $bump_kind bump — leaving for manual review."
             fi
 
             echo "PR #$number: attempting rebase..."

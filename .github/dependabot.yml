@@ -238,3 +238,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # github/codeql-action ships init/analyze (and any other subpaths)
+      # as one release train, but Dependabot treats each `uses:` subpath
+      # (codeql-action/init vs codeql-action/analyze) as a separate
+      # dependency and, without this, opened one PR per subpath (#117,
+      # #118) at the same target version. tests.yaml's codeql-analyze job
+      # requires init and analyze pinned to the exact same version —
+      # analyze refuses to process a config init wrote at a different
+      # version — so either PR alone left the other action still on the
+      # old pin and failed CI with a version-mismatch error. Grouping
+      # forces every codeql-action bump into one PR that lands atomically.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
