@@ -1,4 +1,4 @@
-name: Dependabot Auto-merge
+name: PR Auto-merge
 
 # Dependabot's own security-update PRs (CVE-driven, separate from
 # dependency-updates.yaml's own bulk uv refresh — see
@@ -8,6 +8,15 @@ name: Dependabot Auto-merge
 # a human noticed. This closes that gap for the common, low-risk case —
 # patch/minor bumps — the same way dependency-updates.yaml auto-merges its
 # own PR.
+#
+# Ordinary contributor PRs use a deliberately slower path in this same
+# workflow: once a non-draft PR has been open for seven full days, the weekly
+# maintenance run enables auto-merge. GitHub's required checks, reviews, and
+# mergeability rules remain the final gate; `--auto` does not bypass them.
+# Bot-authored PRs and `automation/*` branches are excluded from this path:
+# Dependabot is governed by the policy below, dependency-updates already
+# enables auto-merge when it opens its PR, and min-ha-version-update is
+# intentionally manual.
 #
 # Deliberately excludes major bumps: those can carry breaking API changes
 # that passing tests don't necessarily cover, so they still need a human to
@@ -19,24 +28,18 @@ name: Dependabot Auto-merge
 # nothing to act on — it stays open (and pending) until
 # close-stale-automation-prs.yaml eventually retires it.
 #
-# schedule/workflow_dispatch only — deliberately NOT pull_request_target.
-# This used to fire on every PR open/synchronize/reopen so auto-merge got
-# enabled immediately rather than waiting up to a week. Reworked to run
-# only on the weekly cadence below, in the same pass as the branch-rebase
-# step: enabling auto-merge a few days late costs nothing (the PR just
-# merges once this job next runs and checks are green), and running
-# exclusively on a schedule means this workflow's behavior no longer
-# depends on Dependabot's own PR-event timing at all.
+# workflow_run wakes this job as soon as Tests finishes for a Dependabot PR,
+# so an eligible update gets auto-merge enabled within minutes instead of
+# waiting for the weekly maintenance pass. The job still runs from the
+# trusted default-branch copy of this workflow and only checks out that
+# trusted branch; it never executes code from the Dependabot PR with its
+# write token.
 #
-# This also sidesteps the read-only-GITHUB_TOKEN restriction that
-# Dependabot-authored `pull_request` events carry (see this repo's
-# project_gha_gotchas memory, point 4) — that restriction is specific to
-# runs *triggered by* a pull_request/pull_request_target event, not to
-# what a schedule-triggered run's API calls target. A schedule/
-# workflow_dispatch run gets the full token from this file's `permissions:`
-# block regardless of which PRs it then acts on, so there's no need for
-# pull_request_target's write-token workaround at all once nothing here
-# reacts to PR events directly.
+# workflow_run also sidesteps the read-only-GITHUB_TOKEN restriction that
+# Dependabot-authored pull_request events carry: this follow-up run gets the
+# permissions below from the default branch. workflow_dispatch and the
+# weekly schedule remain recovery paths if a Tests run is skipped or its
+# completion event is delayed.
 #
 # Dropping pull_request_target also drops dependabot/fetch-metadata, since
 # that action reads `github.event.pull_request` to determine the semver
@@ -47,6 +50,11 @@ name: Dependabot Auto-merge
 # design, matching the "only the common low-risk case" scope above.
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Tests"
+    types:
+      - completed
   schedule:
     # Monday 08:22 UTC; after dependency-updates.yaml (08:17) and well ahead
     # of close-stale-automation-prs.yaml (08:50) — a wide buffer so a
@@ -62,6 +70,13 @@ concurrency:
 
 jobs:
   maintain-dependabot-prs:
+    # workflow_dispatch/schedule sweep every open Dependabot PR. A
+    # workflow_run should do that work only when Dependabot triggered the
+    # upstream Tests run; ordinary contributors' test completions are no-ops.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.actor.login == 'dependabot[bot]' ||
+      github.event.workflow_run.actor.login == 'app/dependabot'
     runs-on: "ubuntu-latest"
     permissions:
       contents: write
@@ -114,4 +129,61 @@ jobs:
             else
               echo "  already up to date, or has a real conflict — leaving as-is."
             fi
+          done < <(echo "$prs" | jq -c '.[]')
+
+  auto-merge-aged-regular-prs:
+    # A workflow_run event is useful only for Dependabot's immediate path
+    # above. Ordinary PRs become eligible because time passes, so scan them
+    # on the weekly schedule (and allow a manual recovery run).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge for regular PRs open at least seven days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          now="$(date +%s)"
+          cutoff=$(( now - 7 * 86400 ))
+          default_branch="$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name)"
+          prs="$(gh pr list --repo "$REPO" --base "$default_branch" --state open --limit 1000 \
+            --json number,url,author,headRefName,createdAt,isDraft)"
+
+          if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
+            echo "No open PRs targeting $default_branch."
+            exit 0
+          fi
+
+          while read -r pr; do
+            number="$(echo "$pr" | jq -r .number)"
+            url="$(echo "$pr" | jq -r .url)"
+            author="$(echo "$pr" | jq -r '.author.login // ""')"
+            head_ref="$(echo "$pr" | jq -r .headRefName)"
+            created_at="$(echo "$pr" | jq -r .createdAt)"
+            is_draft="$(echo "$pr" | jq -r .isDraft)"
+
+            if [ "$is_draft" = "true" ]; then
+              echo "PR #$number: draft — leaving for its author."
+              continue
+            fi
+            if [[ "$author" == *"[bot]" ]] || [[ "$author" == app/* ]] || [[ "$head_ref" == automation/* ]]; then
+              echo "PR #$number: bot/automation PR — governed by its dedicated policy."
+              continue
+            fi
+
+            created_epoch="$(date -d "$created_at" +%s)"
+            age_days=$(( ( now - created_epoch ) / 86400 ))
+            if [ "$created_epoch" -gt "$cutoff" ]; then
+              echo "PR #$number: open $age_days days — not eligible yet."
+              continue
+            fi
+
+            echo "PR #$number: open $age_days days — enabling auto-merge."
+            gh pr merge --auto --squash "$url" \
+              || echo "  could not enable auto-merge — merge requirements or conflicts still block it."
           done < <(echo "$prs" | jq -c '.[]')
