@@ -26,6 +26,15 @@ from conftest import _SchemaParserAdapter as PylontechParser
 
 from structs import PylontechBattery, PylontechSystem
 
+# Per-model expectations, keyed by STUB_MODEL — shared by TestParseInfo and
+# TestFullPollCycle so the two don't drift out of sync when a model is added.
+_MODEL_NAME = {"US2000": "US2KBPL", "US3000": "US3KBPL", "US5000": "US5KBPL"}
+_MODEL_MAX_CURRENTS = {
+    "US2000": (102.0, 100.0),
+    "US3000": (150.0, 150.0),
+    "US5000": (200.0, 200.0),
+}
+
 
 # parse_pwr — power table
 class TestParsePwr:
@@ -291,31 +300,30 @@ class TestParseInfo:
 
     def test_model_matches_stub_model(self, info_system):
         """Stub returns device_name matching the --model flag (US5000 → US5KBPL)."""
-        model_map = {"US2000": "US2KBPL", "US3000": "US3KBPL", "US5000": "US5KBPL"}
-        assert info_system.model == model_map[STUB_MODEL]
+        assert info_system.model == _MODEL_NAME[STUB_MODEL]
 
     def test_fw_version(self, info_system):
-        assert info_system.fw_version is not None
-        assert len(info_system.fw_version) > 0
+        """Default stub firmware string (see test_stub.py's TestStubFwVersion
+        for the --fw-version override path)."""
+        assert info_system.fw_version == "B66.6"
 
     def test_soft_version(self, info_system):
-        assert info_system.soft_version is not None
+        assert info_system.soft_version == "V2.4"
 
     def test_board_version(self, info_system):
-        assert info_system.board_version is not None
+        assert info_system.board_version == "PHANTOMSAV10R03"
 
     def test_boot_version(self, info_system):
-        assert info_system.boot_version is not None
+        assert info_system.boot_version == "V2.0"
 
     def test_comm_version(self, info_system):
-        assert info_system.comm_version is not None
+        assert info_system.comm_version == "V2.0"
 
     def test_release_date(self, info_system):
-        assert info_system.release_date is not None
+        assert info_system.release_date == "20-05-28"
 
     def test_barcode(self, info_system):
-        assert info_system.barcode is not None
-        assert len(info_system.barcode) > 0
+        assert info_system.barcode == "PPTBH02400710243"
 
     def test_specification(self, info_system):
         """Specification should match the model (US5000 → 48V/100AH)."""
@@ -327,12 +335,7 @@ class TestParseInfo:
 
     def test_max_currents_match_model(self, info_system):
         """US5000 stub emits ±200 A limits."""
-        limits = {
-            "US2000": (102.0, 100.0),
-            "US3000": (150.0, 150.0),
-            "US5000": (200.0, 200.0),
-        }
-        chg, dsg = limits[STUB_MODEL]
+        chg, dsg = _MODEL_MAX_CURRENTS[STUB_MODEL]
         assert info_system.max_charge_curr == pytest.approx(chg, rel=1e-3)
         assert info_system.max_dischg_curr == pytest.approx(dsg, rel=1e-3)
 
@@ -352,10 +355,10 @@ class TestParseStat:
         assert stat_system.sc_times >= 0
 
     def test_bat_lv_times(self, stat_system):
-        assert stat_system.bat_lv_times is not None
+        assert stat_system.bat_lv_times == 0
 
     def test_bat_uv_times(self, stat_system):
-        assert stat_system.bat_uv_times is not None
+        assert stat_system.bat_uv_times == 0
 
     def test_stub_initial_values(self, stat_system):
         """Verify the stub seeds its counters with known values."""
@@ -413,57 +416,80 @@ class TestFullPollCycle:
         return system
 
     def test_batteries_and_stat_coexist(self, full_system):
+        """parse_stat must not clobber the .batteries list parse_pwr already
+        populated on the shared system object."""
         assert len(full_system.batteries) == STUB_BATTERIES
-        assert full_system.cycles is not None
+        assert full_system.cycles == 430
 
     def test_bms_time_populated(self, full_system):
-        assert full_system.bms_time is not None
+        """parse_time runs after parse_stat on the same object; bms_time must
+        land correctly and stat's fields (checked elsewhere in this class)
+        must survive it."""
+        assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", full_system.bms_time), (
+            f"Unexpected bms_time format: '{full_system.bms_time}'"
+        )
+        parsed = datetime.strptime(full_system.bms_time, "%Y-%m-%d %H:%M:%S")
+        delta = abs((datetime.now() - parsed).total_seconds())
+        assert delta < 60, f"bms_time is {delta:.0f}s away from now"
 
     def test_manufacturer_populated(self, full_system):
-        assert full_system.manufacturer is not None
+        """parse_info runs last; manufacturer must land correctly and
+        parse_pwr/parse_stat/parse_time's fields must survive it."""
+        assert full_system.manufacturer == "Pylon"
 
     def test_model_populated(self, full_system):
-        assert full_system.model is not None
+        assert full_system.model == _MODEL_NAME[STUB_MODEL]
 
     def test_max_currents_populated(self, full_system):
-        assert full_system.max_charge_curr is not None
-        assert full_system.max_dischg_curr is not None
+        chg, dsg = _MODEL_MAX_CURRENTS[STUB_MODEL]
+        assert full_system.max_charge_curr == pytest.approx(chg, rel=1e-3)
+        assert full_system.max_dischg_curr == pytest.approx(dsg, rel=1e-3)
 
     def test_stat_fields_present(self, full_system):
-        required = [
-            "cycles",
-            "charge_times",
-            "discharge_cnt",
-            "shut_times",
-            "sc_times",
-            "bat_ov_times",
-            "bat_hv_times",
-            "pwr_ov_times",
-            "pwr_hv_times",
-            "life_warn_times",
-            "life_alarm_times",
-            "pwr_coulomb",
-            "dsg_cap",
-        ]
-        for field in required:
-            assert getattr(full_system, field) is not None, (
-                f"{field} is None after full cycle"
+        """Exact values pinned the same way TestParseStat.test_stub_initial_values
+        does — the tick-interval is frozen (see conftest.py's stub_server
+        fixture) so these don't drift across the run. is-not-None here would
+        pass even if a later parse_* call zeroed a field this one set."""
+        expected = {
+            "cycles": 430,
+            "charge_times": 1150,
+            "discharge_cnt": 0,
+            "shut_times": 329,
+            "sc_times": 0,
+            "bat_ov_times": 56,
+            "bat_hv_times": 5832,
+            "pwr_ov_times": 4688,
+            "pwr_hv_times": 6734,
+            "life_warn_times": 0,
+            "life_alarm_times": 0,
+            "pwr_coulomb": 153311400,
+            "dsg_cap": 21506462,
+        }
+        for field, value in expected.items():
+            assert getattr(full_system, field) == value, (
+                f"{field} mismatch after full cycle"
             )
 
     def test_all_battery_extended_fields_populated(self, full_system):
         for bat in full_system.batteries:
             assert bat.volt_low is not None, f"bat {bat.sys_id}: volt_low None"
             assert bat.volt_high is not None, f"bat {bat.sys_id}: volt_high None"
+            assert bat.volt_low < bat.volt_high, (
+                f"bat {bat.sys_id}: volt_low >= volt_high"
+            )
             assert bat.temp_low is not None, f"bat {bat.sys_id}: temp_low None"
             assert bat.temp_high is not None, f"bat {bat.sys_id}: temp_high None"
-            assert bat.volt_status is not None, f"bat {bat.sys_id}: volt_status None"
-            assert bat.curr_status is not None, f"bat {bat.sys_id}: curr_status None"
-            assert bat.temp_status is not None, f"bat {bat.sys_id}: temp_status None"
-            assert bat.batt_volt_status is not None, (
-                f"bat {bat.sys_id}: batt_volt_status None"
+            assert bat.temp_low <= bat.temp_high, (
+                f"bat {bat.sys_id}: temp_low > temp_high"
             )
-            assert bat.batt_temp_status is not None, (
-                f"bat {bat.sys_id}: batt_temp_status None"
+            assert bat.volt_status == "Normal", f"bat {bat.sys_id}: volt_status"
+            assert bat.curr_status == "Normal", f"bat {bat.sys_id}: curr_status"
+            assert bat.temp_status == "Normal", f"bat {bat.sys_id}: temp_status"
+            assert bat.batt_volt_status == "Normal", (
+                f"bat {bat.sys_id}: batt_volt_status"
+            )
+            assert bat.batt_temp_status == "Normal", (
+                f"bat {bat.sys_id}: batt_temp_status"
             )
 
 
