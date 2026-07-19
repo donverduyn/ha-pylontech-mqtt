@@ -10,31 +10,24 @@
 # Usage: dependabot-bump-kind.sh "$title" "$body"
 # Echoes exactly one of: major | minor-or-patch | unknown
 #
-# Two independent signals, checked in order:
+# Three independent signals, checked in order:
 #
-#  1. Per-dependency compatibility-score badges in the PR body
+#  1. Dependabot's generated "Updates `NAME` from OLD to NEW" sections in
+#     the PR body. A grouped PR contains one of these lines per dependency,
+#     including for github-actions and docker where compatibility badges are
+#     absent, so this is the most complete signal for a group.
+#
+#  2. Per-dependency compatibility-score badges in the PR body
 #     (a Markdown image link containing `previous-version=X&new-version=Y`
-#     per dependency). Present for individually bumped dependencies on
-#     registries with semver metadata (pip, npm), and still present
-#     per-dependency inside a *grouped* multi-dependency PR body even
-#     though the group itself has no single version of its own.
+#     per dependency). This remains a fallback for ecosystems/PR formats
+#     that provide badges but not generated update sections.
 #
-#  2. The PR title's own "bump NAME from OLD to NEW" text -- Dependabot's
+#  3. The PR title's own "bump NAME from OLD to NEW" text -- Dependabot's
 #     standard title template for a single-dependency PR. This is the
-#     ONLY signal available for ecosystems that never render the
-#     compatibility badge at all -- confirmed empirically against this
-#     repo's real Dependabot PRs: neither #119 (astral-sh/setup-uv, a
-#     minor bump) nor #121 (softprops/action-gh-release, a patch bump)
-#     carry any badge in their body, because github-actions and docker
-#     aren't registries Dependabot's badge service covers. Without this
-#     fallback, every github-actions/docker PR was unclassifiable and
-#     fell to "unknown" unconditionally -- meaning auto-merge could never
-#     apply to those ecosystems at all, regardless of how trivial the
-#     bump. A grouped multi-dependency PR's title ("bump the X group with
-#     N updates") doesn't match this pattern, so it naturally falls
-#     through to signal 1 having already handled it (or to "unknown" if
-#     signal 1 also found nothing, which is the correct conservative
-#     outcome for a group with no per-dependency data at all).
+#     fallback for a single-dependency PR whose body has been edited or
+#     stripped. A grouped PR's title ("bump the X group with N updates")
+#     has no versions, so grouped classification deliberately relies on
+#     the per-dependency body lines above.
 #
 # Only the leading digit run of each version is compared (matching the
 # original badge-only logic) -- deliberately generic and ecosystem-
@@ -51,6 +44,26 @@ body="$2"
 major_segment() {
   grep -oP '^v?\K\d+' <<<"$1" || true
 }
+
+updates="$(grep -oP "^Updates \`[^\`]+\` from \\K[^[:space:]]+ to [^[:space:]]+" <<<"$body" || true)"
+if [ -n "$updates" ]; then
+  result="minor-or-patch"
+  while IFS= read -r update; do
+    if [[ "$update" =~ ^([^[:space:]]+)\ to\ ([^[:space:]]+)$ ]]; then
+      prev="${BASH_REMATCH[1]}"
+      new="${BASH_REMATCH[2]}"
+      prev_major="$(major_segment "$prev")"
+      new_major="$(major_segment "$new")"
+      if [ -z "$prev_major" ] || [ -z "$new_major" ] || [ "$prev_major" != "$new_major" ]; then
+        result="major"
+      fi
+    else
+      result="major"
+    fi
+  done <<<"$updates"
+  echo "$result"
+  exit 0
+fi
 
 badges="$(grep -oP 'previous-version=[^&]+&new-version=[^&\s")]+' <<<"$body" || true)"
 if [ -n "$badges" ]; then

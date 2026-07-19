@@ -233,22 +233,26 @@ updates:
     directory: "/docker"
     schedule:
       interval: "weekly"
+    groups:
+      # Keep all Docker image updates in one ecosystem-specific PR. The
+      # shared bump classifier reads every generated "Updates ... from ...
+      # to ..." body line, so any major update keeps the whole group out of
+      # auto-merge while an all-minor/patch group can still merge after CI.
+      docker:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      # github/codeql-action ships init/analyze (and any other subpaths)
-      # as one release train, but Dependabot treats each `uses:` subpath
-      # (codeql-action/init vs codeql-action/analyze) as a separate
-      # dependency and, without this, opened one PR per subpath (#117,
-      # #118) at the same target version. tests.yaml's codeql-analyze job
-      # requires init and analyze pinned to the exact same version —
-      # analyze refuses to process a config init wrote at a different
-      # version — so either PR alone left the other action still on the
-      # old pin and failed CI with a version-mismatch error. Grouping
-      # forces every codeql-action bump into one PR that lands atomically.
-      codeql-action:
+      # Group every action update into one ecosystem-specific PR. This also
+      # preserves the atomic CodeQL init/analyze updates required by
+      # tests.yaml: Dependabot otherwise treats those `uses:` subpaths as
+      # separate dependencies and opened incompatible PRs #117 and #118.
+      # As with Docker, a major member makes the shared classifier withhold
+      # auto-merge for the entire group.
+      github-actions:
         patterns:
-          - "github/codeql-action*"
+          - "*"
