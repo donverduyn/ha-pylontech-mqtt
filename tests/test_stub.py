@@ -1090,3 +1090,210 @@ class TestStubNewFirmwareFaultInjection:
         finally:
             _raw_command(new_fw_conn, "stub clear 1")
             _raw_command(new_fw_conn, "logout")
+
+
+# 18. --fw-version — configurable 'info' firmware string
+
+
+class TestStubFwVersion:
+    """--fw-version sets 'info's Main Soft version field independently of
+    --firmware's column-layout choice."""
+
+    def test_default_fw_version(self, stub_conn):
+        resp = _raw_command(stub_conn, "info")
+        assert "Main Soft version   : B66.6" in resp
+
+    def test_custom_fw_version(self, custom_fw_version_conn):
+        resp = _raw_command(custom_fw_version_conn, "info")
+        assert "Main Soft version   : B84.5" in resp
+        assert "B66.6" not in resp
+
+    def test_custom_fw_version_does_not_change_column_layout(
+        self, custom_fw_version_conn
+    ):
+        """--fw-version is orthogonal to --firmware; _start_variant_stub
+        doesn't pass --firmware, so the default ('new') 23-column layout
+        must still be in effect."""
+        resp = _raw_command(custom_fw_version_conn, "pwr")
+        assert "Tlow.Id" in resp
+
+
+# 19. Realistic 'info' identity fields — not stub-labeled placeholders
+
+
+class TestStubInfoRealism:
+    """info's Board version / Barcode must read as plausible hardware
+    identity strings, not stub-specific placeholders — see docs/docs.md's
+    real US2KBPL capture, which this now matches verbatim."""
+
+    def test_board_version_is_not_stub_labeled(self, stub_conn):
+        resp = _raw_command(stub_conn, "info")
+        assert "PYLONSTUB" not in resp
+        assert "Board version       : PHANTOMSAV10R03" in resp
+
+    def test_barcode_is_not_stub_labeled(self, stub_conn):
+        resp = _raw_command(stub_conn, "info")
+        assert "Barcode             : PPTBH02400710243" in resp
+
+
+# 20. Old-firmware layout matches the real hardware capture verbatim
+
+
+class TestStubOldFirmwareRealism:
+    """--firmware old must match docs/docs.md's real US2KBPL capture: no
+    MosTempr/M.T.St columns in 'pwr', no 'SOC' header token in 'bat'."""
+
+    def test_pwr_has_no_mostempr_column(self, multi_grp_conn):
+        """multi_grp_stub runs --firmware old (see its fixture above)."""
+        resp = _raw_command(multi_grp_conn, "pwr")
+        assert "MosTempr" not in resp
+        assert "M.T.St" not in resp
+
+    def test_bat_has_no_soc_header_token(self, stub_conn):
+        """stub_conn's session stub runs STUB_FIRMWARE = 'old' (conftest.py)."""
+        resp = _raw_command(stub_conn, "bat 1")
+        header_line = next(line for line in resp.splitlines() if "Battery" in line)
+        assert "SOC" not in header_line
+
+    def test_bat_soc_percentage_still_parses_via_fallback(self, bat_battery):
+        """Even without the SOC header token, per-cell soc/capacity must
+        still be recovered by the parser's header-shift fallback."""
+        assert bat_battery.cells
+        for cell in bat_battery.cells:
+            assert cell.soc == STUB_SOC_START
+            assert cell.capacity is not None
+
+    def test_pwr_rows_are_fixed_width_matching_header(self, stub_conn):
+        """Every 'pwr' line (header, present rows, absent rows) must be the
+        same fixed width as the real US2KBPL capture (138 chars) — a
+        one-column-too-wide trailing pad on just the present-battery row
+        (caught in review: B.T.St needs 8-wide, not 9-wide, once nothing
+        trails it) would silently misalign the table without breaking the
+        header-token-driven parser, so this pins the byte width directly."""
+        resp = _raw_command(stub_conn, "pwr")
+        lines = [
+            line
+            for line in resp.splitlines()
+            if line.split()
+            and (line.split()[0] == "Power" or line.split()[0].isdigit())
+        ]
+        assert len(lines) >= 3, "expected the header plus at least present+absent rows"
+        widths = {len(line) for line in lines}
+        assert widths == {138}, f"expected all lines at 138 chars, got {widths}"
+
+
+# 21. Cross-view consistency + fault reactivity for previously-static fields
+
+
+class TestStubCapacityAndProtRealism:
+    """bat's per-cell capacity now fades with cycle count (matching pwr N's
+    Real Coulomb — previously a flat model constant that never reflected the
+    simulated pack's aging), soh's per-cell voltage now has real per-cell
+    spread (docs/docs.md's capture shows the real device does too, e.g.
+    3377-3379 across cells, not one repeated value), and 'prot' now reflects
+    injected faults like every other view already did."""
+
+    def test_bat_capacity_degrades_with_cycles(self, stub_conn):
+        """STUB_MODEL is US5000 (cap_mah=100000, 15 cells); the session
+        stub's initial cycles=430 (tick_interval=3600s prevents drift during
+        the test run) degrades SOH to 92%, so capacity must be the degraded
+        6133 mAH, not the flat undegraded 100000 // 15 = 6666 mAH."""
+        resp = _raw_command(stub_conn, "bat 1")
+        cap_values = {int(m.group(1)) for m in re.finditer(r"(\d+) mAH", resp)}
+        assert cap_values == {6133}, (
+            f"expected degraded capacity of 6133, got {cap_values}"
+        )
+
+    def test_soh_voltage_has_per_cell_spread(self, stub_conn):
+        resp = _raw_command(stub_conn, "soh 1")
+        lines = [
+            line
+            for line in resp.splitlines()
+            if line.split() and line.split()[0].isdigit()
+        ]
+        voltages = {int(line.split()[1]) for line in lines}
+        assert len(voltages) > 1, (
+            "expected per-cell voltage jitter; all cells reported identically"
+        )
+
+    def test_prot_normal_without_fault(self, stub_conn):
+        resp = _raw_command(stub_conn, "prot")
+        assert "Volt.Prot    : Normal" in resp
+        assert "SysAlarm     : Normal" in resp
+
+    def test_prot_reflects_ov_fault(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        _raw_command(stub_conn, "stub fault 1 ov")
+        try:
+            resp = _raw_command(stub_conn, "prot")
+            assert "Volt.Prot    : Alarm" in resp
+            assert "SysAlarm     : Alarm" in resp
+            assert "Curr.Prot    : Normal" in resp
+        finally:
+            _raw_command(stub_conn, "stub clear 1")
+            _raw_command(stub_conn, "logout")
+
+    def test_prot_reflects_oc_fault(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        _raw_command(stub_conn, "stub fault 1 oc")
+        try:
+            resp = _raw_command(stub_conn, "prot")
+            assert "Curr.Prot    : Alarm" in resp
+            assert "Volt.Prot    : Normal" in resp
+        finally:
+            _raw_command(stub_conn, "stub clear 1")
+            _raw_command(stub_conn, "logout")
+
+    def test_prot_reflects_ot_fault(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        _raw_command(stub_conn, "stub fault 1 ot")
+        try:
+            resp = _raw_command(stub_conn, "prot")
+            assert "Temp.Prot    : Alarm" in resp
+        finally:
+            _raw_command(stub_conn, "stub clear 1")
+            _raw_command(stub_conn, "logout")
+
+    def test_prot_clears_after_fault_cleared(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        _raw_command(stub_conn, "stub fault 1 uv")
+        _raw_command(stub_conn, "stub clear 1")
+        try:
+            resp = _raw_command(stub_conn, "prot")
+            assert "Volt.Prot    : Normal" in resp
+            assert "SysAlarm     : Normal" in resp
+        finally:
+            _raw_command(stub_conn, "logout")
+
+
+# 22. log/stat fields that previously ignored live state
+
+
+class TestStubLogAndStatLiveState:
+    """'log's SOC and 'stat's Charge Cnt. previously never reflected live
+    state: log always printed a hardcoded 'SOC=85%' regardless of the
+    battery's actual SOC, and stat's Charge Cnt. was a copy of Charge Times
+    rather than its own counter (docs/docs.md's real capture shows these as
+    two genuinely different numbers: 4681 vs 1150)."""
+
+    def test_log_soc_matches_current_state(self, stub_conn):
+        resp = _raw_command(stub_conn, "log")
+        assert f"SOC={STUB_SOC_START}%" in resp
+
+    def test_log_soc_reflects_override(self, stub_conn):
+        _raw_command(stub_conn, "login 000000")
+        try:
+            _raw_command(stub_conn, "stub soc 47")
+            resp = _raw_command(stub_conn, "log")
+            assert "SOC=47%" in resp
+        finally:
+            _raw_command(stub_conn, f"stub soc {STUB_SOC_START}")
+            _raw_command(stub_conn, "logout")
+
+    def test_charge_cnt_independent_of_charge_times(self, stub_conn):
+        resp = _raw_command(stub_conn, "stat")
+        cnt_match = re.search(r"Charge Cnt\.\s*:\s*(\d+)", resp)
+        times_match = re.search(r"Charge Times\s*:\s*(\d+)", resp)
+        assert cnt_match is not None
+        assert times_match is not None
+        assert cnt_match.group(1) != times_match.group(1)

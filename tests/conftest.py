@@ -262,6 +262,25 @@ def new_fw_conn(new_fw_stub):
     s.close()
 
 
+@pytest.fixture(scope="module")
+def custom_fw_version_stub():
+    """Stub started with --fw-version set to a non-default string."""
+    _enable_sockets()
+    stub = _start_variant_stub("--fw-version", "B84.5")
+    try:
+        yield stub.port
+    finally:
+        stub.stop()
+
+
+@pytest.fixture
+def custom_fw_version_conn(custom_fw_version_stub):
+    s = socket.create_connection((STUB_HOST, custom_fw_version_stub), timeout=3)
+    _drain_prompt(s)
+    yield s
+    s.close()
+
+
 @pytest.fixture(scope="session")
 def stub_server():
     """Start pylon_stub.py once for the whole test session; yield the port."""

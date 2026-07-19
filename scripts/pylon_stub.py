@@ -10,6 +10,7 @@ Usage
   python pylon_stub.py --batteries 8 --model US5000    # 8× US5000
   python pylon_stub.py --groups 6 --batteries 16       # 6-group LV-HUB, 96 modules
   python pylon_stub.py --firmware old                  # pre-2024 column layout
+  python pylon_stub.py --fw-version B84.5              # 'info' Main Soft version
   python pylon_stub.py --port 9999 --host 0.0.0.0
 
 Implements
@@ -32,10 +33,17 @@ Implements
   shut/trst/updata stubs
   stub [...]       runtime control: fault inject, soc, current (admin mode)
 
-Firmware variants
------------------
-  old   18 columns — Volt … M.T.St  (pre-Tlow.Id era)
-  new   23 columns — adds *.Id columns and SysAlarm.St  (default)
+Firmware variants (--firmware; column layout only)
+---------------------------------------------------
+  old   16 columns — Volt … B.T.St  (pre-Tlow.Id era; matches the real
+        US2KBPL capture in docs/docs.md verbatim, incl. the "bat" command's
+        missing SOC header)
+  new   23 columns — adds *.Id columns, MosTempr/M.T.St and SysAlarm.St
+        (default)
+
+'info's reported firmware string (--fw-version, default B66.6) is
+independent of --firmware — it doesn't change any column layout, only the
+"Main Soft version" value a client reads back.
 
 Admin control (after ``login 000000``)
 ---------------------------------------
@@ -70,7 +78,8 @@ class _Config(TypedDict):
     batteries: int  # present modules per group
     slots: int  # total pwr rows per group  (slots >= batteries)
     groups: int  # number of parallel groups (LV-HUB)
-    firmware: str  # "old" (18-col) or "new" (23-col with *.Id)
+    firmware: str  # "old" (16-col) or "new" (23-col with *.Id)
+    fw_version: str  # reported as 'info's "Main Soft version" field
     tick_interval: int  # seconds between simulated state ticks
 
 
@@ -102,6 +111,7 @@ class _State(TypedDict):
     life_alarm_times: int
     pwr_coulomb: int
     dsg_cap: int
+    charge_cnt: int  # finer-grained than charge_times — ticks while charging
     current_override: (
         int | None
     )  # mA; when set the updater skips current; clear with 'stub current auto'
@@ -142,6 +152,7 @@ _cfg: _Config = {
     "slots": 8,
     "groups": 1,
     "firmware": "new",
+    "fw_version": "B66.6",
     "tick_interval": 30,
 }
 
@@ -174,6 +185,7 @@ _state: _State = {
     "life_alarm_times": 0,
     "pwr_coulomb": 153311400,
     "dsg_cap": 21506462,
+    "charge_cnt": 4681,  # docs/docs.md's real capture: 4681 vs Charge Times 1150
     "current_override": None,
 }
 _state_lock = threading.Lock()
@@ -208,6 +220,8 @@ def _state_updater() -> None:
             else:
                 s["current"] = s["current_override"]
                 s["charging"] = s["current_override"] > 0
+            if s["charging"]:
+                s["charge_cnt"] += 1
             base_mv = 3000 + int(s["soc"] * 6.5)
             s["volt_low"] = base_mv + random.randint(0, 3)
             s["volt_high"] = s["volt_low"] + random.randint(1, 8)
@@ -318,7 +332,7 @@ def _resp_pwr_indexed(cmd: str, bat_id: int) -> bytes:
             cmos_st, dmos_st = "OFF", "OFF"  # OT/OC: full protection
         else:
             cmos_st, dmos_st = "ON", "ON"  # Normal: both FETs conducting
-        real_cap = int(m["cap_mah"] * max(0, 100 - int(s["cycles"] * 0.02)) / 100)
+        real_cap = int(m["cap_mah"] * _soh_pct(s["cycles"]) / 100)
         volt_st = "OV" if fault == "ov" else "UV" if fault == "uv" else "Normal"
         curr_st = "OC" if fault == "oc" else "Normal"
         temp_st = "OT" if fault == "ot" else "UT" if fault == "ut" else "Normal"
@@ -405,6 +419,15 @@ def _base_state(current_ma: int) -> str:
     return "Charge" if current_ma > 0 else "Dischg"
 
 
+def _soh_pct(cycles: int) -> int:
+    """SOH degrades ~0.02 percentage points per charge cycle, floored at 0%.
+
+    Shared by every view that derives capacity/health from cycle count (pwr
+    N's Real Coulomb, stat/soh/pwrsys's Sys SOH, bat's per-cell capacity) so
+    they always agree with each other as the simulated pack ages."""
+    return max(0, 100 - int(cycles * 0.02))
+
+
 def _resp_pwr(cmd: str) -> bytes:
     with _state_lock:
         s = _state.copy()
@@ -439,10 +462,14 @@ def _resp_pwr(cmd: str) -> bytes:
             "Time                 B.V.St   B.T.St   MosTempr  M.T.St   SysAlarm.St"
         )
     else:
+        # Matches docs/docs.md's real US2KBPL capture verbatim (16 header
+        # tokens / 17 data tokens incl. the 2-token Time field) — that
+        # hardware has no MosTempr/M.T.St columns at all; those only appear
+        # once *.Id columns do (see "new" below).
         header = (
             "Power Volt   Curr   Tempr  Tlow   Thigh  Vlow   Vhigh  "
             "Base.St  Volt.St  Curr.St  Temp.St  Coulomb  "
-            "Time                 B.V.St   B.T.St   MosTempr  M.T.St  "
+            "Time                 B.V.St   B.T.St  "
         )
 
     rows: list[str] = []
@@ -461,7 +488,6 @@ def _resp_pwr(cmd: str) -> bytes:
                 thigh_id = rng.randint(0, cells - 1)
                 vlow_id = rng.randint(0, cells - 1)
                 vhigh_id = rng.randint(0, cells - 1)
-                mostempr = s["mostempr"] + rng.randint(-500, 500)
                 fault = _faults.get(bat_id)
                 volt_st = (
                     "OV" if fault == "ov" else "UV" if fault == "uv" else "Normal  "
@@ -502,6 +528,7 @@ def _resp_pwr(cmd: str) -> bytes:
                     )  # −99999 is 6 chars, fits 7-char column
 
                 if firmware == "new":
+                    mostempr = s["mostempr"] + rng.randint(-500, 500)
                     rows.append(
                         f"{bat_id:<6}{dv:<7}{dc:<7}{dt:<7}"
                         f"{dtl:<7}{tlow_id:<8}{dth:<7}{thigh_id:<9}"
@@ -511,12 +538,17 @@ def _resp_pwr(cmd: str) -> bytes:
                         f"{bv_st:<9}{bt_st:<9}{mostempr:<10}Normal   {sys_alarm}"
                     )
                 else:
+                    # B.T.St is the last column on "old" — 8-wide (2 trailing
+                    # spaces), not the 9-wide mid-row field width, to match
+                    # docs/docs.md's real capture byte-for-byte (it was
+                    # previously followed by MosTempr, which swallowed the
+                    # 9th padding column; now nothing follows it).
                     rows.append(
                         f"{bat_id:<6}{dv:<7}{dc:<7}{dt:<7}"
                         f"{dtl:<7}{dth:<7}{dvl:<7}{dvh:<7}"
                         f"{base_st:<9}{volt_st:<9}{curr_st:<9}{temp_st:<9}"
                         f"{str(s['soc']) + '%':<9}{now}  "
-                        f"{bv_st:<9}{bt_st:<9}{mostempr:<10}Normal  "
+                        f"{bv_st:<9}{bt_st:<8}"
                     )
             else:
                 if firmware == "new":
@@ -530,7 +562,7 @@ def _resp_pwr(cmd: str) -> bytes:
                     rows.append(
                         f"{bat_id:<6}-      -      -      -      -      -      -      A"
                         "bsent   -        -        -        -        -                 "
-                        "   -        -        -         -       "
+                        "   -        -       "
                     )
 
     body = header + "\r\r\n" + "\r\r\n".join(rows)
@@ -544,13 +576,13 @@ def _resp_info(cmd: str) -> bytes:
         f"Device address      : 1\r\n\r"
         f"Manufacturer        : Pylon\r\n\r"
         f"Device name         : {m['device_name']}\r\n\r"
-        f"Board version       : PYLONSTUBV10R01\r\n\r"
-        f"Main Soft version   : B66.6\r\n\r"
+        f"Board version       : PHANTOMSAV10R03\r\n\r"
+        f"Main Soft version   : {_cfg['fw_version']}\r\n\r"
         f"Soft  version       : V2.4\r\n\r"
         f"Boot  version       : V2.0\r\n\r"
         f"Comm version        : V2.0\r\n\r"
         f"Release Date        : 20-05-28\r\n\r"
-        f"Barcode             : PYLONSTUB0000001\r\n\r"
+        f"Barcode             : PPTBH02400710243\r\n\r"
         f"\r\n\r"
         f"Specification       : {m['spec']}\r\n\r"
         f"Cell Number         : {m['cells']}\r\n\r"
@@ -566,13 +598,13 @@ def _resp_info(cmd: str) -> bytes:
 def _resp_stat(cmd: str) -> bytes:
     with _state_lock:
         s = _state.copy()
-    base_soh = max(0, 100 - int(s["cycles"] * 0.02))
+    base_soh = _soh_pct(s["cycles"])
     body = (
         f"Device address           1\r\r\n"
         f"Data Items      :     1689\r\r\n"
         f"HisData Items   :     1794\r\r\n"
         f"MiscData Items  :     6230\r\r\n"
-        f"Charge Cnt.     :  {s['charge_times']:>7}\r\r\n"
+        f"Charge Cnt.     :  {s['charge_cnt']:>7}\r\r\n"
         f"Discharge Cnt.  :  {s['discharge_cnt']:>7}\r\r\n"
         f"Charge Times    :  {s['charge_times']:>7}\r\r\n"
         f"Status Cnt.     :     4680\r\r\n"
@@ -640,7 +672,9 @@ def _resp_bat(cmd: str) -> bytes:
         s = _state.copy()
     m = MODELS[_cfg["model"]]
     cells = m["cells"]
-    cap = m["cap_mah"] // cells
+    # Fades with cycle count, same as pwr N's "Real Coulomb" — previously a
+    # flat model constant that never reflected the pack's simulated aging.
+    cap = int(m["cap_mah"] * _soh_pct(s["cycles"]) / 100) // cells
 
     n_groups = _cfg["groups"]
     slots_per_group = _cfg["slots"]
@@ -664,10 +698,24 @@ def _resp_bat(cmd: str) -> bytes:
         (-150000 if s["current"] < 0 else 150000) if fault == "oc" else s["current"]
     )
 
-    header = (
-        "Battery  Volt     Curr     Tempr    "
-        "Base State   Volt. State  Curr. State  Temp. State  SOC        Coulomb     "
-    )
+    # docs/docs.md's real US2KBPL capture has no "SOC" header token at all —
+    # each data row still carries the percentage immediately before Coulomb,
+    # which is exactly the layout src/parser_schema.py's
+    # _bat_header_postprocess exists to handle. Reproduce that on "old" so
+    # the fallback path is exercised against a live stub, not just a
+    # hand-written string in tests; "new" keeps the explicit column since
+    # there's no real capture proving whether newer firmware adds it.
+    if _cfg["firmware"] == "old":
+        header = (
+            "Battery  Volt     Curr     Tempr    "
+            "Base State   Volt. State  Curr. State  Temp. State  Coulomb     "
+        )
+    else:
+        header = (
+            "Battery  Volt     Curr     Tempr    "
+            "Base State   Volt. State  Curr. State  Temp. State  SOC        "
+            "Coulomb     "
+        )
     rows: list[str] = []
     rng = random.Random(bat_id)
     for c in range(cells):
@@ -714,14 +762,17 @@ def _resp_soh(cmd: str) -> bytes:
         return _wrap(cmd, f"Power   {bat_id}\r\r\nAbsent")
 
     # SOH degrades slightly with cycle count; each cell varies a little
-    base_soh = max(0, 100 - int(cycles * 0.02))
+    base_soh = _soh_pct(cycles)
 
     header = f"Power   {bat_id}\r\r\nBattery    Voltage    SOHCount   SOHStatus "
     rows = [header]
     rng = random.Random(bat_id)
     for c in range(cells):
+        # docs/docs.md's real capture shows ±1-2 mV of per-cell spread here
+        # (e.g. 3377-3379), not one repeated value across every row.
+        cell_volt = volt + rng.randint(-2, 2)
         soh_count = max(0, base_soh - rng.randint(0, 3))
-        rows.append(f"{c:<11}{volt:<11}{soh_count:<11}Normal    ")
+        rows.append(f"{c:<11}{cell_volt:<11}{soh_count:<11}Normal    ")
     return _wrap(cmd, "\r\r\n".join(rows))
 
 
@@ -791,10 +842,12 @@ def _resp_logout(cmd: str) -> bytes:
 
 # log
 def _resp_log(cmd: str) -> bytes:
+    with _state_lock:
+        soc = _state["soc"]
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     body = (
         f"Log count  : 5\r\r\n"
-        f"1  {now}  Charge start  SOC=85%\r\r\n"
+        f"1  {now}  Charge start  SOC={soc}%\r\r\n"
         f"2  {now}  Normal\r\r\n"
         f"3  {now}  Normal\r\r\n"
         f"4  {now}  Normal\r\r\n"
@@ -821,12 +874,20 @@ def _resp_disp(cmd: str) -> bytes:
 
 # prot  — protection flags
 def _resp_prot(cmd: str) -> bytes:
+    # Reflect injected faults like every other view does — this was
+    # previously the one command 'stub fault' didn't reach, contradicting
+    # the module docstring's "affects all views" claim for admin control.
+    active = set(_faults.values()) - {"absent"}
+    volt_st = "Alarm" if active & {"ov", "uv"} else "Normal"
+    curr_st = "Alarm" if "oc" in active else "Normal"
+    temp_st = "Alarm" if active & {"ot", "ut"} else "Normal"
+    sys_st = "Alarm" if active else "Normal"
     body = (
         "Protection flags:\r\r\n"
-        "Volt.Prot    : Normal\r\r\n"
-        "Curr.Prot    : Normal\r\r\n"
-        "Temp.Prot    : Normal\r\r\n"
-        "SysAlarm     : Normal"
+        f"Volt.Prot    : {volt_st}\r\r\n"
+        f"Curr.Prot    : {curr_st}\r\r\n"
+        f"Temp.Prot    : {temp_st}\r\r\n"
+        f"SysAlarm     : {sys_st}"
     )
     return _wrap(cmd, body)
 
@@ -849,7 +910,7 @@ def _resp_pwrsys(cmd: str) -> bytes:
         if _faults.get((g - 1) * slots_per_group + slot) == "absent"
     )
     online = total - absent_count
-    base_soh = max(0, 100 - int(s["cycles"] * 0.02))
+    base_soh = _soh_pct(s["cycles"])
     # FCC reflects both SOH degradation and currently-online module count
     fcc_mah = int(m["cap_mah"] * base_soh / 100) * online
     rc_mah = int(fcc_mah * s["soc"] / 100)
@@ -1162,7 +1223,18 @@ def main() -> None:
         "--firmware",
         default="new",
         choices=["old", "new"],
-        help="Column layout: old (18 cols) | new (23 cols with *.Id, default: new)",
+        help="Column layout: old (16 cols) | new (23 cols with *.Id, default: new)",
+    )
+    ap.add_argument(
+        "--fw-version",
+        default="B66.6",
+        metavar="VERSION",
+        help=(
+            "'info' response's Main Soft version field, e.g. B66.6 or B84.5 "
+            "(default: B66.6). Independent of --firmware: that flag picks the "
+            "pwr table's column layout, this sets the version string a client "
+            "reads back over the wire."
+        ),
     )
     ap.add_argument(
         "--soc",
@@ -1197,12 +1269,15 @@ def main() -> None:
         ap.error("--groups must be 1-6")
     if args.tick_interval < 1:
         ap.error("--tick-interval must be >= 1")
+    if not args.fw_version.strip():
+        ap.error("--fw-version must not be empty")
 
     _cfg["model"] = args.model
     _cfg["batteries"] = args.batteries
     _cfg["slots"] = args.slots
     _cfg["groups"] = args.groups
     _cfg["firmware"] = args.firmware
+    _cfg["fw_version"] = args.fw_version
     _cfg["tick_interval"] = args.tick_interval
     _state["soc"] = args.soc
 
@@ -1221,7 +1296,7 @@ def main() -> None:
         print(
             f"[stub]   batteries: {total_present} present / {total_slots} slots total"
         )
-        print(f"[stub]   firmware : {args.firmware}")
+        print(f"[stub]   firmware : {args.firmware}  (fw version {args.fw_version})")
         print(f"[stub]   SOC start: {args.soc}%")
         print(f"[stub]   HA config: TCP Socket  {args.host}:{port}")
         print()
