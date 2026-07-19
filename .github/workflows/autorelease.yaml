@@ -36,7 +36,16 @@ on:
 permissions: {}
 
 # Serialize runs: two quick merges where the second bumps the version could
-# otherwise race on the version-diff.
+# otherwise race on the version-diff. This only serializes execution order,
+# though — it does not guarantee every push gets a run. GitHub Actions keeps
+# at most one *pending* run per concurrency group; a third rapid push
+# cancels the second push's still-queued run outright rather than merely
+# delaying it behind the first. If that second push was itself a version
+# bump, its release is silently skipped (not merely late) — detect's own
+# "skipped intermediate version" warning below is what surfaces that,
+# should it ever happen. End state stays correct either way: whichever run
+# executes last still diffs against its own immediate parent and releases
+# whatever version is actually on master.
 concurrency:
   group: autorelease
   cancel-in-progress: false
@@ -63,6 +72,17 @@ jobs:
             echo "Version unchanged ($new) — nothing to release."
             echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # A version bump that itself was never tagged (no v$old release)
+          # right before this push bumped it again is the signature of a
+          # run this workflow's concurrency group silently dropped (see the
+          # concurrency block's own comment) -- the run that should have
+          # released $old got its pending slot cancelled by this push
+          # arriving before it ran. Not fatal: $new below still releases
+          # correctly. Just a visibility signal so a human can decide
+          # whether $old needs a manual release.yaml workflow_dispatch.
+          if [ -n "$old" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$old" > /dev/null; then
+            echo "::warning::Previous manifest version $old was never tagged (no v$old release) before this push bumped it to $new — likely an intermediate release skipped by a superseded pending run (see this workflow's concurrency comment). Releasing $new as usual; publish v$old manually via release.yaml's workflow_dispatch if it's still needed."
           fi
           tag="v$new"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then

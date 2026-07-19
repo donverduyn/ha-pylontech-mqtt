@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import datetime
+import functools
 import hashlib
 import html.parser
 import json
@@ -30,7 +31,10 @@ TOOL_VERSIONS_FILE = DEVCONTAINER_DIR / "tool-versions.env"
 HACS_JSON = ROOT / "hacs.json"
 REQUIREMENTS_DEV_MIN_TXT = ROOT / "requirements_dev_min.txt"
 REQUIREMENTS_DEV_MIN_LOCK = ROOT / "requirements_dev_min.lock.txt"
+REQUIREMENTS_DEV_LOCK = ROOT / "requirements_dev.lock.txt"
+REQUIREMENTS_RUNTIME_TXT = ROOT / "requirements_runtime.txt"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yaml"
+DEPENDABOT_YML = ROOT / ".github" / "dependabot.yml"
 
 # Decided 2026-07-09: trail the current HA release by ~2 release cycles
 # before dropping support for anything older. See requirements_dev_min.txt
@@ -143,7 +147,16 @@ def run(args: list[str]) -> None:
         ) from err
 
 
+@functools.cache
 def fetch_json(url: str) -> Any:
+    # Cached for the script's lifetime: collect_dependabot_ignore_names()
+    # calls exact_pins() on the same (package, version) pairs that
+    # min_lock_python_floor()/homeassistant_pin_for_phacc() just resolved
+    # moments earlier in the same run (refresh_python_locks() and
+    # refresh_min_ha_version() both hit this), so without caching every
+    # ordinary run makes 2 redundant blocking PyPI requests. Every caller
+    # only reads the returned dict, never mutates it, so sharing the same
+    # cached object across calls is safe.
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "ha-pylontech-dependency-updater"},
@@ -517,6 +530,12 @@ def refresh_python_locks() -> None:
         "requirements_dev_min.lock.txt",
         min_lock_python_floor(),
     )
+    # Both locks are current on disk at this point (the "min" leg's own
+    # pinned phacc/homeassistant identity is untouched here — only
+    # refresh_min_ha_version() changes that — but its lock content is still
+    # freshly recompiled above), so this is a valid point to also refresh
+    # dependabot.yml's generated ignore list from both.
+    update_dependabot_ignore_list()
 
 
 def months_ago(months: int) -> str:
@@ -553,6 +572,41 @@ def homeassistant_pin_for_phacc(version: str) -> str:
         f"pytest-homeassistant-custom-component=={version} has no exact "
         "homeassistant== pin"
     )
+
+
+def exact_pins(package: str, version: str) -> dict[str, str]:
+    """Every dependency `package==version` pins exactly via an unconditional
+    `==` entry in its own requires_dist.
+
+    Generalizes homeassistant_pin_for_phacc's single-name lookup to every
+    requirement — this drives dependabot.yml's generated ignore: list (see
+    collect_dependabot_ignore_names): a package pinned this way can never be
+    bumped independently by Dependabot, since our own
+    dependency-updates.yaml/min-ha-version-update.yaml (which respect the
+    same upstream pin) can't apply an independent bump either.
+    """
+    data = fetch_json(f"https://pypi.org/pypi/{package}/{version}/json")
+    info = cast(dict[str, Any], data["info"])
+    pins: dict[str, str] = {}
+    for requirement in cast(list[str], info["requires_dist"] or []):
+        if ";" in requirement:
+            # Environment-marker-gated (e.g. `pywin32==...; sys_platform ==
+            # "win32"`) — conditional, so not a pin our Linux-only CI
+            # resolution is actually bound by.
+            continue
+        match = re.match(
+            r"^([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9_.\-]+)$",
+            requirement.strip(),
+        )
+        if match:
+            pins[match.group(1)] = match.group(2)
+    return pins
+
+
+def normalize_pypi_name(name: str) -> str:
+    """PEP 503 normalization — pip/PyPI treat these spellings as one project
+    (e.g. "PyJWT", "pyjwt", and "py_jwt" would all collapse together)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def homeassistant_requires_python(version: str) -> str:
@@ -677,14 +731,137 @@ def update_tests_workflow_min_python(python_version: str) -> None:
         r"(- ha-version: min\n\s*lockfile: requirements_dev_min\.lock\.txt\n"
         r"\s*python-version: )\"[^\"]+\""
     )
-    new_text, count = pattern.subn(
-        lambda m: f'{m.group(1)}"{python_version}"', text, count=1
-    )
-    if count == 0:
+    # No count= limit: tests.yaml has two identical "ha-version: min" matrix
+    # blocks today (pytest's and e2e's), and both must track the same
+    # floor. Asserting exactly 2 rather than just count != 0 catches this
+    # drifting silently in either direction -- a stale copy left behind by
+    # a hardcoded count=1 (the original bug here: only pytest's matrix ever
+    # got patched, so e2e's silently ran the old interpreter against the
+    # new lockfile once a min-ha-version bump crossed a Python minor
+    # boundary), or a third leg added to the matrix later without this
+    # function being updated to match.
+    new_text, count = pattern.subn(lambda m: f'{m.group(1)}"{python_version}"', text)
+    if count != 2:
         raise SystemExit(
-            f"could not find the ha-version: min matrix entry in {TESTS_WORKFLOW}"
+            f"expected exactly 2 ha-version: min matrix entries in "
+            f"{TESTS_WORKFLOW}, found {count}"
         )
     TESTS_WORKFLOW.write_text(new_text)
+
+
+def locked_pin(lock_file: Path, name: str) -> str:
+    match = re.search(rf"(?m)^{re.escape(name)}==(\S+)", lock_file.read_text())
+    if not match:
+        raise SystemExit(f"could not find a {name}== pin in {lock_file}")
+    return match.group(1)
+
+
+def runtime_package_names() -> set[str]:
+    """Every package this project actually ships to users (see
+    requirements_runtime.txt's own header comment: "The actual runtime
+    footprint shipped to users"). Excluded from the generated dependabot
+    ignore list even when also exactly pinned by homeassistant/phacc's
+    dev-only dependency tree — e.g. paho-mqtt is both a runtime dependency
+    here *and* one of homeassistant's own exact pins, so without this
+    exclusion collect_dependabot_ignore_names() would silently suppress
+    Dependabot's version *and* security alerts for a package that ships to
+    every user, not a can-never-resolve dev-scope one.
+    """
+    names: set[str] = set()
+    for line in REQUIREMENTS_RUNTIME_TXT.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(r"^([A-Za-z0-9_.\-]+)", line)
+        if match:
+            names.add(normalize_pypi_name(match.group(1)))
+    return names
+
+
+def collect_dependabot_ignore_names() -> list[str]:
+    """Every package name exactly pinned (== in requires_dist) by whichever
+    homeassistant or pytest-homeassistant-custom-component releases are
+    *currently* locked, across both the "current" and "min" HA legs, minus
+    anything runtime_package_names() says actually ships to users.
+
+    Read fresh from both lock files rather than passed in, so this produces
+    the same result regardless of which of refresh_python_locks() /
+    refresh_min_ha_version() just ran — each only ever refreshes one leg's
+    lock files, but dependabot.yml's ignore: list needs the union of both,
+    or a Dependabot PR against the *other* leg's still-exact-pinned
+    homeassistant/phacc release could slip through unignored.
+    """
+    sources = [
+        ("homeassistant", locked_pin(REQUIREMENTS_DEV_LOCK, "homeassistant")),
+        ("homeassistant", locked_pin(REQUIREMENTS_DEV_MIN_LOCK, "homeassistant")),
+        (
+            "pytest-homeassistant-custom-component",
+            locked_pin(REQUIREMENTS_DEV_LOCK, "pytest-homeassistant-custom-component"),
+        ),
+        (
+            "pytest-homeassistant-custom-component",
+            locked_pin(
+                REQUIREMENTS_DEV_MIN_LOCK, "pytest-homeassistant-custom-component"
+            ),
+        ),
+    ]
+    names: set[str] = set()
+    for package, version in sources:
+        for name in exact_pins(package, version):
+            names.add(normalize_pypi_name(name))
+    return sorted(names - runtime_package_names())
+
+
+_DEPENDABOT_EXCLUDE_BEGIN = "        # <dependabot-exclude-generated>\n"
+_DEPENDABOT_EXCLUDE_END = "        # </dependabot-exclude-generated>"
+_DEPENDABOT_IGNORE_BEGIN = "      # <dependabot-ignore-generated>\n"
+_DEPENDABOT_IGNORE_END = "      # </dependabot-ignore-generated>"
+
+
+def _replace_between_markers(
+    text: str, begin_marker: str, end_marker: str, body: str, *, label: str
+) -> str:
+    begin = text.find(begin_marker)
+    end = text.find(end_marker)
+    if begin == -1 or end == -1 or end < begin:
+        raise SystemExit(f"could not find the {label} markers in {DEPENDABOT_YML}")
+    begin += len(begin_marker)
+    return text[:begin] + body + "\n" + text[end:]
+
+
+def update_dependabot_ignore_list() -> None:
+    """Rewrite dependabot.yml's ignore: list, and its mirror under the
+    security-updates group's exclude-patterns, from
+    collect_dependabot_ignore_names() — between two independent marker
+    pairs, since the two blocks use different YAML shapes
+    (dependency-name: mappings vs. bare pattern strings).
+
+    A hand-maintained version of this list only ever grew by someone
+    noticing a failed Dependabot PR after the fact (see
+    close-stale-automation-prs.yaml's CI-failure-signature detection) — this
+    computes the same "can never resolve" fact directly from what's exactly
+    pinned right now, so it can't drift stale between homeassistant/phacc
+    version bumps the way a hand-maintained list did, and both blocks are
+    generated from the same source so they can't drift apart from each
+    other either.
+    """
+    names = collect_dependabot_ignore_names()
+    text = DEPENDABOT_YML.read_text()
+    text = _replace_between_markers(
+        text,
+        _DEPENDABOT_EXCLUDE_BEGIN,
+        _DEPENDABOT_EXCLUDE_END,
+        "\n".join(f'        - "{name}"' for name in names),
+        label="dependabot-exclude-generated",
+    )
+    text = _replace_between_markers(
+        text,
+        _DEPENDABOT_IGNORE_BEGIN,
+        _DEPENDABOT_IGNORE_END,
+        "\n".join(f'      - dependency-name: "{name}"' for name in names),
+        label="dependabot-ignore-generated",
+    )
+    DEPENDABOT_YML.write_text(text)
 
 
 def refresh_min_ha_version() -> None:
@@ -708,6 +885,7 @@ def refresh_min_ha_version() -> None:
         if try_compile_min_lock(phacc_version, python_floor):
             update_hacs_json(ha_version)
             update_tests_workflow_min_python(major_minor_python(python_floor))
+            update_dependabot_ignore_list()
             print(
                 f"minimum supported HA version -> {ha_version} "
                 f"(pytest-homeassistant-custom-component=={phacc_version})"

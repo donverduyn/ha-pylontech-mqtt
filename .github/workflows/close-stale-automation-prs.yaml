@@ -32,6 +32,25 @@ name: Close Stale Automation PRs
 #    with new content could get closed by this workflow's very next tick,
 #    discarding a just-updated PR instead of one nobody touched.
 #
+#    Exempt: a *confirmed* major-version-bump Dependabot PR (badge parsing
+#    modeled on dependabot-auto-merge.yaml's is_major_bump — duplicated
+#    below rather than shared, since that workflow's logic lives inside a
+#    single `run:` loop body, not a step boundary a composite action could
+#    wrap — but with an inverted "no evidence" default; see
+#    is_confirmed_major_bump's own comment for why reusing that workflow's
+#    default here would silently disable this exemption's off-switch for
+#    virtually every Dependabot PR this repo produces, defeating reason 2
+#    entirely rather than narrowly carving out of it).
+#    dependabot-auto-merge.yaml deliberately never auto-merges a confirmed
+#    major bump — it needs a human to look at the diff before merging,
+#    exactly like min-ha-version-update.yaml's own PR needs a human before
+#    merging (see that workflow's "Not auto-merged" comment) — so treating
+#    it as generic staleness after a week would silently discard a PR that
+#    was never stalled by neglect, only by deliberately requiring a
+#    decision. Reason 1 above (known-conflict-signature) still applies to
+#    an exempted PR regardless: that's a "this can genuinely never merge"
+#    signal, not a "nobody got to it yet" one.
+#
 # Weekly, not 6-hourly (changed 2026-07-18): both reasons above tolerate a
 # week's delay just fine — reason 2 is itself keyed to a 7-day threshold,
 # and reason 1's "closes fast" property only mattered relative to a human
@@ -78,7 +97,47 @@ jobs:
               || echo "Could not delete branch $head_ref (leaving it; PR is already closed)."
           }
 
-          prs="$(gh pr list --repo "$REPO" --state open --json number,author,headRefName,createdAt,updatedAt)"
+          # Badge-parsing logic modeled on dependabot-auto-merge.yaml's
+          # is_major_bump, but with the "no compatibility badge found"
+          # default *inverted*: "false" (not a confirmed major bump) here,
+          # vs. "true" (be conservative, don't auto-merge) there. That
+          # inversion is deliberate, not a copy-paste slip: reusing
+          # dependabot-auto-merge.yaml's default would make "false" nearly
+          # unreachable for this repo's actual Dependabot PRs --
+          # docker/github-actions ecosystem PRs never render a
+          # compatibility badge at all, and dependabot.yml's pip entry only
+          # ever produces a *grouped* multi-dependency security-updates PR
+          # (see groups.security-updates), whose badges are one-per-
+          # dependency rather than one-for-the-group, so a group with no
+          # actually-major-bumped member still has $badges populated and is
+          # correctly read as non-major below -- but the "entirely absent"
+          # case (docker/actions PRs, or a PR body edited/stripped of
+          # badges) would otherwise default to "confirmed major" and
+          # permanently exempt nearly every Dependabot PR from reason 2,
+          # silently gutting the staleness sweep this file exists to run
+          # rather than narrowly carving a major-bump exception out of it.
+          # Reads $body from the caller's scope. Echoes "true"/"false".
+          is_confirmed_major_bump() {
+            local badges major_bump prev new prev_major new_major
+            badges="$(grep -oP 'previous-version=[^&]+&new-version=[^&\s")]+' <<<"$body" || true)"
+            if [ -z "$badges" ]; then
+              echo "false"
+              return
+            fi
+            major_bump="false"
+            while IFS= read -r badge; do
+              prev="$(grep -oP 'previous-version=\K[^&]+' <<<"$badge")"
+              new="$(grep -oP 'new-version=\K[^&\s")]+' <<<"$badge")"
+              prev_major="$(grep -oP '^v?\K\d+' <<<"$prev" || true)"
+              new_major="$(grep -oP '^v?\K\d+' <<<"$new" || true)"
+              if [ -n "$prev_major" ] && [ -n "$new_major" ] && [ "$prev_major" != "$new_major" ]; then
+                major_bump="true"
+              fi
+            done <<<"$badges"
+            echo "$major_bump"
+          }
+
+          prs="$(gh pr list --repo "$REPO" --state open --json number,author,headRefName,createdAt,updatedAt,body)"
 
           if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
             echo "No open PRs."
@@ -91,6 +150,7 @@ jobs:
             head_ref="$(echo "$pr" | jq -r .headRefName)"
             created_at="$(echo "$pr" | jq -r .createdAt)"
             updated_at="$(echo "$pr" | jq -r .updatedAt)"
+            body="$(echo "$pr" | jq -r .body)"
 
             is_dependabot=0
             if [ "$author" = "dependabot[bot]" ] || [ "$author" = "app/dependabot" ]; then
@@ -107,10 +167,22 @@ jobs:
 
             echo "::group::PR #$number ($author, $head_ref)"
 
+            is_major=0
+            if [ "$is_dependabot" = "1" ] && [ "$(is_confirmed_major_bump)" = "true" ]; then
+              is_major=1
+            fi
+
             now="$(date +%s)"
             age_days=$(( ( now - $(date -d "$created_at" +%s) ) / 86400 ))
             updated_hours_ago=$(( ( now - $(date -d "$updated_at" +%s) ) / 3600 ))
+            is_stale=0
             if [ "$age_days" -ge 7 ] && [ "$updated_hours_ago" -ge 24 ]; then
+              is_stale=1
+            fi
+
+            if [ "$is_stale" = "1" ] && [ "$is_major" = "1" ]; then
+              echo "Open $age_days days, last pushed to $updated_hours_ago hours ago, but this is a confirmed major-version bump — NOT closing as generic stale. Major bumps are deliberately left for a human merge decision (see dependabot-auto-merge.yaml); only a known-conflict-signature match below closes one automatically."
+            elif [ "$is_stale" = "1" ]; then
               echo "Open $age_days days, last pushed to $updated_hours_ago hours ago — closing as stale."
               if [ "$is_dependabot" = "1" ]; then
                 reopen_note="Dependabot will reopen or recreate this on its own if the underlying update is still needed."
@@ -149,6 +221,8 @@ jobs:
               echo "PR #$number matches the known min-HA-version-floor conflict — closing."
               close_pr "$number" "$head_ref" \
                 "Closing automatically: this PR's CI failure is the known conflict between an isolated single-package bump and the frozen \`requirements_dev_min.txt\`/hacs.json HA-version floor — a transitive pin from that floor's homeassistant release disagrees with the version this PR wants. \`dependency-updates.yaml\`/\`min-ha-version-update.yaml\` resolve the whole dependency set together with \`uv\` on their own weekly schedule and supersede single-package bumps like this one; Dependabot will reopen or recreate this PR on its own if the conflict is somehow still unresolved after those run."
+            elif [ "$is_stale" = "1" ]; then
+              echo "PR #$number: no matching conflict signature found; left open only because it's a confirmed major-version bump awaiting manual review."
             else
               echo "PR #$number: no matching conflict signature found, leaving open (not yet stale)."
             fi

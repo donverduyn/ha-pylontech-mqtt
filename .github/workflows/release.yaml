@@ -174,13 +174,58 @@ jobs:
       - name: Push the image
         run: docker push "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
 
+      - name: Check whether this version is newer than the published :latest
+        # A hotfix release for an older line (e.g. 2.0.1 published after
+        # 2.1.0 already shipped) must still fully publish below -- the
+        # versioned image, scan, SBOM, and GitHub Release are all valid
+        # regardless -- it just must not move :latest *backward*. Queried
+        # directly from the remote (matching autorelease.yaml's ls-remote
+        # pattern) rather than relying on locally fetched tags. sort -V
+        # (GNU version-sort, standard on ubuntu-latest) is sufficient for
+        # this project's plain X.Y.Z tags. The `s/\^\{\}$//` strips the
+        # "peeled" ref git ls-remote emits alongside every annotated tag
+        # (refs/tags/vX.Y.Z^{}, pointing at the same version) -- left
+        # unstripped it would sort after the plain version and end up as
+        # $latest_published instead of the real tag.
+        #
+        # No `set -e` here, deliberately: `grep -Ev '[-]'` exits 1 (no
+        # match) whenever every currently-published tag is a prerelease --
+        # which is this repo's *actual current state* (only v2.0.0-rc1
+        # exists) -- and that non-zero exit would otherwise abort the step
+        # under pipefail before ever reaching the `-z "$latest_published"`
+        # fallback below that exists to handle exactly this case. Each
+        # failure-prone stage is additionally guarded with `|| true` so a
+        # transient `git ls-remote` network failure degrades to
+        # retag-latest=true (this repo's pre-existing unconditional-retag
+        # behavior) instead of crashing a job that has already pushed the
+        # image to ghcr.io by this point.
+        id: latest-check
+        if: steps.version.outputs.is_prerelease == 'false'
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          latest_published="$(
+            { git ls-remote --tags origin 'refs/tags/v*' || true; } \
+              | sed -E 's/\^\{\}$//; s#.*refs/tags/v##' \
+              | { grep -Ev '[-]' || true; } \
+              | sort -V \
+              | tail -n1
+          )"
+          if [ -z "$latest_published" ] || [ "$(printf '%s\n%s\n' "$latest_published" "$NEW_VERSION" | sort -V | tail -n1)" = "$NEW_VERSION" ]; then
+            echo "retag-latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Not retagging :latest -> $NEW_VERSION: the currently published :latest is $latest_published, which is newer. This looks like a hotfix release for an older line -- the versioned image and GitHub Release still publish normally below; retag :latest by hand (docker buildx imagetools create) only if that's actually intended."
+            echo "retag-latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Separate, conditional step rather than a second line in the tags list
       # above: retagging the already-pushed digest is enough, no rebuild
       # needed, and skipping it outright for prereleases is unambiguous —
       # tagging ":latest" unconditionally previously let a v2.0.0-rc1 push
       # overwrite the production "latest" tag with an unvalidated build.
-      - name: Tag latest (non-prerelease only)
-        if: steps.version.outputs.is_prerelease == 'false'
+      - name: Tag latest (non-prerelease only, and not older than what's published)
+        if: steps.version.outputs.is_prerelease == 'false' && steps.latest-check.outputs.retag-latest == 'true'
         run: |
           docker buildx imagetools create \
             --tag "ghcr.io/${{ github.repository }}:latest" \
