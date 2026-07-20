@@ -1,66 +1,27 @@
 name: Close Stale Automation PRs
 
-# Two independent reasons a bot/automation-authored PR should be closed
-# without a human doing it by hand:
+# Close bot/automation PRs after they have been open for at least seven days.
+# Branch refreshes deliberately do not postpone cleanup: PR Auto-merge keeps
+# every open PR current, including one whose checks can never pass, so using
+# GitHub's updatedAt timestamp here would keep a stuck PR alive indefinitely.
+# The weekly cadence means an eligible PR remains visible for 7-14 days.
 #
-# 1. Known-superseded (dependabot only, regardless of age):
-#    Dependabot security updates (CVE-driven) fire independently of
-#    dependabot.yml's schedule/ecosystem list — they've repeatedly opened
-#    isolated single-package pip bumps (e.g. #66-69, #74) that conflict with
-#    the frozen requirements_dev_min.txt/hacs.json HA-version floor, since a
-#    lone package bump can't satisfy a resolver that also has to respect a
-#    transitive pin from that floor's homeassistant release.
-#    dependency-updates.yaml / min-ha-version-update.yaml already supersede
-#    these by refreshing the whole dependency set together with uv, so this
-#    closes the now-redundant PR once its CI failure confirms that's what
-#    happened, instead of waiting on reason 2 below.
+# Patch/minor and unclassified Dependabot PRs, plus our own dependency-update
+# branches, close once stale for any reason: failed checks, an unresolved
+# merge conflict, or auto-merge that could not be enabled. Confirmed major
+# Dependabot updates are exempt because they deliberately require review.
 #
-# 2. Stale (dependabot or our own dependency-update automation, any reason,
-#    only once 7+ days old AND not pushed to in the last day): a PR nobody
-#    has acted on in a week, regardless of why — checks never passed,
-#    auto-merge never had a green run to trigger on, or a human just hasn't
-#    gotten to it. Closing these keeps at most one meaningfully-current PR
-#    open per automation branch; the next scheduled run of that automation
-#    opens a fresh one reflecting whatever's current. This also covers
-#    min-ha-version-update.yaml's own branch, which used to self-close its
-#    stale PR inline right before each weekly run — centralized here
-#    instead. The "not pushed to in the last day" guard matters because
-#    branch-based automations (dependency-updates.yaml,
-#    min-ha-version-update.yaml) update the *same* PR in place rather than
-#    opening a new one each run, which doesn't reset createdAt — without
-#    this guard, a PR sitting at ~7 days old that a weekly job refreshes
-#    with new content could get closed by this workflow's very next tick,
-#    discarding a just-updated PR instead of one nobody touched.
+# One narrow exception to that major-version exemption is a PR whose failed CI
+# logs prove the known frozen-minimum-HA-floor resolver conflict. HA/phacc exact
+# pins are generated into dependabot.yml's security-group exclude-patterns,
+# not a global ignore list, so each blocked security update gets its own visible
+# PR. Once that PR reaches the same staleness threshold, it can be closed even
+# when it is a major update: the signature proves it cannot merge independently,
+# rather than merely indicating that nobody has reviewed it yet.
 #
-#    Exempt: a *confirmed* major-version-bump Dependabot PR, per
-#    .github/scripts/dependabot-bump-kind.sh (shared with
-#    dependabot-auto-merge.yaml's auto-merge decision — one parser instead
-#    of two independently-maintained copies). Only its "major" result
-#    exempts; "minor-or-patch" and "unknown" both fall through to the
-#    generic staleness check below, deliberately not the same interpretation
-#    dependabot-auto-merge.yaml gives "unknown" (there, unknown means don't
-#    auto-merge; here, unknown must NOT mean exempt-from-closing, or a PR
-#    on an ecosystem/format that just doesn't classify would sit exempt
-#    forever, defeating reason 2 entirely instead of narrowly carving a
-#    major-bump exception out of it).
-#    dependabot-auto-merge.yaml deliberately never auto-merges a confirmed
-#    major bump — it needs a human to look at the diff before merging,
-#    exactly like min-ha-version-update.yaml's own PR needs a human before
-#    merging (see that workflow's "Not auto-merged" comment) — so treating
-#    it as generic staleness after a week would silently discard a PR that
-#    was never stalled by neglect, only by deliberately requiring a
-#    decision. Reason 1 above (known-conflict-signature) still applies to
-#    an exempted PR regardless: that's a "this can genuinely never merge"
-#    signal, not a "nobody got to it yet" one.
-#
-# Weekly, not 6-hourly (changed 2026-07-18): both reasons above tolerate a
-# week's delay just fine — reason 2 is itself keyed to a 7-day threshold,
-# and reason 1's "closes fast" property only mattered relative to a human
-# noticing the redundant PR first, which doesn't happen faster than this
-# job now runs either. Scheduled after dependency-updates.yaml (08:17) and
-# min-ha-version-update.yaml (08:30) on the same Monday, so anything those
-# two runs just superseded is already stale/redundant by the time this
-# checks.
+# Scheduled after dependency-updates.yaml (08:17), PR Auto-merge (08:22), and
+# min-ha-version-update.yaml (08:30) on Monday, so current automation has a
+# chance to refresh or merge its PR before cleanup runs.
 on:
   workflow_dispatch:
   schedule:
@@ -85,7 +46,7 @@ jobs:
       # $GITHUB_REPOSITORY, not the checked-out tree.
       - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
 
-      - name: Close known-superseded or stale dependency-automation PRs
+      - name: Close stale dependency-automation PRs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -104,7 +65,7 @@ jobs:
               || echo "Could not delete branch $head_ref (leaving it; PR is already closed)."
           }
 
-          prs="$(gh pr list --repo "$REPO" --state open --json number,author,headRefName,createdAt,updatedAt,title,body)"
+          prs="$(gh pr list --repo "$REPO" --state open --json number,author,headRefName,createdAt,title,body)"
 
           if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
             echo "No open PRs."
@@ -116,7 +77,6 @@ jobs:
             author="$(echo "$pr" | jq -r .author.login)"
             head_ref="$(echo "$pr" | jq -r .headRefName)"
             created_at="$(echo "$pr" | jq -r .createdAt)"
-            updated_at="$(echo "$pr" | jq -r .updatedAt)"
             title="$(echo "$pr" | jq -r .title)"
             body="$(echo "$pr" | jq -r .body)"
 
@@ -142,23 +102,22 @@ jobs:
 
             now="$(date +%s)"
             age_days=$(( ( now - $(date -d "$created_at" +%s) ) / 86400 ))
-            updated_hours_ago=$(( ( now - $(date -d "$updated_at" +%s) ) / 3600 ))
             is_stale=0
-            if [ "$age_days" -ge 7 ] && [ "$updated_hours_ago" -ge 24 ]; then
+            if [ "$age_days" -ge 7 ]; then
               is_stale=1
             fi
 
             if [ "$is_stale" = "1" ] && [ "$is_major" = "1" ]; then
-              echo "Open $age_days days, last pushed to $updated_hours_ago hours ago, but this is a confirmed major-version bump — NOT closing as generic stale. Major bumps are deliberately left for a human merge decision (see dependabot-auto-merge.yaml); only a known-conflict-signature match below closes one automatically."
+              echo "Open $age_days days, but this is a confirmed major-version bump — NOT closing as generic stale. Major bumps are deliberately left for a human merge decision (see dependabot-auto-merge.yaml); only a known-conflict-signature match below closes one automatically."
             elif [ "$is_stale" = "1" ]; then
-              echo "Open $age_days days, last pushed to $updated_hours_ago hours ago — closing as stale."
+              echo "Open $age_days days — closing as stale."
               if [ "$is_dependabot" = "1" ]; then
                 reopen_note="Dependabot will reopen or recreate this on its own if the underlying update is still needed."
               else
                 reopen_note="The next scheduled run of this automation will open a fresh PR reflecting whatever's current."
               fi
               close_pr "$number" "$head_ref" \
-                "Closing automatically: open more than 7 days without merging, with no new commits pushed in the last 24 hours. Keeping at most one meaningfully-current PR open per dependency-automation branch. $reopen_note"
+                "Closing automatically: open at least 7 days without merging. PR branch refreshes do not postpone cleanup because they cannot make failing checks or incompatible constraints mergeable. $reopen_note"
               echo "::endgroup::"
               continue
             fi
@@ -185,10 +144,12 @@ jobs:
               fi
             done
 
-            if [ "$matched" = "1" ]; then
-              echo "PR #$number matches the known min-HA-version-floor conflict — closing."
+            if [ "$matched" = "1" ] && [ "$is_stale" = "1" ]; then
+              echo "PR #$number matches the known min-HA-version-floor conflict and is stale — closing."
               close_pr "$number" "$head_ref" \
-                "Closing automatically: this PR's CI failure is the known conflict between an isolated single-package bump and the frozen \`requirements_dev_min.txt\`/hacs.json HA-version floor — a transitive pin from that floor's homeassistant release disagrees with the version this PR wants. \`dependency-updates.yaml\`/\`min-ha-version-update.yaml\` resolve the whole dependency set together with \`uv\` on their own weekly schedule and supersede single-package bumps like this one; Dependabot will reopen or recreate this PR on its own if the conflict is somehow still unresolved after those run."
+                "Closing automatically after at least 7 days: this PR's CI failure is the known conflict between an isolated single-package bump and the frozen \`requirements_dev_min.txt\`/hacs.json HA-version floor — a transitive pin from that floor's homeassistant release disagrees with the version this PR wants. \`dependency-updates.yaml\`/\`min-ha-version-update.yaml\` resolve the whole dependency set together with \`uv\` on their own weekly schedule and supersede single-package bumps like this one; Dependabot will reopen or recreate this PR on its own if the conflict is somehow still unresolved after those run."
+            elif [ "$matched" = "1" ]; then
+              echo "PR #$number matches the known min-HA-version-floor conflict, but is only $age_days days old — leaving it visible until stale."
             elif [ "$is_stale" = "1" ]; then
               echo "PR #$number: no matching conflict signature found; left open only because it's a confirmed major-version bump awaiting manual review."
             else

@@ -1,55 +1,29 @@
 name: PR Auto-merge
 
-# Dependabot's own security-update PRs (CVE-driven, separate from
-# dependency-updates.yaml's own bulk uv refresh — see
-# close-stale-automation-prs.yaml's top comment) had no merge path at all
-# before this workflow existed: they either got closed as a known
-# min-HA-version-floor conflict, closed once stale, or just sat open until
-# a human noticed. This closes that gap for the common, low-risk case —
-# patch/minor bumps — the same way dependency-updates.yaml auto-merges its
-# own PR.
+# Branch freshness and merge eligibility are deliberately separate. Every
+# default-branch push updates every open PR: Dependabot branches are rebased,
+# while human branches receive a non-destructive merge update. Schedule and
+# manual events provide recovery runs.
 #
-# Ordinary contributor PRs use a deliberately slower path in this same
-# workflow: once a non-draft PR has been open for seven full days, the weekly
-# maintenance run enables auto-merge. GitHub's required checks, reviews, and
-# mergeability rules remain the final gate; `--auto` does not bypass them.
-# Bot-authored PRs and `automation/*` branches are excluded from this path:
-# Dependabot is governed by the policy below, dependency-updates already
-# enables auto-merge when it opens its PR, and min-ha-version-update is
-# intentionally manual.
+# Automatic Dependabot merging is narrower. Only grouped patch/minor updates
+# enter a single-flight queue, with exactly one group allowed to have
+# auto-merge enabled. When that group merges, the resulting default-branch
+# push refreshes all remaining PRs and activates the next eligible group.
+# Single-dependency Dependabot PRs are kept current but never auto-merged:
+# exact HA/phacc pin collisions are expected to fail, and major updates remain
+# manual. Failed groups are skipped so they cannot block another ecosystem.
 #
-# Deliberately excludes major bumps: those can carry breaking API changes
-# that passing tests don't necessarily cover, so they still need a human to
-# look at the diff before merging.
+# Ordinary contributor PRs retain the slower policy: the weekly maintenance
+# run enables auto-merge after seven full days. Required checks, reviews, and
+# mergeability remain final gates for every automatic merge.
 #
-# No explicit min-HA-version-floor check is needed here: a PR that
-# conflicts with the frozen floor (requirements_dev_min.txt) simply never
-# passes tests-finished/HACS Action/validate, so `gh pr merge --auto` has
-# nothing to act on — it stays open (and pending) until
-# close-stale-automation-prs.yaml eventually retires it.
-#
-# workflow_run wakes this job as soon as Tests finishes for a Dependabot PR,
-# so an eligible update gets auto-merge enabled within minutes instead of
-# waiting for the weekly maintenance pass. The job still runs from the
-# trusted default-branch copy of this workflow and only checks out that
-# trusted branch; it never executes code from the Dependabot PR with its
-# write token.
-#
-# workflow_run also sidesteps the read-only-GITHUB_TOKEN restriction that
-# Dependabot-authored pull_request events carry: this follow-up run gets the
-# permissions below from the default branch. workflow_dispatch and the
-# weekly schedule remain recovery paths if a Tests run is skipped or its
-# completion event is delayed.
-#
-# Dropping pull_request_target also drops dependabot/fetch-metadata, since
-# that action reads `github.event.pull_request` to determine the semver
-# update type — a field that only exists on pull_request-family events.
-# Instead, update type comes from .github/scripts/dependabot-bump-kind.sh
-# (shared with close-stale-automation-prs.yaml's exemption check) — "major"
-# or "unknown" is treated as a major bump and skipped here, conservative by
-# design, matching the "only the common low-risk case" scope above.
+# workflow_run reacts after Tests completes, but always executes this trusted
+# default-branch workflow and never checks out PR code with a write token.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "master"
   workflow_run:
     workflows:
       - "Tests"
@@ -66,76 +40,77 @@ permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  maintain-dependabot-prs:
-    # workflow_dispatch/schedule sweep every open Dependabot PR. A
-    # workflow_run should do that work only when Dependabot triggered the
-    # upstream Tests run; ordinary contributors' test completions are no-ops.
+  update-open-pr-branches:
     if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.actor.login == 'dependabot[bot]' ||
-      github.event.workflow_run.actor.login == 'app/dependabot'
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: "ubuntu-latest"
+    timeout-minutes: 15
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
-      # Needed only to fetch .github/scripts/dependabot-bump-kind.sh --
-      # this job otherwise works entirely through the gh API against
-      # $GITHUB_REPOSITORY, not the checked-out tree.
+      - name: Create GitHub App token
+        id: app-token
+        uses: "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" # v3.2.0
+        with:
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
       - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
 
-      - name: Enable auto-merge and rebase every open Dependabot PR
+      - name: Update every open PR branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          # App-authenticated branch updates trigger ordinary pull_request CI;
+          # updates made with GITHUB_TOKEN would suppress those follow-up runs.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
+        run: .github/scripts/update-open-pr-branches.sh
 
-          prs="$(gh pr list --repo "$REPO" --state open --json number,author,url,title,createdAt \
-            --jq '[.[] | select(.author.login == "dependabot[bot]" or .author.login == "app/dependabot")] | sort_by(.createdAt)')"
-          count="$(echo "$prs" | jq 'length')"
-          if [ "$count" = "0" ]; then
-            echo "No open Dependabot PRs."
-            exit 0
-          fi
+  queue-dependabot-group:
+    needs: update-open-pr-branches
+    if: >-
+      always() &&
+      (needs.update-open-pr-branches.result == 'success' ||
+       needs.update-open-pr-branches.result == 'skipped')
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" # v3.2.0
+        with:
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
 
-          # Process substitution (< <(...)), not a `| while` pipe: a piped
-          # while loop runs in a subshell, where a mid-loop failure under
-          # `set -e` would only terminate that subshell, silently skipping
-          # the rest of the queue instead of failing the job.
-          while read -r pr; do
-            number="$(echo "$pr" | jq -r .number)"
-            url="$(echo "$pr" | jq -r .url)"
-            title="$(echo "$pr" | jq -r .title)"
+      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
 
-            body="$(gh pr view "$number" --repo "$REPO" --json body --jq .body)"
-            bump_kind="$(.github/scripts/dependabot-bump-kind.sh "$title" "$body")"
-            if [ "$bump_kind" = "minor-or-patch" ]; then
-              echo "PR #$number: patch/minor — enabling auto-merge."
-              # Not fatal on failure (e.g. already merged/closed by the time
-              # this runs, or a real merge conflict): one PR's failure here
-              # must not abort the loop and skip every later PR's rebase.
-              gh pr merge --auto --squash "$url" || echo "  could not enable auto-merge — leaving for manual review."
-            else
-              echo "PR #$number: $bump_kind bump — leaving for manual review."
-            fi
-
-            echo "PR #$number: attempting rebase..."
-            if gh api "repos/$REPO/pulls/$number/update-branch" -X PUT >/dev/null 2>&1; then
-              echo "  updated."
-            else
-              echo "  already up to date, or has a real conflict — leaving as-is."
-            fi
-          done < <(echo "$prs" | jq -c '.[]')
+      - name: Activate one eligible Dependabot group PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: .github/scripts/queue-dependabot-group.sh
 
   auto-merge-aged-regular-prs:
     # A workflow_run event is useful only for Dependabot's immediate path
     # above. Ordinary PRs become eligible because time passes, so scan them
     # on the weekly schedule (and allow a manual recovery run).
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: update-open-pr-branches
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.update-open-pr-branches.result == 'success'
     runs-on: "ubuntu-latest"
     permissions:
       contents: write

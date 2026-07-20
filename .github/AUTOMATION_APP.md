@@ -1,8 +1,9 @@
 # Repository automation GitHub App
 
-The dependency and minimum-version maintenance workflows authenticate as the
-private **HA Pylontech MQTT Automation** GitHub App. This replaces the
-long-lived personal access token previously stored as `UPDATE_PR_TOKEN`.
+The dependency, minimum-version, and pull-request maintenance workflows
+authenticate as the private **HA Pylontech MQTT Automation** GitHub App. This
+replaces the long-lived personal access token previously stored as
+`UPDATE_PR_TOKEN`.
 
 ## App registration
 
@@ -19,7 +20,9 @@ Use these GitHub App settings:
   - Workflows: read and write
 
 The Workflows permission is required because the minimum-version updater may
-change `.github/workflows/tests.yaml`. Install the App only on this repository.
+change `.github/workflows/tests.yaml`, and App-authenticated PR branch updates
+must trigger the normal pull-request checks. Install the App only on this
+repository.
 
 ## Actions configuration
 

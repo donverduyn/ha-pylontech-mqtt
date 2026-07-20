@@ -232,7 +232,7 @@ def test_locked_pin_raises_when_the_package_is_not_pinned(tmp_path):
         update_dependencies.locked_pin(lock_file, "homeassistant")
 
 
-def test_collect_dependabot_ignore_names_unions_and_normalizes_both_ha_legs(
+def test_collect_dependabot_exclude_names_unions_and_normalizes_both_ha_legs(
     monkeypatch,
 ):
     monkeypatch.setattr(update_dependencies, "REQUIREMENTS_DEV_LOCK", "dev-lock")
@@ -251,7 +251,11 @@ def test_collect_dependabot_ignore_names_unions_and_normalizes_both_ha_legs(
     monkeypatch.setattr(update_dependencies, "locked_pin", _locked_pin)
 
     exact_pin_results = {
-        ("homeassistant", "2026.7.2"): {"PyJWT": "2.12.1", "aiohttp": "3.14.1"},
+        ("homeassistant", "2026.7.2"): {
+            "PyJWT": "2.12.1",
+            "aiohttp": "3.14.1",
+            "paho-mqtt": "2.1.0",
+        },
         ("homeassistant", "2026.1.0"): {"pyjwt": "2.10.1"},
         ("pytest-homeassistant-custom-component", "0.13.346"): {"pytest": "9.0.3"},
         ("pytest-homeassistant-custom-component", "0.13.305"): {"pytest": "9.0.0"},
@@ -262,14 +266,14 @@ def test_collect_dependabot_ignore_names_unions_and_normalizes_both_ha_legs(
 
     monkeypatch.setattr(update_dependencies, "exact_pins", _exact_pins)
 
-    names = update_dependencies.collect_dependabot_ignore_names()
+    names = update_dependencies.collect_dependabot_exclude_names()
 
     # "PyJWT" and "pyjwt" from the two legs collapse into one normalized
     # entry; the two pytest pins from either phacc leg collapse likewise.
-    assert names == ["aiohttp", "pyjwt", "pytest"]
+    assert names == ["aiohttp", "paho-mqtt", "pyjwt", "pytest"]
 
 
-def test_update_dependabot_ignore_list_rewrites_both_marker_blocks(
+def test_update_dependabot_exclude_list_rewrites_only_group_exclusions(
     tmp_path, monkeypatch
 ):
     dependabot_yml = tmp_path / "dependabot.yml"
@@ -278,23 +282,17 @@ def test_update_dependabot_ignore_list_rewrites_both_marker_blocks(
         "        # <dependabot-exclude-generated>\n"
         '        - "stale"\n'
         "        # </dependabot-exclude-generated>\n"
-        "    ignore:\n"
-        "      # <dependabot-ignore-generated>\n"
-        '      - dependency-name: "stale"\n'
-        "      # </dependabot-ignore-generated>\n"
     )
     monkeypatch.setattr(update_dependencies, "DEPENDABOT_YML", dependabot_yml)
     monkeypatch.setattr(
         update_dependencies,
-        "collect_dependabot_ignore_names",
+        "collect_dependabot_exclude_names",
         lambda: ["aiohttp", "pyjwt"],
     )
 
-    update_dependencies.update_dependabot_ignore_list()
+    update_dependencies.update_dependabot_exclude_list()
 
     text = dependabot_yml.read_text()
     assert '        - "aiohttp"\n        - "pyjwt"\n' in text
-    assert (
-        '      - dependency-name: "aiohttp"\n      - dependency-name: "pyjwt"\n' in text
-    )
+    assert "ignore:" not in text
     assert "stale" not in text
