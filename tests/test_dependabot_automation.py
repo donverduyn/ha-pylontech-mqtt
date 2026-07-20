@@ -9,7 +9,6 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 PR_KIND = ROOT / ".github" / "scripts" / "dependabot-pr-kind.sh"
-UPDATE_BRANCHES = ROOT / ".github" / "scripts" / "update-open-pr-branches.sh"
 QUEUE_GROUP = ROOT / ".github" / "scripts" / "queue-dependabot-group.sh"
 AUTO_MERGE_WORKFLOW = ROOT / ".github" / "workflows" / "dependabot-auto-merge.yaml"
 
@@ -102,19 +101,16 @@ def test_dependabot_pr_kind_fails_closed_for_single_or_unknown_bodies(
     assert result.stdout == "single\n"
 
 
-def test_auto_merge_workflow_separates_updates_from_group_queue() -> None:
+def test_auto_merge_workflow_is_schedule_only_and_runs_the_group_queue() -> None:
     text = AUTO_MERGE_WORKFLOW.read_text()
 
-    assert '      - "master"' in text
+    assert "push:" not in text
+    assert "workflow_run:" not in text
+    assert "pull_request" not in text
+    assert "schedule:" in text
     assert "cancel-in-progress: false" in text
-    assert "update-open-pr-branches:" in text
-    assert "run: .github/scripts/update-open-pr-branches.sh" in text
     assert "queue-dependabot-group:" in text
-    assert "needs: update-open-pr-branches" in text
     assert "run: .github/scripts/queue-dependabot-group.sh" in text
-    assert "reviewDecision" in text
-    assert ".commit_id == $head" in text
-    assert "Enable auto-merge and rebase every open Dependabot PR" not in text
 
 
 def test_stale_cleanup_labels_but_never_closes_dependabot() -> None:
@@ -130,47 +126,6 @@ def test_stale_cleanup_labels_but_never_closes_dependabot() -> None:
     leave_open = text.index("continue", dependabot_policy)
     close_own_automation = text.index('gh pr close "$number"', leave_open)
     assert dependabot_policy < leave_open < close_own_automation
-
-
-def test_update_open_prs_rebases_dependabot_but_not_human_branches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    log = _install_fake_gh(tmp_path, monkeypatch)
-    monkeypatch.setenv(
-        "GH_PRS",
-        json.dumps(
-            [
-                {
-                    "number": 1,
-                    "author": {"login": "app/dependabot"},
-                    "isCrossRepository": False,
-                    "maintainerCanModify": True,
-                    "createdAt": "2026-01-01T00:00:00Z",
-                },
-                {
-                    "number": 2,
-                    "author": {"login": "contributor"},
-                    "isCrossRepository": False,
-                    "maintainerCanModify": True,
-                    "createdAt": "2026-01-02T00:00:00Z",
-                },
-                {
-                    "number": 3,
-                    "author": {"login": "fork-owner"},
-                    "isCrossRepository": True,
-                    "maintainerCanModify": False,
-                    "createdAt": "2026-01-03T00:00:00Z",
-                },
-            ]
-        ),
-    )
-
-    subprocess.run([UPDATE_BRANCHES], check=True)
-
-    calls = log.read_text().splitlines()
-    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert "pr update-branch 2 --repo owner/repo" in calls
-    assert not any("update-branch 3" in call for call in calls)
 
 
 def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(

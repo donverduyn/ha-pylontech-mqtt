@@ -1,23 +1,13 @@
 name: PR Auto-merge
 
-# Every default-branch push updates open PR branches. Grouped patch/minor
-# Dependabot updates then enter a single-flight auto-merge queue; individual
-# and major updates stay manual. Ordinary contributor PRs become eligible
-# after seven days only when GitHub reports a current approved review. Elapsed
-# time never substitutes for review.
-#
-# workflow_run executes this trusted default-branch workflow and never checks
-# out PR code with a write-capable token.
+# Runs only on the weekly cron (plus manual dispatch) — deliberately never on
+# push or PR-activity events. Auto-merge must not react to PR activity; see
+# the schedule-only project memory for why. Each weekly pass activates one
+# eligible grouped patch/minor Dependabot update in a single-flight queue;
+# individual and major updates stay manual. Human PRs are always merged by
+# a maintainer — this workflow never touches them.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "master"
-  workflow_run:
-    workflows:
-      - "Tests"
-    types:
-      - completed
   schedule:
     - cron: "22 8 * * 1"
 
@@ -26,45 +16,9 @@ permissions: {}
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
-  update-open-pr-branches:
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch'
-    runs-on: "ubuntu-latest"
-    timeout-minutes: 15
-    environment: automation
-    permissions:
-      contents: read
-    steps:
-      # This checkout uses only the read-only job token. The write-capable App
-      # token is minted afterwards and is passed only to the gh-based updater.
-      - uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1
-        with:
-          persist-credentials: false
-
-      - name: Create GitHub App token
-        id: app-token
-        uses: ./.github/actions/automation-app-token
-        with:
-          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
-
-      - name: Update every open PR branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-        run: .github/scripts/update-open-pr-branches.sh
-
   queue-dependabot-group:
-    needs: update-open-pr-branches
-    if: >-
-      always() &&
-      (needs.update-open-pr-branches.result == 'success' ||
-       needs.update-open-pr-branches.result == 'skipped')
     runs-on: "ubuntu-latest"
     timeout-minutes: 10
     environment: automation
@@ -87,86 +41,3 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: .github/scripts/queue-dependabot-group.sh
-
-  auto-merge-aged-approved-regular-prs:
-    needs: update-open-pr-branches
-    if: >-
-      always() &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-      needs.update-open-pr-branches.result == 'success'
-    runs-on: "ubuntu-latest"
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Enable auto-merge for approved regular PRs open at least seven days
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          now="$(date +%s)"
-          cutoff=$(( now - 7 * 86400 ))
-          default_branch="$(
-            gh repo view "$REPO" --json defaultBranchRef \
-              --jq .defaultBranchRef.name
-          )"
-          prs="$(
-            gh pr list --repo "$REPO" --base "$default_branch" \
-              --state open --limit 1000 \
-              --json number,url,author,headRefName,headRefOid,createdAt,isDraft,reviewDecision
-          )"
-
-          if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
-            echo "No open PRs targeting $default_branch."
-            exit 0
-          fi
-
-          while read -r pr; do
-            number="$(echo "$pr" | jq -r .number)"
-            url="$(echo "$pr" | jq -r .url)"
-            author="$(echo "$pr" | jq -r '.author.login // ""')"
-            head_ref="$(echo "$pr" | jq -r .headRefName)"
-            head_sha="$(echo "$pr" | jq -r .headRefOid)"
-            created_at="$(echo "$pr" | jq -r .createdAt)"
-            is_draft="$(echo "$pr" | jq -r .isDraft)"
-            review_decision="$(echo "$pr" | jq -r '.reviewDecision // ""')"
-
-            if [ "$is_draft" = "true" ]; then
-              echo "PR #$number: draft — leaving for its author."
-              continue
-            fi
-            if [[ "$author" == *"[bot]" ]] || [[ "$author" == app/* ]] \
-              || [[ "$head_ref" == automation/* ]]; then
-              echo "PR #$number: bot/automation PR — dedicated policy applies."
-              continue
-            fi
-
-            created_epoch="$(date -d "$created_at" +%s)"
-            age_days=$(( (now - created_epoch) / 86400 ))
-            if [ "$created_epoch" -gt "$cutoff" ]; then
-              echo "PR #$number: open $age_days days — not eligible yet."
-              continue
-            fi
-            if [ "$review_decision" != "APPROVED" ]; then
-              echo "PR #$number: open $age_days days but reviewDecision is ${review_decision:-unset} — approval is required."
-              continue
-            fi
-
-            current_approvals="$(
-              gh api "repos/$REPO/pulls/$number/reviews" \
-                --paginate --jq '.[]' \
-                | jq -s --arg head "$head_sha" \
-                    '[.[] | select(.state == "APPROVED" and .commit_id == $head)] | length'
-            )"
-            if [ "$current_approvals" = "0" ]; then
-              echo "PR #$number: aggregate review is approved, but no approval targets current head $head_sha."
-              continue
-            fi
-
-            echo "PR #$number: open $age_days days with current-head approval — enabling auto-merge."
-            gh pr merge --auto --squash "$url" \
-              || echo "Could not enable auto-merge; merge requirements still block it."
-          done < <(echo "$prs" | jq -c '.[]')
