@@ -19,12 +19,19 @@ runs:
   using: composite
   steps:
     - id: setup-uv
-      uses: "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990" # v8.3.2
+      uses: "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9" # v9.0.0
       with:
         # setup-uv reads uv.toml's exact required-version.
         python-version: ${{ inputs.python-version }}
         activate-environment: true
         cache-dependency-glob: ${{ inputs.lockfile }}
+        # v9.0.0 changed this input's own default to false (the PR that
+        # bumped this pin). Without pruning, the cache directory setup-uv's
+        # own post-step tries to save isn't guaranteed to exist on disk,
+        # which fails outright rather than skipping: "Cache path ... does
+        # not exist on disk." Restores the behavior every job here already
+        # depended on.
+        prune-cache: true
 
     - name: Cache installed environment
       id: venv-cache
