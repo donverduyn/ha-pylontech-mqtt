@@ -1,10 +1,13 @@
 #!/bin/bash
 # Runs once daily against every open PR, oldest first, one PR fully handled
 # before the next is even looked at. For each non-draft PR:
-#   1. Rebase it onto the current base branch. Always -- Dependabot and
+#   1. Freshen it onto the current base branch. Always -- Dependabot and
 #      human PRs alike, including ones that can never be merged
 #      automatically -- so every branch stays as fresh as automation can
-#      make it, even a PR stuck failing on its own merits.
+#      make it, even a PR stuck failing on its own merits. Human PRs and
+#      Dependabot grouped patch/minor updates get a plain git rebase.
+#      Individual/major Dependabot updates get an "@dependabot rebase" PR
+#      comment instead of a plain git rebase -- see below.
 #   2. If (and only if) it's a Dependabot grouped patch/minor update, wait
 #      for its required checks to finish on that freshly rebased commit,
 #      then merge it for real (not gh's async --auto) if they pass.
@@ -15,6 +18,25 @@
 # racing GitHub's own async completion. Individual/major Dependabot updates
 # and every human PR only ever get rebased; this workflow never merges a
 # human PR, and never touches a human PR's own auto-merge choice.
+#
+# Why individual/major Dependabot PRs get a comment instead of a plain git
+# rebase: `gh pr update-branch --rebase` is pure git plumbing -- it patch-
+# applies the PR's existing diff onto the new base and knows nothing about
+# Dependabot. It was observed leaving PRs proposing a *lower* version than
+# what a separate, Dependabot-blind refresh (dependency-updates.yaml's
+# `make update-deps`) had already put on the base branch: the patch still
+# applied cleanly (mergeStateStatus MERGEABLE), so nothing here ever
+# flagged them, and since this workflow never merges individual/major
+# Dependabot updates, they just sat open indefinitely. Dependabot's own
+# "@dependabot rebase" comment command asks Dependabot to re-verify the
+# update against current base and, per GitHub's own troubleshooting docs,
+# close the PR itself if it's no longer needed. That is deliberately safer
+# than closing it here directly: GitHub only treats *that exact proposed
+# version* as "don't recreate" when a PR is closed, and it's Dependabot,
+# not this script, that decides the update is actually superseded --
+# covering every ecosystem (pip, docker, github-actions, including
+# SHA-pinned actions this script has no version ordering for) without
+# ecosystem-specific comparison logic here.
 set -euo pipefail
 
 : "${GH_TOKEN:?GH_TOKEN must be set}"
@@ -135,19 +157,25 @@ while read -r pr; do
       || echo "PR #$number: could not disable auto-merge; PR may have changed concurrently."
   fi
 
+  if is_dependabot "$author"; then
+    pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
+    bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
+  fi
+
+  if is_dependabot "$author" \
+    && { [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; }; then
+    echo "PR #$number: $pr_kind/$bump_kind Dependabot update — asking Dependabot to rebase (and self-close if superseded), never merged here."
+    gh pr comment "$number" --repo "$REPO" --body "@dependabot rebase" \
+      || echo "PR #$number: could not post @dependabot rebase comment; PR may have changed concurrently."
+    continue
+  fi
+
   echo "PR #$number: rebasing onto current base."
   if ! gh pr update-branch "$number" --repo "$REPO" --rebase 2>&1; then
     echo "PR #$number: rebase not applied (already current, conflicted, or not permitted)."
   fi
 
   if ! is_dependabot "$author"; then
-    continue
-  fi
-
-  pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
-  bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
-  if [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; then
-    echo "PR #$number: $pr_kind/$bump_kind Dependabot update — rebased only, never merged here."
     continue
   fi
 
