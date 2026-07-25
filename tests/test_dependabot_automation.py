@@ -58,6 +58,8 @@ case "$1 $2" in
     ;;
   "pr merge")
     ;;
+  "pr comment")
+    ;;
   "repo view")
     printenv GH_DEFAULT_BRANCH || echo "master"
     ;;
@@ -293,10 +295,15 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
 
     calls = log.read_text().splitlines()
 
-    # Every non-draft PR gets rebased, Dependabot and human alike, including
-    # ones that can never be merged automatically.
-    for number in (1, 2, 3, 4, 5):
+    # Every non-draft PR gets freshened onto current base, Dependabot and
+    # human alike, including ones that can never be merged automatically.
+    # Individual Dependabot PRs (like #2) get a plain git rebase replaced by
+    # an "@dependabot rebase" comment instead, so Dependabot itself can
+    # detect and self-close a superseded update.
+    for number in (1, 3, 4, 5):
         assert f"pr update-branch {number} --repo owner/repo --rebase" in calls
+    assert "pr update-branch 2 --repo owner/repo --rebase" not in calls
+    assert "pr comment 2 --repo owner/repo --body @dependabot rebase" in calls
 
     # The draft PR is skipped entirely.
     assert not any("update-branch 6" in call for call in calls)
