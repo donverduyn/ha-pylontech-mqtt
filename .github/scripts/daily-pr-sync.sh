@@ -82,24 +82,36 @@ required_contexts="$(gh api "repos/$REPO/branches/$default_branch/protection/req
 # Echoes exactly one of: pass | fail | timeout
 wait_for_required_checks() {
   local number="$1" sha="$2"
-  local deadline runs relevant total_required
+  local deadline runs classification
   deadline="$(( $(date +%s) + MAX_WAIT_SECONDS ))"
-  total_required="$(jq 'length' <<<"$required_contexts")"
 
-  if [ "$total_required" = "0" ]; then
+  if [ "$(jq 'length' <<<"$required_contexts")" = "0" ]; then
     echo "pass"
     return
   fi
 
   while true; do
     if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>&1)"; then
-      relevant="$(jq --argjson ctx "$required_contexts" \
-        '[.[] | select(.name as $n | $ctx | index($n) != null)]' <<<"$runs")"
+      # A required context can have more than one check-run entry for the
+      # same commit (re-runs, multiple triggering events observed on this
+      # repo's own "tests-finished" context) -- classify each required
+      # name by whether any of its runs completed successfully, not by
+      # counting total entries against the number of required names, or
+      # duplicates make this loop until timeout even once everything has
+      # actually passed.
+      classification="$(jq -n --argjson ctx "$required_contexts" --argjson runs "$runs" '
+        $ctx | map(. as $name |
+          ($runs | map(select(.name == $name))) as $matches |
+          if ($matches | any(.status == "completed" and (.conclusion == "success" or .conclusion == "neutral" or .conclusion == "skipped")))
+          then "pass"
+          elif ($matches | length) > 0 and ($matches | all(.status == "completed"))
+          then "fail"
+          else "pending"
+          end
+        )')"
 
-      if [ "$(jq 'length' <<<"$relevant")" = "$total_required" ] \
-        && jq -e 'all(.status == "completed")' >/dev/null <<<"$relevant"; then
-        if jq -e '[.[] | select(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")] | length > 0' \
-          >/dev/null <<<"$relevant"; then
+      if ! jq -e 'any(. == "pending")' >/dev/null <<<"$classification"; then
+        if jq -e 'any(. == "fail")' >/dev/null <<<"$classification"; then
           echo "fail"
         else
           echo "pass"
