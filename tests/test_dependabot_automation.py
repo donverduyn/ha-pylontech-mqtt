@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 PR_KIND = ROOT / ".github" / "scripts" / "dependabot-pr-kind.sh"
+SUPERSESSION_CHECK = ROOT / ".github" / "scripts" / "dependabot-supersession-check.sh"
 DAILY_SYNC = ROOT / ".github" / "scripts" / "daily-pr-sync.sh"
 AUTO_MERGE_WORKFLOW = ROOT / ".github" / "workflows" / "dependabot-auto-merge.yaml"
 
@@ -58,7 +59,11 @@ case "$1 $2" in
     ;;
   "pr merge")
     ;;
-  "pr comment")
+  "pr close")
+    ;;
+  "pr diff")
+    files_var="GH_CHANGED_FILES_$3"
+    printenv "$files_var" || printf ''
     ;;
   "repo view")
     printenv GH_DEFAULT_BRANCH || echo "master"
@@ -137,6 +142,162 @@ def test_dependabot_pr_kind_fails_closed_for_single_or_unknown_bodies(
     )
 
     assert result.stdout == "single\n"
+
+
+def _run_supersession_check(
+    title: str, body: str, changed_files: list[str], cwd: Path
+) -> str:
+    result = subprocess.run(
+        [SUPERSESSION_CHECK, title, body],
+        input="\n".join(changed_files),
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def test_supersession_check_detects_a_pip_pr_already_superseded_on_master(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements_dev.lock.txt").write_text(
+        "homeassistant==2026.7.2\nrequests==2.34.2\n"
+    )
+
+    result = _run_supersession_check(
+        "chore(deps-dev): bump requests from 2.32.5 to 2.33.0",
+        "Bumps requests from 2.32.5 to 2.33.0.",
+        ["requirements_dev.lock.txt"],
+        tmp_path,
+    )
+
+    assert result == "superseded"
+
+
+def test_supersession_check_treats_a_pip_pr_still_ahead_of_master_as_current(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements_dev.lock.txt").write_text("requests==2.34.2\n")
+
+    result = _run_supersession_check(
+        "chore(deps-dev): bump requests from 2.32.5 to 2.35.0",
+        "Bumps requests from 2.32.5 to 2.35.0.",
+        ["requirements_dev.lock.txt"],
+        tmp_path,
+    )
+
+    assert result == "current"
+
+
+def test_supersession_check_detects_a_docker_pr_already_superseded_on_master(
+    tmp_path: Path,
+) -> None:
+    docker_dir = tmp_path / "docker"
+    docker_dir.mkdir()
+    (docker_dir / "Dockerfile").write_text("FROM python:3.14.6-slim\n")
+
+    result = _run_supersession_check(
+        "chore(deps): bump python from 3.13.14-slim to 3.14.6-slim"
+        " in /docker in the docker group across 1 directory",
+        "Bumps the docker group with 1 update in the /docker directory: python.",
+        ["docker/Dockerfile"],
+        tmp_path,
+    )
+
+    assert result == "superseded"
+
+
+def test_supersession_check_detects_a_github_action_pr_already_superseded(
+    tmp_path: Path,
+) -> None:
+    workflows_dir = tmp_path / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "tests.yaml").write_text(
+        '- uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" # v4.3.1\n'
+    )
+
+    result = _run_supersession_check(
+        "chore(deps): bump actions/checkout from 4.0.0 to 4.3.1",
+        "Bumps actions/checkout from 4.0.0 to 4.3.1.",
+        [".github/workflows/tests.yaml"],
+        tmp_path,
+    )
+
+    assert result == "superseded"
+
+
+def test_supersession_check_is_unknown_for_a_sha_only_action_with_no_tagged_release(
+    tmp_path: Path,
+) -> None:
+    # home-assistant/actions/hassfest has no tagged releases -- Dependabot's
+    # own body is SHA-to-SHA with no version anywhere, so there's no basis
+    # to ever call this superseded. Must stay "unknown", never "current"
+    # (which would misleadingly imply we checked and it's still needed).
+    workflows_dir = tmp_path / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "tests.yaml").write_text(
+        '- uses: "home-assistant/actions/hassfest'
+        '@e3fb68ebda13d88a0d695082f471ba2c83d025fb"\n'
+    )
+
+    result = _run_supersession_check(
+        "chore(deps): bump home-assistant/actions/hassfest from"
+        " f4ca6f671bd429efb108c0f2fa0ae8af0215986c"
+        " to e3fb68ebda13d88a0d695082f471ba2c83d025fb",
+        "Bumps [home-assistant/actions/hassfest](x) from"
+        " f4ca6f671bd429efb108c0f2fa0ae8af0215986c"
+        " to e3fb68ebda13d88a0d695082f471ba2c83d025fb.",
+        [".github/workflows/tests.yaml"],
+        tmp_path,
+    )
+
+    assert result == "unknown"
+
+
+def test_supersession_check_is_unknown_when_the_package_is_not_found_in_any_file(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements_dev.lock.txt").write_text("homeassistant==2026.7.2\n")
+
+    result = _run_supersession_check(
+        "chore(deps): bump nonexistent-pkg from 1.0.0 to 2.0.0",
+        "Bumps nonexistent-pkg from 1.0.0 to 2.0.0.",
+        ["requirements_dev.lock.txt"],
+        tmp_path,
+    )
+
+    assert result == "unknown"
+
+
+def test_supersession_check_requires_every_pair_in_a_group_to_be_superseded(
+    tmp_path: Path,
+) -> None:
+    workflows_dir = tmp_path / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "tests.yaml").write_text(
+        '- uses: "github/codeql-action/init'
+        '@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81" # v4.37.3\n'
+        '- uses: "github/codeql-action/analyze'
+        '@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81" # v4.37.3\n'
+    )
+    body = (
+        "Bumps the github-actions group with 2 updates.\n\n"
+        "Updates `github/codeql-action/init` from 4.37.1 to 4.37.3\n"
+        "Updates `github/codeql-action/analyze` from 4.37.1 to 5.0.0\n"
+    )
+
+    result = _run_supersession_check(
+        "chore(deps): bump the github-actions group across 1 directory with 2 updates",
+        body,
+        [".github/workflows/tests.yaml"],
+        tmp_path,
+    )
+
+    # codeql-action/analyze proposes 5.0.0, which master's 4.37.3 hasn't
+    # reached -- the group as a whole is not superseded even though one of
+    # its two members already is.
+    assert result == "current"
 
 
 def test_auto_merge_workflow_is_daily_schedule_only_and_runs_the_sync_script() -> None:
@@ -295,15 +456,15 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
 
     calls = log.read_text().splitlines()
 
-    # Every non-draft PR gets freshened onto current base, Dependabot and
-    # human alike, including ones that can never be merged automatically.
-    # Individual Dependabot PRs (like #2) get a plain git rebase replaced by
-    # an "@dependabot rebase" comment instead, so Dependabot itself can
-    # detect and self-close a superseded update.
-    for number in (1, 3, 4, 5):
+    # Every non-draft PR gets rebased, Dependabot and human alike, including
+    # ones that can never be merged automatically. #2 (individual, not
+    # superseded here since no changed-files fixture was given) is checked
+    # for supersession but left alone -- see the dedicated supersession
+    # tests below for the close-when-superseded path.
+    for number in (1, 2, 3, 4, 5):
         assert f"pr update-branch {number} --repo owner/repo --rebase" in calls
-    assert "pr update-branch 2 --repo owner/repo --rebase" not in calls
-    assert "pr comment 2 --repo owner/repo --body @dependabot rebase" in calls
+    assert "pr diff 2 --repo owner/repo --name-only" in calls
+    assert not any(call.startswith("pr close 2 ") for call in calls)
 
     # The draft PR is skipped entirely.
     assert not any("update-branch 6" in call for call in calls)
@@ -325,6 +486,47 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     # gets merged by this workflow.
     assert "pr merge 5 --repo owner/repo --disable-auto" not in calls
     assert not any("pr/5 --repo owner/repo --squash" in call for call in calls)
+
+
+def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+
+    # requirements_dev.lock.txt already pins requests past what PR #1
+    # proposes -- dependabot-supersession-check.sh reads it straight from
+    # the working tree daily-pr-sync.sh runs in, exactly as it would from
+    # a real checkout.
+    (tmp_path / "requirements_dev.lock.txt").write_text("requests==2.34.2\n")
+
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps-dev): bump requests from 2.32.5 to 2.33.0",
+                    "body": "Bumps requests from 2.32.5 to 2.33.0.",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setenv("GH_CHANGED_FILES_1", "requirements_dev.lock.txt")
+
+    subprocess.run([DAILY_SYNC], check=True, cwd=tmp_path)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert "pr diff 1 --repo owner/repo --name-only" in calls
+    assert any(call.startswith("pr close 1 ") for call in calls)
+    assert not any(call.endswith("--squash") for call in calls)
 
 
 def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
