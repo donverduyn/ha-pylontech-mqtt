@@ -3,8 +3,17 @@ name: Review Stale Automation PRs
 # Dependabot PRs are never closed here. GitHub treats a manual close as an
 # instruction not to recreate that update, which can silently suppress a
 # dependency or security fix. Stale Dependabot PRs are labelled for maintainer
-# attention instead. Only this repository's disposable aggregation branches
-# are recycled; their scheduled producer can safely open a fresh PR.
+# attention instead.
+#
+# Of this repository's own automation branches, only automation/dependency-updates
+# is recycled by closing it: it auto-merges on its own once CI passes, so a
+# stale instance almost always means CI is blocked, not that a decision is
+# pending — the next scheduled producer run safely opens a fresh PR from
+# current dependency state. automation/min-ha-version-update is the opposite:
+# it never auto-merges by design (dropping HA version support is a maintainer
+# decision, not a mechanical bump), so it gets the same labelled-and-left-open
+# treatment as Dependabot instead of being closed — closing it here would
+# silently recycle the PR every week without that decision ever surfacing.
 #
 # Correctness does not depend on the relative start time of any other cron:
 # scheduled workflows can be delayed or dropped by GitHub.
@@ -64,13 +73,18 @@ jobs:
               is_dependabot=true
             fi
 
-            is_ours=false
-            if [ "$head_ref" = "automation/dependency-updates" ] \
+            needs_attention=false
+            if [ "$is_dependabot" = "true" ] \
               || [ "$head_ref" = "automation/min-ha-version-update" ]; then
-              is_ours=true
+              needs_attention=true
             fi
 
-            if [ "$is_dependabot" != "true" ] && [ "$is_ours" != "true" ]; then
+            is_recyclable=false
+            if [ "$head_ref" = "automation/dependency-updates" ]; then
+              is_recyclable=true
+            fi
+
+            if [ "$needs_attention" != "true" ] && [ "$is_recyclable" != "true" ]; then
               continue
             fi
 
@@ -81,13 +95,17 @@ jobs:
               continue
             fi
 
-            if [ "$is_dependabot" = "true" ]; then
+            if [ "$needs_attention" = "true" ]; then
               if ! echo "$pr" | jq -e \
                 '.labels[]?.name == "automation-needs-attention"' >/dev/null; then
                 gh pr edit "$number" --repo "$REPO" \
                   --add-label automation-needs-attention
-                gh pr comment "$number" --repo "$REPO" --body \
-                  "This Dependabot PR has been open for at least seven days and needs maintainer attention. It is deliberately left open: closing a Dependabot PR prevents Dependabot from recreating that update. Resolve, supersede, or explicitly ignore the update rather than using stale cleanup."
+                if [ "$is_dependabot" = "true" ]; then
+                  comment="This Dependabot PR has been open for at least seven days and needs maintainer attention. It is deliberately left open: closing a Dependabot PR prevents Dependabot from recreating that update. Resolve, supersede, or explicitly ignore the update rather than using stale cleanup."
+                else
+                  comment="This minimum-HA-version bump has been open for at least seven days and needs a maintainer decision. It is deliberately never auto-merged, and deliberately left open here too rather than closed: dropping support for an older Home Assistant version is a policy call, not a mechanical bump, and closing it would silently recycle this PR every week without anyone actually deciding."
+                fi
+                gh pr comment "$number" --repo "$REPO" --body "$comment"
               fi
               echo "Labelled for attention and left open."
               echo "::endgroup::"

@@ -17,10 +17,31 @@ Create these Actions environments:
 
 ## Default-branch ruleset
 
-Require the fixed `Tests`, `HACS`, and `Hassfest` status contexts, at
-least one non-author approval, dismissal of stale approvals, and Code Owner
-review for owned paths. `.github/CODEOWNERS` assigns workflow and dependency
-automation changes to the maintainer.
+Required status checks are configured by exact job name, not workflow name —
+GitHub matches on the job's displayed check-run name, which is the job `id`
+unless overridden by a `name:` key. As of 2026-07-25 the three required
+contexts are:
+
+- `tests-finished` — the summary job in `tests.yaml`; deliberately the only
+  context from that workflow (see its own comment for why: matrixed jobs
+  like `pytest (current)` never post a stable name a skip-ci PR could
+  satisfy).
+- `HACS Action` — `hacs.yaml`'s `validate` job, named via `name: "HACS
+  Action"`.
+- `validate` — `hassfest.yaml`'s job, no `name:` override.
+
+This list lives only in GitHub's branch protection UI, not in any workflow
+file — nothing in CI verifies it stays in sync. If any of these three jobs
+is ever renamed (its `name:` key, or its job `id` for the two without one),
+update branch protection's required-checks list in the same PR, or that
+check silently stops being enforced (GitHub does not block a PR on a
+required-context string that no run ever posts under — see
+[status checks docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets-and-branch-protection-rules/about-protected-branches)).
+
+Also require dismissal of stale approvals, at least one non-author approval
+if that gate is enabled, and Code Owner review for owned paths.
+`.github/CODEOWNERS` assigns workflow and dependency automation changes to
+the maintainer.
 
 Where repository workflow-execution protections are available, restrict
 `workflow_dispatch` execution to maintainers.
