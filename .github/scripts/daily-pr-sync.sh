@@ -44,23 +44,40 @@ is_dependabot() {
   [ "$1" = "dependabot[bot]" ] || [ "$1" = "app/dependabot" ]
 }
 
+# `gh pr checks` reports a PR-level rollup that can lag behind a rebase: it
+# was observed reporting a fresh rebase's required checks as already
+# "pass" within ~1.5s of the push -- almost certainly still the previous
+# commit's already-resolved state, not the new commit's -- and the
+# resulting merge attempt was then rejected by branch protection because
+# the real, current-commit check state hadn't reached "pass" yet. Querying
+# check-runs scoped to the exact head SHA instead removes that ambiguity
+# by construction: results can never belong to any commit but this one.
+# Required context names are read once from branch protection itself
+# rather than hardcoded, so this keeps working if they ever change.
+default_branch="$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name)"
+required_contexts="$(gh api "repos/$REPO/branches/$default_branch/protection/required_status_checks/contexts" 2>/dev/null || echo '[]')"
+
 # Echoes exactly one of: pass | fail | timeout
 wait_for_required_checks() {
-  local number="$1"
-  local deadline checks
+  local number="$1" sha="$2"
+  local deadline runs relevant total_required
   deadline="$(( $(date +%s) + MAX_WAIT_SECONDS ))"
+  total_required="$(jq 'length' <<<"$required_contexts")"
+
+  if [ "$total_required" = "0" ]; then
+    echo "pass"
+    return
+  fi
 
   while true; do
-    if checks="$(gh pr checks "$number" --repo "$REPO" --required --json bucket 2>&1)"; then
-      # An empty result means GitHub hasn't registered check runs for the
-      # freshly rebased commit yet -- treat that the same as "still
-      # pending", never as "nothing required, so pass": the same emptiness
-      # can appear for a split second right after a rebase, and misreading
-      # it as pass would merge an untested commit.
-      if [ "$(jq 'length' <<<"$checks")" != "0" ] \
-        && jq -e '[.[] | select(.bucket == "pending")] | length == 0' >/dev/null <<<"$checks"; then
-        if jq -e '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length > 0' \
-          >/dev/null <<<"$checks"; then
+    if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>&1)"; then
+      relevant="$(jq --argjson ctx "$required_contexts" \
+        '[.[] | select(.name as $n | $ctx | index($n) != null)]' <<<"$runs")"
+
+      if [ "$(jq 'length' <<<"$relevant")" = "$total_required" ] \
+        && jq -e 'all(.status == "completed")' >/dev/null <<<"$relevant"; then
+        if jq -e '[.[] | select(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")] | length > 0' \
+          >/dev/null <<<"$relevant"; then
           echo "fail"
         else
           echo "pass"
@@ -69,10 +86,10 @@ wait_for_required_checks() {
       fi
     else
       # A real failure (rate limit, transient API error, an expiring token)
-      # looks identical to "nothing registered yet" unless logged
-      # separately -- surfaced on stderr so it doesn't corrupt this
-      # function's pass/fail/timeout return value on stdout.
-      echo "PR #$number: gh pr checks failed (${checks}) -- treating as not yet registered." >&2
+      # looks identical to "still running" unless logged separately --
+      # surfaced on stderr so it doesn't corrupt this function's
+      # pass/fail/timeout return value on stdout.
+      echo "PR #$number: gh api check-runs failed (${runs}) -- treating as not yet complete." >&2
     fi
 
     if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -148,8 +165,13 @@ while read -r pr; do
     continue
   fi
 
-  echo "PR #$number: waiting for required checks on the rebased commit."
-  case "$(wait_for_required_checks "$number")" in
+  if ! head_sha="$(gh pr view "$number" --repo "$REPO" --json headRefOid --jq .headRefOid 2>&1)"; then
+    echo "PR #$number: could not read head commit (${head_sha}) — leaving for the next run."
+    continue
+  fi
+
+  echo "PR #$number: waiting for required checks on commit $head_sha."
+  case "$(wait_for_required_checks "$number" "$head_sha")" in
     pass)
       echo "PR #$number: required checks passed — merging now."
       gh pr merge "$url" --repo "$REPO" --squash \
