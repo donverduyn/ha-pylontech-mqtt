@@ -25,6 +25,13 @@ runs:
         python-version: ${{ inputs.python-version }}
         activate-environment: true
         cache-dependency-glob: ${{ inputs.lockfile }}
+        # v9.0.0 changed this input's own default to false (the PR that
+        # bumped this pin). Without pruning, the cache directory setup-uv's
+        # own post-step tries to save isn't guaranteed to exist on disk,
+        # which fails outright rather than skipping: "Cache path ... does
+        # not exist on disk." Restores the behavior every job here already
+        # depended on.
+        prune-cache: true
 
     - name: Cache installed environment
       id: venv-cache
