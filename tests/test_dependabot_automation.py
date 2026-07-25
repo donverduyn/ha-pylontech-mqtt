@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 PR_KIND = ROOT / ".github" / "scripts" / "dependabot-pr-kind.sh"
-QUEUE_GROUP = ROOT / ".github" / "scripts" / "queue-dependabot-group.sh"
+DAILY_SYNC = ROOT / ".github" / "scripts" / "daily-pr-sync.sh"
 AUTO_MERGE_WORKFLOW = ROOT / ".github" / "workflows" / "dependabot-auto-merge.yaml"
 
 STALE_WORKFLOW = ROOT / ".github" / "workflows" / "close-stale-automation-prs.yaml"
@@ -30,7 +30,8 @@ case "$1 $2" in
     echo "updated"
     ;;
   "pr view")
-    echo "CLEAN"
+    state_var="GH_MERGE_STATE_$3"
+    printenv "$state_var" || echo "CLEAN"
     ;;
   "pr merge")
     ;;
@@ -101,16 +102,16 @@ def test_dependabot_pr_kind_fails_closed_for_single_or_unknown_bodies(
     assert result.stdout == "single\n"
 
 
-def test_auto_merge_workflow_is_schedule_only_and_runs_the_group_queue() -> None:
+def test_auto_merge_workflow_is_daily_schedule_only_and_runs_the_sync_script() -> None:
     text = AUTO_MERGE_WORKFLOW.read_text()
 
     assert "push:" not in text
     assert "workflow_run:" not in text
     assert "pull_request" not in text
-    assert "schedule:" in text
+    assert 'cron: "22 8 * * *"' in text
     assert "cancel-in-progress: false" in text
-    assert "queue-dependabot-group:" in text
-    assert "run: .github/scripts/queue-dependabot-group.sh" in text
+    assert "sync-open-prs:" in text
+    assert "run: .github/scripts/daily-pr-sync.sh" in text
 
 
 def test_stale_cleanup_labels_but_never_closes_dependabot() -> None:
@@ -152,10 +153,15 @@ def test_stale_cleanup_leaves_min_ha_version_open_but_recycles_dependency_update
     assert "automation/min-ha-version-update" not in recyclable_block
 
 
-def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(
+def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log = _install_fake_gh(tmp_path, monkeypatch)
+    # No real waiting in tests: any check state that isn't immediately
+    # terminal (pass/fail) should resolve to "timeout" on the first poll.
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+
     group_body = (
         "Bumps the docker group with 1 update: python.\n\n"
         "Updates `python` from 3.13 to 3.14\n"
@@ -172,6 +178,7 @@ def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(
                     "body": group_body,
                     "createdAt": "2026-01-01T00:00:00Z",
                     "autoMergeRequest": None,
+                    "isDraft": False,
                 },
                 {
                     "number": 2,
@@ -181,6 +188,7 @@ def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(
                     "body": "Bumps urllib3 from 2.0.0 to 2.0.1.",
                     "createdAt": "2026-01-02T00:00:00Z",
                     "autoMergeRequest": None,
+                    "isDraft": False,
                 },
                 {
                     "number": 3,
@@ -190,6 +198,7 @@ def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(
                     "body": group_body,
                     "createdAt": "2026-01-03T00:00:00Z",
                     "autoMergeRequest": {"enabledAt": "2026-01-03T00:05:00Z"},
+                    "isDraft": False,
                 },
                 {
                     "number": 4,
@@ -199,22 +208,145 @@ def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(
                     "body": group_body,
                     "createdAt": "2026-01-04T00:00:00Z",
                     "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+                {
+                    "number": 5,
+                    "author": {"login": "octocat"},
+                    "url": "https://example.test/pr/5",
+                    "title": "Add a new sensor",
+                    "body": "A human-authored feature PR.",
+                    "createdAt": "2026-01-05T00:00:00Z",
+                    "autoMergeRequest": {"enabledAt": "2026-01-05T00:05:00Z"},
+                    "isDraft": False,
+                },
+                {
+                    "number": 6,
+                    "author": {"login": "octocat"},
+                    "url": "https://example.test/pr/6",
+                    "title": "WIP: draft feature",
+                    "body": "Not ready yet.",
+                    "createdAt": "2026-01-06T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": True,
                 },
             ]
         ),
     )
+    # PR #1: required checks already failed -- rebase only.
     monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"fail"}]')
+    # PR #3 and #4 both pass -- both should merge, in order, in this one run.
     monkeypatch.setenv("GH_CHECKS_3", '[{"bucket":"pass"}]')
+    monkeypatch.setenv("GH_CHECKS_4", '[{"bucket":"pass"}]')
+    # PR #2 is a single-dependency update and is never checked at all.
 
-    subprocess.run([QUEUE_GROUP], check=True)
+    subprocess.run([DAILY_SYNC], check=True)
 
     calls = log.read_text().splitlines()
+
+    # Every non-draft PR gets rebased, Dependabot and human alike, including
+    # ones that can never be merged automatically.
+    for number in (1, 2, 3, 4, 5):
+        assert f"pr update-branch {number} --repo owner/repo --rebase" in calls
+
+    # The draft PR is skipped entirely.
+    assert not any("update-branch 6" in call for call in calls)
+    assert not any("/pr/6" in call for call in calls)
+
+    # #3's own (Dependabot-set) auto-merge is reset before re-evaluation.
     assert "pr merge 3 --repo owner/repo --disable-auto" in calls
-    assert "pr update-branch 3 --repo owner/repo --rebase" in calls
-    auto_calls = [call for call in calls if " --auto " in call]
-    assert auto_calls == [
-        "pr merge https://example.test/pr/3 --repo owner/repo --auto --squash"
+
+    # Both eligible, passing grouped PRs are merged for real (not gh's async
+    # --auto) -- #3 before #4, matching processing order -- while the
+    # failing (#1), individual (#2), and human (#5) PRs are never merged.
+    squash_calls = [call for call in calls if call.endswith("--squash")]
+    assert squash_calls == [
+        "pr merge https://example.test/pr/3 --repo owner/repo --squash",
+        "pr merge https://example.test/pr/4 --repo owner/repo --squash",
     ]
-    assert not any("update-branch 1" in call for call in calls)
-    assert not any("update-branch 2" in call for call in calls)
-    assert not any("update-branch 4" in call for call in calls)
+
+    # A human PR's own auto-merge choice is never touched, and it never
+    # gets merged by this workflow.
+    assert "pr merge 5 --repo owner/repo --disable-auto" not in calls
+    assert not any("pr/5 --repo owner/repo --squash" in call for call in calls)
+
+
+def test_daily_sync_skips_merge_when_branch_is_dirty_or_behind_after_rebase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+
+    group_body = (
+        "Bumps the docker group with 1 update: python.\n\n"
+        "Updates `python` from 3.13 to 3.14\n"
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": group_body,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    # Even though required checks would pass, a post-rebase merge state of
+    # DIRTY must still block the merge -- the check-wait step never even
+    # gets to look at GH_CHECKS_1 in that case.
+    monkeypatch.setenv("GH_MERGE_STATE_1", "DIRTY")
+    monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"pass"}]')
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert not any(call.endswith("--squash") for call in calls)
+
+
+def test_daily_sync_stops_merging_once_the_run_budget_is_spent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    # An already-exhausted run budget must stop new merges even for a PR
+    # that would otherwise pass every other check.
+    monkeypatch.setenv("RUN_BUDGET_SECONDS", "0")
+
+    group_body = (
+        "Bumps the docker group with 1 update: python.\n\n"
+        "Updates `python` from 3.13 to 3.14\n"
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": group_body,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"pass"}]')
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert not any(call.endswith("--squash") for call in calls)

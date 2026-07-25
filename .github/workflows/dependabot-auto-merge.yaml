@@ -1,15 +1,20 @@
 name: PR Auto-merge
 
-# Runs only on the weekly cron (plus manual dispatch) — deliberately never on
-# push or PR-activity events. Auto-merge must not react to PR activity; see
-# the schedule-only project memory for why. Each weekly pass activates one
-# eligible grouped patch/minor Dependabot update in a single-flight queue;
-# individual and major updates stay manual. Human PRs are always merged by
-# a maintainer — this workflow never touches them.
+# Runs daily (plus manual dispatch) — deliberately never on push or
+# PR-activity events. Auto-merge must not react to PR activity; see the
+# schedule-only project memory for why. Every daily pass walks every open
+# PR oldest-first, one fully handled before the next is even looked at:
+# rebase it onto the current base branch (Dependabot and human alike,
+# drafts excluded), and if it's a Dependabot grouped patch/minor update,
+# wait for its required checks and merge it for real before moving on --
+# so a later PR's rebase in the same run picks up an earlier one's merge.
+# Individual/major Dependabot updates and every human PR only ever get
+# rebased here -- this workflow never merges a human PR, and never touches
+# a human PR's own auto-merge choice; that stays a maintainer call.
 on:
   workflow_dispatch:
   schedule:
-    - cron: "22 8 * * 1"
+    - cron: "22 8 * * *"
 
 permissions: {}
 
@@ -18,9 +23,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  queue-dependabot-group:
+  sync-open-prs:
     runs-on: "ubuntu-latest"
-    timeout-minutes: 10
+    # Bounded well under the App installation token's ~1-hour lifetime.
+    # daily-pr-sync.sh caps its own total check-waiting at RUN_BUDGET_SECONDS
+    # (well under this), so it stops merging and leaves the rest rebased
+    # for tomorrow before this ceiling is ever hit -- this timeout is a
+    # backstop, not the thing normally doing the cutting off.
+    timeout-minutes: 55
     environment: automation
     permissions:
       contents: read
@@ -36,8 +46,8 @@ jobs:
           client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
 
-      - name: Activate one eligible Dependabot group PR
+      - name: Rebase every open PR; merge eligible Dependabot groups in order
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-        run: .github/scripts/queue-dependabot-group.sh
+        run: .github/scripts/daily-pr-sync.sh
