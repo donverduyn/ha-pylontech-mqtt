@@ -18,22 +18,48 @@ FAKE_GH = r"""#!/bin/bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_LOG"
 
+if [ "$1" = "api" ]; then
+  case "$2" in
+    */protection/required_status_checks/contexts)
+      printenv GH_REQUIRED_CONTEXTS || printf '[]\n'
+      ;;
+    */commits/*/check-runs)
+      sha="${2##*/commits/}"
+      sha="${sha%/check-runs}"
+      checkruns_var="GH_CHECKRUNS_$sha"
+      printenv "$checkruns_var" || printf '[]\n'
+      ;;
+    *)
+      echo "unexpected gh api path: $2" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
 case "$1 $2" in
   "pr list")
     printf '%s\n' "$GH_PRS"
-    ;;
-  "pr checks")
-    checks_var="GH_CHECKS_$3"
-    printenv "$checks_var" || printf '[]\n'
     ;;
   "pr update-branch")
     echo "updated"
     ;;
   "pr view")
-    state_var="GH_MERGE_STATE_$3"
-    printenv "$state_var" || echo "CLEAN"
+    case "$*" in
+      *headRefOid*)
+        sha_var="GH_HEAD_SHA_$3"
+        printenv "$sha_var" || echo "sha$3"
+        ;;
+      *)
+        state_var="GH_MERGE_STATE_$3"
+        printenv "$state_var" || echo "CLEAN"
+        ;;
+    esac
     ;;
   "pr merge")
+    ;;
+  "repo view")
+    printenv GH_DEFAULT_BRANCH || echo "master"
     ;;
   *)
     echo "unexpected gh command: $*" >&2
@@ -242,11 +268,25 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
             ]
         ),
     )
-    # PR #1: required checks already failed -- rebase only.
-    monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"fail"}]')
-    # PR #3 and #4 both pass -- both should merge, in order, in this one run.
-    monkeypatch.setenv("GH_CHECKS_3", '[{"bucket":"pass"}]')
-    monkeypatch.setenv("GH_CHECKS_4", '[{"bucket":"pass"}]')
+    # Branch protection requires one context, "ci" -- fetched dynamically by
+    # the script, not hardcoded, so tests exercise that same lookup.
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    # PR #1: required check already failed on its (default "sha1") head
+    # commit -- rebase only.
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"failure"}]',
+    )
+    # PR #3 and #4 both pass on their own head commits -- both should merge,
+    # in order, in this one run.
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha3",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha4",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
     # PR #2 is a single-dependency update and is never checked at all.
 
     subprocess.run([DAILY_SYNC], check=True)
@@ -310,9 +350,13 @@ def test_daily_sync_skips_merge_when_branch_is_dirty_or_behind_after_rebase(
     )
     # Even though required checks would pass, a post-rebase merge state of
     # DIRTY must still block the merge -- the check-wait step never even
-    # gets to look at GH_CHECKS_1 in that case.
+    # gets to look at GH_CHECKRUNS_sha1 in that case.
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
     monkeypatch.setenv("GH_MERGE_STATE_1", "DIRTY")
-    monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"pass"}]')
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
 
     subprocess.run([DAILY_SYNC], check=True)
 
@@ -352,7 +396,11 @@ def test_daily_sync_stops_merging_once_the_run_budget_is_spent(
             ]
         ),
     )
-    monkeypatch.setenv("GH_CHECKS_1", '[{"bucket":"pass"}]')
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
 
     subprocess.run([DAILY_SYNC], check=True)
 
