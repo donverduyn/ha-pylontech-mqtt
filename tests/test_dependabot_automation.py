@@ -67,6 +67,15 @@ def _install_fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "Updates `actions/checkout` from 4.0.0 to 4.1.0\n"
         ),
         "Bumps the security-updates group with 1 update: urllib3.\n",
+        # The "in <directory>" clause can land after "with N updates"
+        # instead of before it -- seen on a real github-actions group PR.
+        (
+            "Bumps the github-actions group with 2 updates in the / "
+            "directory: [github/codeql-action/init]"
+            "(https://github.com/github/codeql-action) and "
+            "[github/codeql-action/analyze]"
+            "(https://github.com/github/codeql-action).\n"
+        ),
     ],
 )
 def test_dependabot_pr_kind_detects_generated_group_bodies(body: str) -> None:

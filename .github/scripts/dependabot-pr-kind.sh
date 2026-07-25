@@ -12,9 +12,12 @@ body="$1"
 # Dependabot starts group PR bodies with, for example:
 #   Bumps the docker group in /docker with 1 update: python.
 #   Bumps the github-actions group with 2 updates:
-# If Dependabot changes that generated format, fail closed as a single PR so
-# an unknown PR can never enter the automatic merge queue accidentally.
-if grep -qE '^Bumps the .+ group( in .+)? with [0-9]+ updates?:' <<<"$body"; then
+#   Bumps the github-actions group with 2 updates in the / directory: ...
+# The "in <directory>" clause can land either before or after "with N
+# updates" depending on Dependabot's own formatting for that PR. If
+# Dependabot changes the generated format further, fail closed as a single
+# PR so an unknown PR can never enter the automatic merge queue accidentally.
+if grep -qE '^Bumps the .+ group( in .+)? with [0-9]+ updates?( in .+)?:' <<<"$body"; then
   echo "group"
 else
   echo "single"
