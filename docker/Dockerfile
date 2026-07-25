@@ -10,7 +10,7 @@
 # pyright's parse target, moved to 3.14 in lockstep with the "current" HA
 # pin needing it — see requirements_dev.lock.txt/pyproject.toml — but that
 # doesn't change what this always-3.13-tested production runtime needs.)
-FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280
+FROM python:3.14.6-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
 
 # Set by the release workflow (.github/workflows/release.yaml) from the tag
 # and commit being built; left as placeholders for a manual `docker build`
