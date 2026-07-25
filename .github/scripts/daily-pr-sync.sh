@@ -5,11 +5,16 @@
 #      human PRs alike, including ones that can never be merged
 #      automatically -- so every branch stays as fresh as automation can
 #      make it, even a PR stuck failing on its own merits.
-#   2. If (and only if) it's a Dependabot grouped patch/minor update, wait
-#      for its required checks to finish on that freshly rebased commit,
-#      then merge it for real (not gh's async --auto) if they pass.
-#      Individual/major Dependabot updates instead get checked for
-#      supersession -- see below -- and closed if superseded.
+#   2. Any Dependabot update Dependabot didn't group as a minor/patch
+#      update -- an individual PR, or a major-version bump either way --
+#      gets checked for supersession first (see below) and closed if
+#      already met on the base branch. If it's not superseded and not a
+#      major bump, it's treated the same as a grouped minor/patch update
+#      from here: wait for its required checks on the freshly rebased
+#      commit, then merge it for real (not gh's async --auto) if they
+#      pass. Grouping is Dependabot's own ecosystem-level packaging
+#      choice, not a safety signal -- only a real major-version bump
+#      still gets left for a human to decide on.
 #
 # Merging for real before moving to the next PR -- rather than enabling
 # --auto and moving on -- is deliberate: it's what lets the next PR's
@@ -189,21 +194,33 @@ while read -r pr; do
   pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
   bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
 
+  # Grouping is Dependabot's own ecosystem-level packaging choice, not a
+  # safety signal -- a security update for an excluded package (single,
+  # minor-or-patch) or an action with no tagged releases to compare
+  # against (single, unknown, e.g. home-assistant/actions/hassfest) is no
+  # riskier than a grouped one, so it isn't skipped below. But anything
+  # not already going through the grouped-and-merged path still needs a
+  # supersession check first: an individual PR stuck failing for real
+  # (e.g. blocked by an older lockfile's exact transitive pin) would
+  # otherwise retry and fail forever instead of ever being recognized as
+  # already-satisfied and closed.
   if [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; then
     changed_files="$(gh pr diff "$number" --repo "$REPO" --name-only 2>/dev/null || true)"
     supersession="$("$script_dir"/dependabot-supersession-check.sh "$title" "$body" <<<"$changed_files")"
-    case "$supersession" in
-      superseded)
-        echo "PR #$number: $pr_kind/$bump_kind Dependabot update — proposed version is already superseded on $default_branch, closing."
-        gh pr close "$number" --repo "$REPO" --comment \
-          "Closing: the version this PR proposes is already met or exceeded on \`$default_branch\`. Dependabot will open a fresh PR if a newer update is still needed." \
-          || echo "PR #$number: could not close; PR may have changed concurrently."
-        ;;
-      *)
-        echo "PR #$number: $pr_kind/$bump_kind Dependabot update — rebased only, never merged here."
-        ;;
-    esac
-    continue
+    if [ "$supersession" = "superseded" ]; then
+      echo "PR #$number: $pr_kind/$bump_kind Dependabot update — proposed version is already superseded on $default_branch, closing."
+      gh pr close "$number" --repo "$REPO" --comment \
+        "Closing: the version this PR proposes is already met or exceeded on \`$default_branch\`. Dependabot will open a fresh PR if a newer update is still needed." \
+        || echo "PR #$number: could not close; PR may have changed concurrently."
+      continue
+    fi
+
+    # A real major-version bump is the one case that still warrants a
+    # human looking at it first, even once it's confirmed not superseded.
+    if [ "$bump_kind" = "major" ]; then
+      echo "PR #$number: $pr_kind/$bump_kind Dependabot update — rebased only, never merged here."
+      continue
+    fi
   fi
 
   if ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then

@@ -382,8 +382,8 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
                     "number": 2,
                     "author": {"login": "app/dependabot"},
                     "url": "https://example.test/pr/2",
-                    "title": "chore(deps): bump urllib3 from 2.0.0 to 2.0.1",
-                    "body": "Bumps urllib3 from 2.0.0 to 2.0.1.",
+                    "title": "chore(deps): bump urllib3 from 1.0.0 to 2.0.0",
+                    "body": "Bumps urllib3 from 1.0.0 to 2.0.0.",
                     "createdAt": "2026-01-02T00:00:00Z",
                     "autoMergeRequest": None,
                     "isDraft": False,
@@ -457,10 +457,12 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     calls = log.read_text().splitlines()
 
     # Every non-draft PR gets rebased, Dependabot and human alike, including
-    # ones that can never be merged automatically. #2 (individual, not
-    # superseded here since no changed-files fixture was given) is checked
-    # for supersession but left alone -- see the dedicated supersession
-    # tests below for the close-when-superseded path.
+    # ones that can never be merged automatically. #2 (an individual major
+    # bump, not superseded here since no changed-files fixture was given)
+    # is checked for supersession but left alone -- see the dedicated
+    # supersession tests below for the close-when-superseded path, and the
+    # dedicated eligibility test below for individual non-major PRs (like
+    # the real PR #149) that now *are* merge-eligible.
     for number in (1, 2, 3, 4, 5):
         assert f"pr update-branch {number} --repo owner/repo --rebase" in calls
     assert "pr diff 2 --repo owner/repo --name-only" in calls
@@ -486,6 +488,67 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     # gets merged by this workflow.
     assert "pr merge 5 --repo owner/repo --disable-auto" not in calls
     assert not any("pr/5 --repo owner/repo --squash" in call for call in calls)
+
+
+def test_daily_sync_merges_individual_non_major_prs_not_just_grouped_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Real PR #149 (home-assistant/actions/hassfest, SHA-only, no tagged
+    # version -- bump_kind "unknown") was fully green and mergeable but
+    # never got merged, because eligibility used to require pr_kind ==
+    # "group". Grouping is Dependabot's own packaging choice, not a safety
+    # signal -- only a real major-version bump should require a human.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": (
+                        "chore(deps): bump home-assistant/actions/hassfest"
+                        " from f4ca6f6 to e3fb68e"
+                    ),
+                    "body": (
+                        "Bumps [home-assistant/actions/hassfest](x)"
+                        " from f4ca6f671bd429efb108c0f2fa0ae8af0215986c"
+                        " to e3fb68ebda13d88a0d695082f471ba2c83d025fb."
+                    ),
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+                {
+                    "number": 2,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/2",
+                    "title": "chore(deps-dev): bump requests from 2.32.5 to 2.33.0",
+                    "body": "Bumps requests from 2.32.5 to 2.33.0.",
+                    "createdAt": "2026-01-02T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    checkrun_pass = '[{"name":"ci","status":"completed","conclusion":"success"}]'
+    monkeypatch.setenv("GH_CHECKRUNS_sha1", checkrun_pass)
+    monkeypatch.setenv("GH_CHECKRUNS_sha2", checkrun_pass)
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    squash_calls = {call for call in calls if call.endswith("--squash")}
+    assert squash_calls == {
+        "pr merge https://example.test/pr/1 --repo owner/repo --squash",
+        "pr merge https://example.test/pr/2 --repo owner/repo --squash",
+    }
 
 
 def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
