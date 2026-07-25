@@ -249,15 +249,26 @@ jobs:
             exit 1
           fi
 
-          docker push "$image_ref" 2>&1 | tee /tmp/docker-push.log
+          docker push "$image_ref"
+
+          # `docker inspect .RepoDigests` rather than scraping `docker push`'s
+          # progress-log text (its previous form here): the log line's format
+          # is Docker CLI's human-readable progress output, not a documented,
+          # versioned contract, while RepoDigests is a stable, structured
+          # field the daemon populates from the registry's own response.
+          # RepoDigests can hold one entry per repository this image ID is
+          # also tagged/pushed under (confirmed locally: base-image and
+          # differently-cased registry-host entries both showed up
+          # alongside this push's own) — filtered to the exact repository
+          # (tag stripped) rather than taking any/the first entry, so a
+          # coincidental extra tag can't select the wrong digest.
           digest="$(
-            sed -n \
-              's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*$/\1/p' \
-              /tmp/docker-push.log \
-              | tail -n1
+            docker inspect --format='{{json .RepoDigests}}' "$image_ref" \
+              | jq -r --arg repo "${image_ref%:*}" \
+                '.[] | select(startswith($repo + "@")) | sub("^.*@";"")'
           )"
           if [ -z "$digest" ]; then
-            echo "::error::The registry push did not report an image digest."
+            echo "::error::Could not determine the pushed image's digest from RepoDigests."
             exit 1
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
