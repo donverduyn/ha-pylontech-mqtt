@@ -48,6 +48,7 @@ def test_generated_npm_ranges_match_their_devcontainer_consumers():
         "CODEX_VERSION": "0.x",
         "COPILOT_CLI_VERSION": "1.x",
         "KILO_VERSION": "7.x",
+        "KIMI_CODE_VERSION": "0.x",
         "OPENCODE_VERSION": "1.x",
         "PNPM_VERSION": "11.x",
     }
@@ -67,6 +68,7 @@ def test_generated_npm_ranges_match_their_devcontainer_consumers():
     assert '"@github/copilot@$COPILOT_CLI_VERSION"' in post_create
     assert '"@kilocode/cli@$KILO_VERSION"' in post_create
     assert '"opencode-ai@$OPENCODE_VERSION"' in post_create
+    assert '"@moonshot-ai/kimi-code@$KIMI_CODE_VERSION"' in post_create
 
 
 def test_refresh_tool_versions_ranges_every_npm_package(monkeypatch):
@@ -75,6 +77,7 @@ def test_refresh_tool_versions_ranges_every_npm_package(monkeypatch):
         "@openai/codex": "0.200.3",
         "@github/copilot": "1.2.3",
         "@kilocode/cli": "7.9.1",
+        "@moonshot-ai/kimi-code": "0.29.1",
         "opencode-ai": "1.18.0",
         "pnpm": "11.12.0",
     }
@@ -103,6 +106,7 @@ def test_refresh_tool_versions_ranges_every_npm_package(monkeypatch):
     assert values["CODEX_VERSION"] == "0.x"
     assert values["COPILOT_CLI_VERSION"] == "1.x"
     assert values["KILO_VERSION"] == "7.x"
+    assert values["KIMI_CODE_VERSION"] == "0.x"
     assert values["OPENCODE_VERSION"] == "1.x"
     assert values["PNPM_VERSION"] == "11.x"
 

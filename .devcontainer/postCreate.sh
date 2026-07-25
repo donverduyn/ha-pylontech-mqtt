@@ -73,6 +73,7 @@ fi
 : "${CODEX_VERSION:?missing CODEX_VERSION in tool-versions.env}"
 : "${COPILOT_CLI_VERSION:?missing COPILOT_CLI_VERSION in tool-versions.env}"
 : "${KILO_VERSION:?missing KILO_VERSION in tool-versions.env}"
+: "${KIMI_CODE_VERSION:?missing KIMI_CODE_VERSION in tool-versions.env}"
 : "${OPENCODE_VERSION:?missing OPENCODE_VERSION in tool-versions.env}"
 : "${ACTIONLINT_VERSION:?missing ACTIONLINT_VERSION in tool-versions.env}"
 : "${ACTIONLINT_SHA256:?missing ACTIONLINT_SHA256 in tool-versions.env}"
@@ -172,11 +173,13 @@ pnpm add -g \
   --allow-build=@anthropic-ai/claude-code \
   --allow-build=@kilocode/cli \
   --allow-build=opencode-ai \
+  --allow-build=@moonshot-ai/kimi-code \
   "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
   "@openai/codex@$CODEX_VERSION" \
   "@github/copilot@$COPILOT_CLI_VERSION" \
   "@kilocode/cli@$KILO_VERSION" \
-  "opencode-ai@$OPENCODE_VERSION"
+  "opencode-ai@$OPENCODE_VERSION" \
+  "@moonshot-ai/kimi-code@$KIMI_CODE_VERSION"
 
 # /usr/local's site-packages is root-owned, so deps can't install into the base image's
 # system Python as the vscode user. Use a uv-managed venv instead: uv is fast enough that
