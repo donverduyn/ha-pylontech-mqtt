@@ -141,6 +141,12 @@
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/kilo/,target=/home/vscode/.config/kilo/,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/share/kilo/,target=/home/vscode/.local/share/kilo/,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.local/state/kilo/,target=/home/vscode/.local/state/kilo/,type=bind",
+    // Kimi Code CLI: config, session records, logs, and the update cache
+    // all live under this one directory (KIMI_CODE_HOME, unset here so it
+    // stays at the default ~/.kimi-code) -- same single-directory shape as
+    // .codex/.copilot above, not split across .config/.local/share/.local/state
+    // like opencode/kilo.
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.kimi-code/,target=/home/vscode/.kimi-code/,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.devcontainer-agent-sync${localWorkspaceFolder}/.config/gh/,target=/home/vscode/.config/gh/,type=bind",
     // GitHub Copilot CLI: its login lives inside session-store.db (SQLite)
     // alongside everything else it stores, so auth can't be isolated to a

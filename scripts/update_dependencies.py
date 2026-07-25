@@ -51,6 +51,7 @@ NPM_VERSION_PINS: OrderedDict[str, str] = OrderedDict(
         ("CODEX_VERSION", "@openai/codex"),
         ("COPILOT_CLI_VERSION", "@github/copilot"),
         ("KILO_VERSION", "@kilocode/cli"),
+        ("KIMI_CODE_VERSION", "@moonshot-ai/kimi-code"),
         ("OPENCODE_VERSION", "opencode-ai"),
         ("PNPM_VERSION", "pnpm"),
     ]

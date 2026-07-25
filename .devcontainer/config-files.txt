@@ -34,6 +34,9 @@
 .local/share/kilo
 .local/state/kilo
 
+# Kimi Code CLI
+.kimi-code
+
 # GitHub CLI
 .config/gh
 
