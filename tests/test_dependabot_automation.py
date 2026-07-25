@@ -122,10 +122,34 @@ def test_stale_cleanup_labels_but_never_closes_dependabot() -> None:
     assert "updated_hours_ago" not in text
     assert "automation-needs-attention" in text
 
-    dependabot_policy = text.index('if [ "$is_dependabot" = "true" ]; then')
-    leave_open = text.index("continue", dependabot_policy)
+    needs_attention_policy = text.index('if [ "$needs_attention" = "true" ]; then')
+    leave_open = text.index("continue", needs_attention_policy)
     close_own_automation = text.index('gh pr close "$number"', leave_open)
-    assert dependabot_policy < leave_open < close_own_automation
+    assert needs_attention_policy < leave_open < close_own_automation
+
+
+def test_stale_cleanup_leaves_min_ha_version_open_but_recycles_dependency_updates() -> (
+    None
+):
+    text = STALE_WORKFLOW.read_text()
+
+    # min-ha-version-update never auto-merges (a maintainer decision, not a
+    # mechanical bump — see min-ha-version-update.yaml), so it must join
+    # Dependabot's needs_attention/labelled-and-left-open path rather than
+    # the is_recyclable/closed-and-recreated path that dependency-updates
+    # (which does auto-merge) uses.
+    needs_attention_block = text[
+        text.index("needs_attention=false") : text.index("is_recyclable=false")
+    ]
+    assert "automation/min-ha-version-update" in needs_attention_block
+
+    recyclable_block = text[
+        text.index("is_recyclable=false") : text.index(
+            'if [ "$needs_attention" != "true" ]'
+        )
+    ]
+    assert "automation/dependency-updates" in recyclable_block
+    assert "automation/min-ha-version-update" not in recyclable_block
 
 
 def test_group_queue_skips_failed_and_single_prs_and_activates_only_one_group(

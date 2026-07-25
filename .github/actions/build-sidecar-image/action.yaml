@@ -72,6 +72,24 @@ runs:
           echo "::error::Expected fail-fast MQTT_BROKER validation message was not logged"
           exit 1
         fi
+    - name: Gate on fixable high or critical vulnerabilities
+      # Skipped on a cache hit for the same reason as the smoke test above:
+      # the cache key covers exactly this image's vulnerability surface
+      # (Dockerfile's pinned base digest, requirements_runtime.lock.txt,
+      # src/**), so a hit already passed this scan when it was first built.
+      # This is a PR-time early warning on the same policy release.yaml
+      # enforces on the actual published image (see that job's identical
+      # step) — a Dependabot docker/runtime bump that introduces a fixable
+      # CRITICAL/HIGH CVE now fails here, before merge, instead of only
+      # surfacing later as an unrelated-looking release failure.
+      if: steps.image-cache.outputs.cache-hit != 'true'
+      uses: "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25" # v0.36.0
+      with:
+        image-ref: "pylon2mqtt:ci"
+        format: "table"
+        severity: "CRITICAL,HIGH"
+        exit-code: "1"
+        ignore-unfixed: true
     - name: Save the image
       # Skipped on a cache hit: the cache step above already restored this
       # exact tar.gz to /tmp, so there's nothing new to save.
