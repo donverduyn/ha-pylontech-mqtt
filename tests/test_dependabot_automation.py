@@ -327,6 +327,70 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     assert not any("pr/5 --repo owner/repo --squash" in call for call in calls)
 
 
+def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Observed for real on PR #148: GitHub reported two check-run entries
+    # named "tests-finished" for the same commit (both successful), which
+    # made a naive "entry count == required-context count" comparison never
+    # equal, looping until timeout even though every required context had
+    # actually passed. Classification must be per-name ("does this required
+    # context have at least one successful run"), not per-entry-count.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+
+    group_body = (
+        "Bumps the docker group with 1 update: python.\n\n"
+        "Updates `python` from 3.13 to 3.14\n"
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": group_body,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setenv(
+        "GH_REQUIRED_CONTEXTS", '["HACS Action","validate","tests-finished"]'
+    )
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        json.dumps(
+            [
+                {
+                    "name": "tests-finished",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "tests-finished",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {"name": "HACS Action", "status": "completed", "conclusion": "success"},
+                {"name": "validate", "status": "completed", "conclusion": "success"},
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert "pr merge https://example.test/pr/1 --repo owner/repo --squash" in calls
+
+
 def test_daily_sync_skips_merge_when_branch_is_dirty_or_behind_after_rebase(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
