@@ -25,11 +25,11 @@ concurrency:
 jobs:
   sync-open-prs:
     runs-on: "ubuntu-latest"
-    # Bounded well under the App installation token's ~1-hour lifetime: this
-    # job can wait on required checks once per eligible Dependabot PR in the
-    # same run (see daily-pr-sync.sh's MAX_WAIT_SECONDS). Anything not
-    # merged within this window is already freshly rebased and is retried
-    # on tomorrow's run.
+    # Bounded well under the App installation token's ~1-hour lifetime.
+    # daily-pr-sync.sh caps its own total check-waiting at RUN_BUDGET_SECONDS
+    # (well under this), so it stops merging and leaves the rest rebased
+    # for tomorrow before this ceiling is ever hit -- this timeout is a
+    # backstop, not the thing normally doing the cutting off.
     timeout-minutes: 55
     environment: automation
     permissions:

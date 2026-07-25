@@ -20,14 +20,23 @@ set -euo pipefail
 : "${GH_TOKEN:?GH_TOKEN must be set}"
 : "${REPO:?REPO must be set}"
 
-# How long to wait for a rebased Dependabot PR's required checks to reach a
-# final state before giving up on it for today (it stays rebased either
-# way, and gets re-attempted on the next daily run). Kept well under an
-# hour: the App token this script runs with is an installation token with a
-# ~1-hour lifetime, and this wait can repeat once per eligible PR in the
-# same run.
+# How long to wait for a single rebased Dependabot PR's required checks to
+# reach a final state before giving up on it for today (it stays rebased
+# either way, and gets re-attempted on the next daily run).
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-30}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
+
+# Overall per-run budget for check-waiting, independent of the above. This
+# wait can repeat once per eligible PR with nothing else capping how many
+# eligible PRs appear in one run, so without a run-level budget too, several
+# eligible PRs landing the same day could sum past both the job's
+# timeout-minutes and the ~1-hour App installation token lifetime -- and
+# GitHub would just hard-kill the job mid-poll with no clean stopping point.
+# Kept comfortably under both: once spent, later PRs are left rebased (not
+# merged) for today, deterministically and visibly, rather than relying on
+# a runner-imposed cancellation to cut things off.
+RUN_BUDGET_SECONDS="${RUN_BUDGET_SECONDS:-2700}"
+run_deadline="$(( $(date +%s) + RUN_BUDGET_SECONDS ))"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -42,22 +51,28 @@ wait_for_required_checks() {
   deadline="$(( $(date +%s) + MAX_WAIT_SECONDS ))"
 
   while true; do
-    checks="$(gh pr checks "$number" --repo "$REPO" --required --json bucket 2>/dev/null || true)"
-
-    # An empty result means GitHub hasn't registered check runs for the
-    # freshly rebased commit yet -- treat that the same as "still pending",
-    # never as "nothing required, so pass": the same emptiness can appear
-    # for a split second right after a rebase, and misreading it as pass
-    # would merge an untested commit.
-    if [ -n "$checks" ] && [ "$(jq 'length' <<<"$checks")" != "0" ] \
-      && jq -e '[.[] | select(.bucket == "pending")] | length == 0' >/dev/null <<<"$checks"; then
-      if jq -e '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length > 0' \
-        >/dev/null <<<"$checks"; then
-        echo "fail"
-      else
-        echo "pass"
+    if checks="$(gh pr checks "$number" --repo "$REPO" --required --json bucket 2>&1)"; then
+      # An empty result means GitHub hasn't registered check runs for the
+      # freshly rebased commit yet -- treat that the same as "still
+      # pending", never as "nothing required, so pass": the same emptiness
+      # can appear for a split second right after a rebase, and misreading
+      # it as pass would merge an untested commit.
+      if [ "$(jq 'length' <<<"$checks")" != "0" ] \
+        && jq -e '[.[] | select(.bucket == "pending")] | length == 0' >/dev/null <<<"$checks"; then
+        if jq -e '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length > 0' \
+          >/dev/null <<<"$checks"; then
+          echo "fail"
+        else
+          echo "pass"
+        fi
+        return
       fi
-      return
+    else
+      # A real failure (rate limit, transient API error, an expiring token)
+      # looks identical to "nothing registered yet" unless logged
+      # separately -- surfaced on stderr so it doesn't corrupt this
+      # function's pass/fail/timeout return value on stdout.
+      echo "PR #$number: gh pr checks failed (${checks}) -- treating as not yet registered." >&2
     fi
 
     if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -78,21 +93,6 @@ if [ "$(jq 'length' <<<"$prs")" = "0" ]; then
   exit 0
 fi
 
-# Clean up any auto-merge this workflow's older async design could have left
-# enabled. This workflow merges synchronously now, so a leftover --auto flag
-# could otherwise complete an out-of-sequence merge on its own. Only ever
-# touches auto-merge on a Dependabot PR -- never a human's own choice.
-while read -r pr; do
-  number="$(jq -r .number <<<"$pr")"
-  author="$(jq -r '.author.login' <<<"$pr")"
-  auto_merge="$(jq -r '.autoMergeRequest != null' <<<"$pr")"
-  if [ "$auto_merge" = "true" ] && is_dependabot "$author"; then
-    echo "PR #$number: disabling stale auto-merge."
-    gh pr merge "$number" --repo "$REPO" --disable-auto \
-      || echo "  could not disable auto-merge; PR may have changed concurrently."
-  fi
-done < <(jq -c '.[]' <<<"$prs")
-
 while read -r pr; do
   number="$(jq -r .number <<<"$pr")"
   url="$(jq -r .url <<<"$pr")"
@@ -106,29 +106,45 @@ while read -r pr; do
     continue
   fi
 
+  # Clean up any auto-merge this workflow's older async design could have
+  # left enabled. This workflow merges synchronously now, so a leftover
+  # --auto flag could otherwise complete an out-of-sequence merge on its
+  # own. Only ever touches auto-merge on a Dependabot PR -- never a
+  # human's own choice.
+  if is_dependabot "$author" \
+    && [ "$(jq -r '.autoMergeRequest != null' <<<"$pr")" = "true" ]; then
+    echo "PR #$number: disabling stale auto-merge."
+    gh pr merge "$number" --repo "$REPO" --disable-auto \
+      || echo "PR #$number: could not disable auto-merge; PR may have changed concurrently."
+  fi
+
   echo "PR #$number: rebasing onto current base."
   if ! gh pr update-branch "$number" --repo "$REPO" --rebase 2>&1; then
     echo "PR #$number: rebase not applied (already current, conflicted, or not permitted)."
   fi
 
-  mergeable=false
-  if is_dependabot "$author"; then
-    pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
-    bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
-    if [ "$pr_kind" = "group" ] && [ "$bump_kind" = "minor-or-patch" ]; then
-      mergeable=true
-    else
-      echo "PR #$number: $pr_kind/$bump_kind Dependabot update — rebased only, never merged here."
-    fi
-  fi
-
-  if [ "$mergeable" != "true" ]; then
+  if ! is_dependabot "$author"; then
     continue
   fi
 
-  merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus)"
+  pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
+  bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
+  if [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; then
+    echo "PR #$number: $pr_kind/$bump_kind Dependabot update — rebased only, never merged here."
+    continue
+  fi
+
+  if ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then
+    echo "PR #$number: could not read merge state (${merge_state}) — leaving for the next run."
+    continue
+  fi
   if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BEHIND" ]; then
     echo "PR #$number: branch state is $merge_state after rebase — leaving for the next run."
+    continue
+  fi
+
+  if [ "$(date +%s)" -ge "$run_deadline" ]; then
+    echo "PR #$number: this run's check-wait budget is spent — leaving for the next run."
     continue
   fi
 
