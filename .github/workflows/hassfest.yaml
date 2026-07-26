@@ -63,4 +63,4 @@ jobs:
         with:
           is_release: ${{ needs.detect-release.outputs.is_release }}
           skip_ci: ${{ needs.detect-release.outputs.skip_ci }}
-      - uses: "home-assistant/actions/hassfest@f4ca6f671bd429efb108c0f2fa0ae8af0215986c" # master @ 2026-06-22
+      - uses: "home-assistant/actions/hassfest@e3fb68ebda13d88a0d695082f471ba2c83d025fb" # master @ 2026-06-22
