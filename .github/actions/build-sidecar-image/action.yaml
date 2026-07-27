@@ -1,6 +1,7 @@
 name: Build and cache the sidecar CI image
 description: >
-  Builds the sidecar Docker image, smoke-tests newly built bytes, and leaves a
+  Builds or restores the sidecar Docker image, smoke-tests and vulnerability
+  scans it against the current runner and advisory database, and leaves a
   compressed image archive for the e2e jobs. Cache entries created by every
   push include platform and architecture identity so master builds safely seed
   the cache used by later PRs.
@@ -42,22 +43,15 @@ runs:
           --build-arg GIT_SHA="${{ github.sha }}" \
           --build-arg SIDECAR_VERSION="ci-${{ github.sha }}" \
           -t pylon2mqtt:ci .
-    - name: Smoke test the built image
-      # Skipped on a cache hit: the tar.gz being reused already passed
-      # this exact smoke test in the run that first built and cached it,
-      # and the cache key guarantees byte-identical image contents, so
-      # re-running it here would only re-verify the same bytes. This
-      # invariant only holds because every caller of this action reaches
-      # this step (rather than skipping straight to consuming the cache)
-      # on a miss — the whole point of centralizing this here.
-      if: steps.image-cache.outputs.cache-hit != 'true'
+    - name: Load the cached sidecar image
+      if: steps.image-cache.outputs.cache-hit == 'true'
       shell: bash
-      # Cheap fail-fast before the image is shipped off to the e2e job's
-      # compose stack: proves it runs under its pinned Python 3.13 runtime
-      # (not just that `docker build` succeeds), that main.py's entry point
-      # and its pinned deps (paho-mqtt, pyserial) import cleanly, and that
-      # missing config fails fast (exit 1, clear log) instead of hanging
-      # forever waiting on hardware that isn't there.
+      run: docker load -i /tmp/pylon2mqtt-ci.tar.gz
+    - name: Smoke test the built image
+      shell: bash
+      # Run on both newly built and restored bytes. The cache key proves the
+      # archive is byte-identical, but the runner's Docker/runtime environment
+      # can change independently and still needs exercising.
       run: |
         set +e
         output="$(docker run --rm pylon2mqtt:ci 2>&1)"
@@ -73,16 +67,10 @@ runs:
           exit 1
         fi
     - name: Gate on fixable high or critical vulnerabilities
-      # Skipped on a cache hit for the same reason as the smoke test above:
-      # the cache key covers exactly this image's vulnerability surface
-      # (Dockerfile's pinned base digest, requirements_runtime.lock.txt,
-      # src/**), so a hit already passed this scan when it was first built.
-      # This is a PR-time early warning on the same policy release.yaml
-      # enforces on the actual published image (see that job's identical
-      # step) — a Dependabot docker/runtime bump that introduces a fixable
-      # CRITICAL/HIGH CVE now fails here, before merge, instead of only
-      # surfacing later as an unrelated-looking release failure.
-      if: steps.image-cache.outputs.cache-hit != 'true'
+      # Always rescan, including cache hits: advisory data, severity, and fix
+      # availability change independently of image bytes. Reusing a previously
+      # green scan would otherwise defer newly disclosed vulnerabilities until
+      # release.yaml scans the image again.
       uses: "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25" # v0.36.0
       with:
         image-ref: "pylon2mqtt:ci"

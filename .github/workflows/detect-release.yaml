@@ -1,9 +1,10 @@
 name: Detect release
 
 # Reusable workflow shared by tests.yaml/hacs.yaml/hassfest.yaml: each of
-# those pull_request-triggered workflows needs the exact same two signals —
-# whether this PR bumps manifest.json's version (a release), and whether
-# the skip-ci label is currently on the PR — and previously carried an
+# those pull_request-triggered workflows needs the same three signals — whether
+# this PR bumps manifest.json's version (a release), whether the skip-ci label is
+# currently on the PR, and whether every changed path is documentation-only.
+# The callers previously carried an
 # identical ~40-line copy of this job to get them, since a plain `needs:`
 # reference can't cross workflow files. A reusable workflow's outputs can:
 # each caller adds one job (`uses: ./.github/workflows/detect-release.yaml`)
@@ -18,6 +19,9 @@ on:
       skip_ci:
         description: "true if the skip-ci label is currently on this PR"
         value: ${{ jobs.detect-release.outputs.skip_ci }}
+      skip_ci_allowed:
+        description: "true if every changed path is documentation-only"
+        value: ${{ jobs.detect-release.outputs.skip_ci_allowed }}
 
 permissions: {}
 
@@ -38,15 +42,17 @@ jobs:
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
       skip_ci: ${{ steps.labels.outputs.skip_ci }}
+      skip_ci_allowed: ${{ steps.check.outputs.skip_ci_allowed }}
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
         with:
           persist-credentials: false
-      - name: Compare manifest.json version against the PR base
+      - name: Classify release and skip-ci scope against the PR base
         id: check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          set -euo pipefail
           manifest="custom_components/pylontech_mqtt/manifest.json"
           new="$(jq -r .version "$manifest")"
           git fetch --depth=1 origin "$BASE_SHA"
@@ -56,6 +62,19 @@ jobs:
           else
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
+
+          skip_ci_allowed=true
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.md|LICENSE|LICENSE.*)
+                ;;
+              *)
+                echo "skip-ci requires documentation-only changes; found: $path"
+                skip_ci_allowed=false
+                ;;
+            esac
+          done < <(git diff --name-only --no-renames -z "$BASE_SHA"...HEAD)
+          echo "skip_ci_allowed=$skip_ci_allowed" >> "$GITHUB_OUTPUT"
       - name: Look up the skip-ci label live
         # github.event.pull_request.labels is a snapshot frozen at whichever
         # event triggered *this* run — a label attached a moment after that
@@ -77,7 +96,7 @@ jobs:
           else
             echo "skip_ci=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Refuse skip-ci on a release PR
+      - name: Refuse skip-ci outside documentation-only PRs
         # Early, fast (~4s) signal only — this job's own pass/fail isn't a
         # required status check, so each caller's actual required-check job
         # (tests-finished/validate) independently repeats this exact check
@@ -86,3 +105,4 @@ jobs:
         with:
           is_release: ${{ steps.check.outputs.is_release }}
           skip_ci: ${{ steps.labels.outputs.skip_ci }}
+          skip_ci_allowed: ${{ steps.check.outputs.skip_ci_allowed }}

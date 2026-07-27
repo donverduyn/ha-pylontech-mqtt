@@ -55,10 +55,19 @@ check silently stops being enforced (GitHub does not block a PR on a
 required-context string that no run ever posts under — see
 [status checks docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets-and-branch-protection-rules/about-protected-branches)).
 
-Also require dismissal of stale approvals, at least one non-author approval
-if that gate is enabled, and Code Owner review for owned paths.
-`.github/CODEOWNERS` assigns workflow and dependency automation changes to
-the maintainer.
+The repository currently has one collaborator, who is also the only Code Owner.
+Do not enable non-author or Code Owner approval requirements until a second
+trusted reviewer is added: with admin enforcement enabled, either requirement
+would make every pull request unmergeable. When a second maintainer is added,
+enable one non-author approval, stale-approval dismissal, and Code Owner review
+together. `.github/CODEOWNERS` assigns workflow and dependency automation
+changes to the maintainer in the meantime.
+
+The `skip-ci` label is limited in `detect-release.yaml` to non-release pull
+requests whose changed paths are all Markdown or license files. Any source,
+workflow, action, script, dependency, or configuration change with that label
+runs the full suite and fails each required summary check until the label is
+removed.
 
 Where repository workflow-execution protections are available, restrict
 `workflow_dispatch` execution to maintainers.

@@ -26,8 +26,8 @@ concurrency:
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
-  # than an inline job: tests.yaml and hassfest.yaml need the exact same two
-  # signals (is_release, skip_ci) and previously each carried their own
+  # than an inline job: tests.yaml and hassfest.yaml need the same three
+  # signals (is_release, skip_ci, skip_ci_allowed) and previously each carried their own
   # identical ~40-line copy of this job to get them.
   detect-release:
     uses: ./.github/workflows/detect-release.yaml
@@ -40,23 +40,11 @@ jobs:
     timeout-minutes: 15
     name: HACS Action
     needs: [detect-release]
-    # Skips at the job level (→ a real "skipped" conclusion, and — since
-    # hacs/action is a container action — avoids GitHub pre-pulling its
-    # image entirely, ~27s saved) in the one legitimate case: skip-ci is
-    # set AND detect-release confirmed this is NOT a release. Every other
-    # combination still dispatches the job: a confirmed release, to hit
-    # the bail step below (this job is HACS Action, branch protection's
-    # actual required context, so it has to fail *itself* here — a
-    # release PR reaching this condition always has skip_ci == 'false' or
-    # 'true' with is_release == 'true', never the 'false'+'false' pair
-    # this skips on); an unconfirmed verdict, to fail closed to running
-    # the real check below; and this run itself being cancelled (a second
-    # triggering event superseding it) is handled by !cancelled(), not by
-    # the boolean pair below — without it, a detect-release failure
-    # (genuine, or this run being cancelled) would silently skip this job
-    # via GitHub's implicit "skip if needs failed" default instead of
-    # reaching the logic that decides skip vs. bail vs. run for real.
-    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
+    # Skip only for a confirmed documentation-only, non-release PR.
+    # Invalid or unconfirmed label use dispatches this required job so the
+    # enforcement action fails it explicitly; !cancelled() also prevents a
+    # failed detector from silently bypassing the real validator.
+    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false' && needs.detect-release.outputs.skip_ci_allowed == 'true')"
     steps:
       # Checkout first (needed to resolve the local composite action below),
       # refuse-check second. No `if:` needed on it or the validation step
@@ -64,7 +52,7 @@ jobs:
       # per-step success() requirement, and it's the only way this job gets
       # dispatched without also being the real-check path.
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
-      - name: Refuse skip-ci on a release PR
+      - name: Refuse skip-ci outside documentation-only PRs
         # Duplicates detect-release's identical step (which only gives an
         # early signal — its own pass/fail isn't required by branch
         # protection) so *this* job explicitly fails instead of the
@@ -74,6 +62,7 @@ jobs:
         with:
           is_release: ${{ needs.detect-release.outputs.is_release }}
           skip_ci: ${{ needs.detect-release.outputs.skip_ci }}
+          skip_ci_allowed: ${{ needs.detect-release.outputs.skip_ci_allowed }}
       - name: HACS validation
         uses: "hacs/action@d556e736723344f83838d08488c983a15381059a" # 22.5.0
         with:
