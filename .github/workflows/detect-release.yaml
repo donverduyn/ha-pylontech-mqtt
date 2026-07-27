@@ -64,6 +64,8 @@ jobs:
           fi
 
           skip_ci_allowed=true
+          changed_paths="$RUNNER_TEMP/skip-ci-changed-paths"
+          git diff --name-only --no-renames -z "$BASE_SHA" HEAD > "$changed_paths"
           while IFS= read -r -d '' path; do
             case "$path" in
               *.md|LICENSE|LICENSE.*)
@@ -73,7 +75,7 @@ jobs:
                 skip_ci_allowed=false
                 ;;
             esac
-          done < <(git diff --name-only --no-renames -z "$BASE_SHA"...HEAD)
+          done < "$changed_paths"
           echo "skip_ci_allowed=$skip_ci_allowed" >> "$GITHUB_OUTPUT"
       - name: Look up the skip-ci label live
         # github.event.pull_request.labels is a snapshot frozen at whichever

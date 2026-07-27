@@ -65,7 +65,9 @@ def test_skip_ci_is_limited_to_documentation_only_non_release_prs() -> None:
 
     assert "skip_ci_allowed:" in detector
     assert "*.md|LICENSE|LICENSE.*)" in detector
-    assert 'git diff --name-only --no-renames -z "$BASE_SHA"...HEAD' in detector
+    assert 'git diff --name-only --no-renames -z "$BASE_SHA" HEAD' in detector
+    assert 'done < "$changed_paths"' in detector
+    assert "< <(git diff" not in detector
 
     for caller_path in (TESTS_WORKFLOW, HACS_WORKFLOW, HASSFEST_WORKFLOW):
         caller = caller_path.read_text()
