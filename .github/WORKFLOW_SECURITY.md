@@ -55,6 +55,29 @@ check silently stops being enforced (GitHub does not block a PR on a
 required-context string that no run ever posts under — see
 [status checks docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets-and-branch-protection-rules/about-protected-branches)).
 
+`.github/scripts/daily-pr-sync.sh` reads this same list from the branch
+protection API at runtime rather than hardcoding it, which is why the
+automation App needs `Administration: read` (see `AUTOMATION_APP.md`). The
+script refuses to run at all if that read fails: an empty context list is
+indistinguishable from "nothing is required" and would merge PRs unverified.
+
+### Settings this design depends on
+
+Two settings are load-bearing, not cosmetic, because `tests.yaml` no longer
+runs on master pushes:
+
+- **Require branches to be up to date before merging** (`strict`). The merged
+  tree only equals the tree `tests.yaml` passed on because a PR must be rebased
+  onto current master before it can merge. With this off, `autorelease.yaml`
+  would reuse a Tests run for a head that was never tested against the base it
+  is being released from.
+- **Do not allow bypassing the above settings** (`enforce_admins`), together
+  with the required checks themselves. These are what block direct pushes to
+  master; every master commit must arrive through a PR that ran the suite.
+
+Turning either off means master can change without any run of `tests.yaml`
+ever having seen the result.
+
 The repository currently has one collaborator, who is also the only Code Owner.
 Do not enable non-author or Code Owner approval requirements until a second
 trusted reviewer is added: with admin enforcement enabled, either requirement
