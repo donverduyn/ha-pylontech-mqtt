@@ -399,9 +399,10 @@ def test_stale_cleanup_treats_all_three_pr_kinds_as_recyclable() -> None:
 
     # dependency-updates auto-merges on its own (stale means CI is blocked),
     # min-ha-version-update is recreated weekly regardless of whether a
-    # previous instance is open (closing costs nothing), and Dependabot PRs
-    # here can never resolve as opened (see dependabot.yml) — all three are
-    # closed after 7 days rather than left open.
+    # previous instance is open (closing costs nothing), and most Dependabot
+    # PRs here can never resolve as opened (see dependabot.yml) — all three
+    # are closed after 7 days rather than left open, except a confirmed
+    # major-version Dependabot bump (see the exemption test below).
     recyclable_block = text[
         text.index("is_recyclable=false") : text.index(
             'if [ "$is_recyclable" != "true" ]'
@@ -410,6 +411,31 @@ def test_stale_cleanup_treats_all_three_pr_kinds_as_recyclable() -> None:
     assert "automation/dependency-updates" in recyclable_block
     assert "automation/min-ha-version-update" in recyclable_block
     assert "is_dependabot" in recyclable_block
+
+
+def test_stale_cleanup_exempts_confirmed_major_dependabot_bumps() -> None:
+    # Closing a PR only blocks Dependabot from recreating that *exact*
+    # proposed version -- not the dependency, and not any newer release
+    # under the same major. A dependency with a sparse release cadence could
+    # have its one "a major bump is pending" signal closed here and then
+    # never resurface, since nothing would trigger Dependabot to re-propose
+    # it. This doesn't trade away cleanup: daily-pr-sync.sh already runs a
+    # supersession check against every individual/major Dependabot PR daily
+    # and closes it for real once the base branch resolves the update some
+    # other way -- this job's age-based sweep was never the only thing
+    # capable of closing a genuinely-resolved major.
+    text = STALE_WORKFLOW.read_text()
+
+    assert "actions/checkout@" in text
+    assert ".github/scripts/dependabot-bump-kind.sh" in text
+
+    recyclable_block = text[
+        text.index("is_recyclable=false") : text.index(
+            'if [ "$is_recyclable" != "true" ]'
+        )
+    ]
+    assert "is_major_bump" in recyclable_block
+    assert '[ "$is_major_bump" != "true" ]' in recyclable_block
 
 
 def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_order(
