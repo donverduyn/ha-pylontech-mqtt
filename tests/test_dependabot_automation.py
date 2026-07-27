@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -338,26 +337,26 @@ def test_auto_merge_workflow_is_daily_schedule_only_and_runs_the_sync_script() -
     assert "run: .github/scripts/daily-pr-sync.sh" in text
 
 
-def test_stale_cleanup_runs_after_auto_merges_worst_case_window() -> None:
-    # This workflow now closes Dependabot PRs, so it must never run while
-    # PR Auto-merge (dependabot-auto-merge.yaml) could still be mid-merge on
-    # one -- closing a PR out from under an in-flight merge there can cancel
-    # a Dependabot update that was about to land, not just cost a redundant
-    # refresh. PR Auto-merge runs daily at 08:22 UTC with a 55-minute job
-    # timeout, so its worst case ends 09:17 UTC; this workflow's Monday cron
-    # must start no earlier than that.
+def test_stale_cleanup_follows_successful_monday_auto_merge_without_overlap() -> None:
+    # Cron spacing cannot guarantee ordering because GitHub may delay scheduled
+    # workflows independently. The stale sweep must be triggered by completion
+    # of PR Auto-merge itself, and manual runs must share its concurrency group.
     auto_merge_text = AUTO_MERGE_WORKFLOW.read_text()
     assert 'cron: "22 8 * * *"' in auto_merge_text
     assert "timeout-minutes: 55" in auto_merge_text
+    assert "group: dependency-pr-maintenance" in auto_merge_text
+    assert "queue: max" in auto_merge_text
 
     stale_text = STALE_WORKFLOW.read_text()
-    match = re.search(r'cron:\s*"(\d+)\s+(\d+)\s+\*\s+\*\s+1"', stale_text)
-    assert match, "expected a weekly Monday cron in close-stale-automation-prs.yaml"
-    stale_minute, stale_hour = int(match.group(1)), int(match.group(2))
-    assert (stale_hour, stale_minute) >= (9, 17), (
-        "close-stale-automation-prs.yaml must run at/after 09:17 UTC, PR "
-        "Auto-merge's worst-case end time (08:22 start + 55min timeout)"
-    )
+    assert "workflow_run:" in stale_text
+    assert 'workflows: ["PR Auto-merge"]' in stale_text
+    assert "types: [completed]" in stale_text
+    assert "github.event.workflow_run.event == 'schedule'" in stale_text
+    assert "github.event.workflow_run.conclusion == 'success'" in stale_text
+    assert 'date -u -d "$SOURCE_RUN_STARTED_AT" +%u' in stale_text
+    assert "group: dependency-pr-maintenance" in stale_text
+    assert "cancel-in-progress: false" in stale_text
+    assert "queue: max" in stale_text
 
 
 def test_stale_cleanup_closes_every_recyclable_pr_with_no_leave_open_bucket() -> None:

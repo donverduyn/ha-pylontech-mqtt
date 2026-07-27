@@ -19,8 +19,11 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}
+  # Shared with close-stale-automation-prs.yaml so a manual stale sweep can
+  # never close a PR while this workflow is rebasing or merging it.
+  group: dependency-pr-maintenance
   cancel-in-progress: false
+  queue: max
 
 jobs:
   sync-open-prs:
