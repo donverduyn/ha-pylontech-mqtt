@@ -1,7 +1,7 @@
 name: Review Stale Automation PRs
 
-# Every stale automation-owned or Dependabot PR is recycled by closing it —
-# there is no "leave open" bucket:
+# Every stale automation-owned or Dependabot PR is recycled by closing it,
+# with one exemption (below):
 #
 # - automation/dependency-updates auto-merges on its own once CI passes, so
 #   a stale instance almost always means CI is blocked, not that a decision
@@ -23,6 +23,27 @@ name: Review Stale Automation PRs
 #   is scripts/update_dependencies.py (dependency-updates.yaml for current,
 #   min-ha-version-update.yaml for the floor) — once one of those lands, a
 #   still-relevant advisory surfaces again on its own.
+#
+# The exemption: a *confirmed* major-version-bump Dependabot PR (per
+# .github/scripts/dependabot-bump-kind.sh, shared with
+# dependabot-auto-merge.yaml's own auto-merge decision) is never closed by
+# age alone. GitHub only blocks Dependabot from recreating that exact
+# proposed version once a PR is closed — not the dependency, and not any
+# newer release under the same major — so a dependency with a sparse release
+# cadence could have its one "a major bump is pending" signal closed here
+# and then never resurface, since nothing would trigger Dependabot to
+# re-propose it. Only a "major" classification exempts; "minor-or-patch" and
+# "unknown" both still close on the generic staleness rule below — an
+# unclassifiable PR sitting exempt forever would defeat this job's purpose
+# for exactly the ecosystems/PR formats dependabot-bump-kind.sh can't parse.
+# This doesn't trade away real cleanup: dependabot-auto-merge.yaml's
+# daily-pr-sync.sh already runs a supersession check against every
+# individual/major Dependabot PR on its own daily schedule (more often than
+# this job's weekly one) and closes it for real once the base branch
+# actually resolves the update some other way — this job's blind age-based
+# sweep was never the only thing capable of closing a genuinely-resolved
+# major, so exempting it here loses nothing except closing one that was
+# still genuinely pending.
 #
 # Correctness does not depend on the relative start time of the two
 # producer crons (dependency-updates.yaml 08:17, min-ha-version-update.yaml
@@ -59,6 +80,13 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      # Needed only to run .github/scripts/dependabot-bump-kind.sh -- this
+      # job otherwise works entirely through the gh API against
+      # $GITHUB_REPOSITORY, not the checked-out tree.
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Review stale dependency-automation PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,7 +96,7 @@ jobs:
 
           prs="$(
             gh pr list --repo "$REPO" --state open --limit 1000 \
-              --json number,author,headRefName,createdAt
+              --json number,author,headRefName,createdAt,title,body
           )"
 
           if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
@@ -91,11 +119,27 @@ jobs:
               is_dependabot=true
             fi
 
+            is_major_bump=false
+            if [ "$is_dependabot" = "true" ]; then
+              title="$(echo "$pr" | jq -r .title)"
+              body="$(echo "$pr" | jq -r .body)"
+              if [ "$(.github/scripts/dependabot-bump-kind.sh "$title" "$body")" = "major" ]; then
+                is_major_bump=true
+              fi
+            fi
+
             is_recyclable=false
             if [ "$head_ref" = "automation/dependency-updates" ] \
-              || [ "$head_ref" = "automation/min-ha-version-update" ] \
-              || [ "$is_dependabot" = "true" ]; then
+              || [ "$head_ref" = "automation/min-ha-version-update" ]; then
               is_recyclable=true
+            elif [ "$is_dependabot" = "true" ] && [ "$is_major_bump" != "true" ]; then
+              is_recyclable=true
+            fi
+
+            if [ "$is_major_bump" = "true" ]; then
+              echo "::group::PR #$number ($author, $head_ref)"
+              echo "Confirmed major-version bump — exempt from staleness close, left for a human merge decision. daily-pr-sync.sh's own supersession check still closes it if the base branch resolves the update some other way."
+              echo "::endgroup::"
             fi
 
             if [ "$is_recyclable" != "true" ]; then
