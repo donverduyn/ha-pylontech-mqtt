@@ -124,15 +124,29 @@ while IFS= read -r line; do
     continue
   fi
 
+  # OR across files, not AND: a package pinned in more than one lockfile
+  # (e.g. requirements_dev.lock.txt and requirements_dev_min.lock.txt) can
+  # legitimately sit at different versions per leg, each moving
+  # independently (see dependabot.yml's homeassistant/phacc `ignore:`
+  # comment for why). Requiring every leg to already meet-or-exceed the
+  # proposal missed the real, more common failure: one leg has already
+  # moved past the proposed version via its own exact transitive pin (e.g.
+  # homeassistant's own orjson requirement), which makes the PR's single
+  # version number impossible to apply there -- while another leg, not
+  # yet at that exact pin, still looks like a valid forward upgrade and
+  # so never flips the old AND-based check to "superseded". Any one leg
+  # already at or past the proposed version is sufficient to call the
+  # whole pair superseded; the PR was never going to apply cleanly across
+  # every leg at once regardless of what the other legs show.
   found_in_any_file=0
-  pair_superseded=1
+  pair_superseded=0
   for file in "${files[@]}"; do
     current_raw="$(current_pinned_version "$name" "$file" || true)"
     [ -z "$current_raw" ] && continue
     found_in_any_file=1
     current_norm="$(normalize_version "$current_raw")"
-    if [ -z "$current_norm" ] || ! version_ge "$current_norm" "$to_norm"; then
-      pair_superseded=0
+    if [ -n "$current_norm" ] && version_ge "$current_norm" "$to_norm"; then
+      pair_superseded=1
     fi
   done
 
