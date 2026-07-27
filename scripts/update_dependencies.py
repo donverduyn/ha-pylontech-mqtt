@@ -825,14 +825,20 @@ def update_dependabot_exclude_list() -> None:
     collect_dependabot_exclude_names().
 
     A hand-maintained version of this list only ever grew by someone
-    noticing a failed Dependabot PR after the fact (see
-    close-stale-automation-prs.yaml's CI-failure-signature detection) — this
-    computes the same "can never resolve independently" fact directly from
-    what's exactly pinned right now, so it can't drift stale between
-    homeassistant/phacc version bumps. These names are deliberately not put
-    in Dependabot's global ignore list: an excluded update falls back to an
-    individual security PR, where the blocker remains visible until the
-    stale-automation workflow retires it.
+    noticing a failed Dependabot PR after the fact — this computes the same
+    "can never resolve independently" fact directly from what's exactly
+    pinned right now, so it can't drift stale between homeassistant/phacc
+    version bumps. These names are deliberately not put in Dependabot's
+    global ignore list: an excluded update falls back to an individual
+    security PR, where the blocker remains visible until the
+    stale-automation workflow closes it as stale. The two exceptions are
+    homeassistant and pytest-homeassistant-custom-component themselves
+    (see dependabot.yml's separate, hand-maintained `ignore:` block): unlike
+    everything in this generated list, which is a dependency *of* one of
+    those two releases, homeassistant/phacc *are* the releases whose two
+    independent lock-file pins Dependabot can only ever edit inconsistently
+    — there's no individual security PR worth exposing for those, so they're
+    fully ignored instead.
     """
     names = collect_dependabot_exclude_names()
     text = DEPENDABOT_YML.read_text()

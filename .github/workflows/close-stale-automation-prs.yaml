@@ -1,26 +1,48 @@
 name: Review Stale Automation PRs
 
-# Dependabot PRs are never closed here. GitHub treats a manual close as an
-# instruction not to recreate that update, which can silently suppress a
-# dependency or security fix. Stale Dependabot PRs are labelled for maintainer
-# attention instead.
+# Every stale automation-owned or Dependabot PR is recycled by closing it —
+# there is no "leave open" bucket:
 #
-# Of this repository's own automation branches, only automation/dependency-updates
-# is recycled by closing it: it auto-merges on its own once CI passes, so a
-# stale instance almost always means CI is blocked, not that a decision is
-# pending — the next scheduled producer run safely opens a fresh PR from
-# current dependency state. automation/min-ha-version-update is the opposite:
-# it never auto-merges by design (dropping HA version support is a maintainer
-# decision, not a mechanical bump), so it gets the same labelled-and-left-open
-# treatment as Dependabot instead of being closed — closing it here would
-# silently recycle the PR every week without that decision ever surfacing.
+# - automation/dependency-updates auto-merges on its own once CI passes, so
+#   a stale instance almost always means CI is blocked, not that a decision
+#   is pending.
+# - automation/min-ha-version-update never auto-merges (dropping HA version
+#   support is a maintainer decision, not a mechanical bump) and is
+#   recreated weekly regardless of whether the previous instance is still
+#   open — create-or-update-pr only *updates* a branch's PR if one is still
+#   open, so closing a stale one costs nothing: the next scheduled run just
+#   opens a fresh PR from current dependency state instead. The pending
+#   maintainer decision isn't lost, just deferred to whichever instance is
+#   open when someone actually reviews it.
+# - Dependabot PRs against this repo are dominated by the homeassistant/phacc
+#   exact-pin structure (see dependabot.yml), which Dependabot cannot
+#   resolve correctly on its own — a stale one isn't a pending decision
+#   either, it was never going to be mergeable as opened. Closing it may
+#   mean Dependabot doesn't recreate that exact update; that's accepted
+#   here, since the real fix path for homeassistant/phacc version movement
+#   is scripts/update_dependencies.py (dependency-updates.yaml for current,
+#   min-ha-version-update.yaml for the floor) — once one of those lands, a
+#   still-relevant advisory surfaces again on its own.
 #
-# Correctness does not depend on the relative start time of any other cron:
-# scheduled workflows can be delayed or dropped by GitHub.
+# Correctness does not depend on the relative start time of the two
+# producer crons (dependency-updates.yaml 08:17, min-ha-version-update.yaml
+# 08:30): scheduled workflows can be delayed or dropped by GitHub, and a
+# stale PR refreshed by one of them moments before this runs is still
+# correctly closed per the reasoning above.
+#
+# The one ordering this DOES depend on: dependabot-auto-merge.yaml (PR
+# Auto-merge, daily 08:22, up to 55 minutes) can still be actively
+# rebasing/waiting-on-checks/merging a Dependabot PR when this runs — unlike
+# the two producers above, closing a PR out from under an in-flight merge
+# there doesn't just cost a redundant refresh, it can cancel a Dependabot
+# update that was seconds from landing. 09:30 UTC is scheduled comfortably
+# after PR Auto-merge's worst-case 55-minute window (ending 09:17 at the
+# latest) closes, so by the time this runs, every Dependabot PR that could
+# merge today already has.
 on:
   workflow_dispatch:
   schedule:
-    - cron: "50 8 * * 1"
+    - cron: "30 9 * * 1"
 
 permissions: {}
 
@@ -44,13 +66,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh label create automation-needs-attention --repo "$REPO" --force \
-            --color D93F0B \
-            --description "Automation update is blocked or has remained open unusually long"
-
           prs="$(
             gh pr list --repo "$REPO" --state open --limit 1000 \
-              --json number,author,headRefName,createdAt,labels
+              --json number,author,headRefName,createdAt
           )"
 
           if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
@@ -73,18 +91,14 @@ jobs:
               is_dependabot=true
             fi
 
-            needs_attention=false
-            if [ "$is_dependabot" = "true" ] \
-              || [ "$head_ref" = "automation/min-ha-version-update" ]; then
-              needs_attention=true
-            fi
-
             is_recyclable=false
-            if [ "$head_ref" = "automation/dependency-updates" ]; then
+            if [ "$head_ref" = "automation/dependency-updates" ] \
+              || [ "$head_ref" = "automation/min-ha-version-update" ] \
+              || [ "$is_dependabot" = "true" ]; then
               is_recyclable=true
             fi
 
-            if [ "$needs_attention" != "true" ] && [ "$is_recyclable" != "true" ]; then
+            if [ "$is_recyclable" != "true" ]; then
               continue
             fi
 
@@ -95,25 +109,14 @@ jobs:
               continue
             fi
 
-            if [ "$needs_attention" = "true" ]; then
-              if ! echo "$pr" | jq -e \
-                '.labels[]?.name == "automation-needs-attention"' >/dev/null; then
-                gh pr edit "$number" --repo "$REPO" \
-                  --add-label automation-needs-attention
-                if [ "$is_dependabot" = "true" ]; then
-                  comment="This Dependabot PR has been open for at least seven days and needs maintainer attention. It is deliberately left open: closing a Dependabot PR prevents Dependabot from recreating that update. Resolve, supersede, or explicitly ignore the update rather than using stale cleanup."
-                else
-                  comment="This minimum-HA-version bump has been open for at least seven days and needs a maintainer decision. It is deliberately never auto-merged, and deliberately left open here too rather than closed: dropping support for an older Home Assistant version is a policy call, not a mechanical bump, and closing it would silently recycle this PR every week without anyone actually deciding."
-                fi
-                gh pr comment "$number" --repo "$REPO" --body "$comment"
-              fi
-              echo "Labelled for attention and left open."
-              echo "::endgroup::"
-              continue
+            if [ "$is_dependabot" = "true" ]; then
+              comment="Closing this stale Dependabot PR. This repository's homeassistant/pytest-homeassistant-custom-component pins are managed by scripts/update_dependencies.py, not by direct Dependabot updates, so this PR was never going to resolve as opened. If the underlying advisory is still relevant once that script's next scheduled run lands, Dependabot will surface it again."
+            elif [ "$head_ref" = "automation/min-ha-version-update" ]; then
+              comment="Closing this stale minimum-HA-version bump PR. It is recreated weekly regardless of whether a previous instance is still open, so closing here just avoids carrying a stale, possibly-conflicting draft between runs. The next scheduled run opens a fresh PR from current dependency state; dropping support for an older Home Assistant version still needs a maintainer decision before merging, that decision isn't lost, just deferred to whichever instance is open when someone reviews it."
+            else
+              comment="Closing this stale repository-owned automation PR. Its next scheduled producer run will create a fresh branch and PR from the current dependency state."
             fi
-
-            gh pr close "$number" --repo "$REPO" --comment \
-              "Closing this stale repository-owned automation PR. Its next scheduled producer run will create a fresh branch and PR from the current dependency state."
+            gh pr close "$number" --repo "$REPO" --comment "$comment"
 
             # Best effort: the PR is already closed even if branch deletion
             # is temporarily rejected.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -312,43 +313,78 @@ def test_auto_merge_workflow_is_daily_schedule_only_and_runs_the_sync_script() -
     assert "run: .github/scripts/daily-pr-sync.sh" in text
 
 
-def test_stale_cleanup_labels_but_never_closes_dependabot() -> None:
+def test_stale_cleanup_runs_after_auto_merges_worst_case_window() -> None:
+    # This workflow now closes Dependabot PRs, so it must never run while
+    # PR Auto-merge (dependabot-auto-merge.yaml) could still be mid-merge on
+    # one -- closing a PR out from under an in-flight merge there can cancel
+    # a Dependabot update that was about to land, not just cost a redundant
+    # refresh. PR Auto-merge runs daily at 08:22 UTC with a 55-minute job
+    # timeout, so its worst case ends 09:17 UTC; this workflow's Monday cron
+    # must start no earlier than that.
+    auto_merge_text = AUTO_MERGE_WORKFLOW.read_text()
+    assert 'cron: "22 8 * * *"' in auto_merge_text
+    assert "timeout-minutes: 55" in auto_merge_text
+
+    stale_text = STALE_WORKFLOW.read_text()
+    match = re.search(r'cron:\s*"(\d+)\s+(\d+)\s+\*\s+\*\s+1"', stale_text)
+    assert match, "expected a weekly Monday cron in close-stale-automation-prs.yaml"
+    stale_minute, stale_hour = int(match.group(1)), int(match.group(2))
+    assert (stale_hour, stale_minute) >= (9, 17), (
+        "close-stale-automation-prs.yaml must run at/after 09:17 UTC, PR "
+        "Auto-merge's worst-case end time (08:22 start + 55min timeout)"
+    )
+
+
+def test_stale_cleanup_closes_every_recyclable_pr_with_no_leave_open_bucket() -> None:
     text = STALE_WORKFLOW.read_text()
 
     assert "age_days" in text
     assert 'if [ "$age_days" -lt 7 ]; then' in text
     assert "createdAt,updatedAt" not in text
     assert "updated_hours_ago" not in text
-    assert "automation-needs-attention" in text
+    assert "automation-needs-attention" not in text
+    # No leave-open bucket survives: every recyclable PR is closed, none
+    # are merely commented-on-and-left-open.
+    assert "needs_attention" not in text
+    assert "gh pr comment" not in text
 
-    needs_attention_policy = text.index('if [ "$needs_attention" = "true" ]; then')
-    leave_open = text.index("continue", needs_attention_policy)
-    close_own_automation = text.index('gh pr close "$number"', leave_open)
-    assert needs_attention_policy < leave_open < close_own_automation
+    is_recyclable = text.index("is_recyclable=false")
+    not_recyclable_guard = text.index(
+        'if [ "$is_recyclable" != "true" ]', is_recyclable
+    )
+    stale_guard = text.index('if [ "$age_days" -lt 7 ]; then', not_recyclable_guard)
+    close_dependabot = text.index('if [ "$is_dependabot" = "true" ]; then', stale_guard)
+    close_min_ha = text.index(
+        'elif [ "$head_ref" = "automation/min-ha-version-update" ]; then',
+        close_dependabot,
+    )
+    close_pr = text.index('gh pr close "$number"', close_min_ha)
+    assert (
+        is_recyclable
+        < not_recyclable_guard
+        < stale_guard
+        < close_dependabot
+        < close_min_ha
+        < close_pr
+    )
 
 
-def test_stale_cleanup_leaves_min_ha_version_open_but_recycles_dependency_updates() -> (
-    None
-):
+def test_stale_cleanup_treats_all_three_pr_kinds_as_recyclable() -> None:
     text = STALE_WORKFLOW.read_text()
 
-    # min-ha-version-update never auto-merges (a maintainer decision, not a
-    # mechanical bump — see min-ha-version-update.yaml), so it must join
-    # Dependabot's needs_attention/labelled-and-left-open path rather than
-    # the is_recyclable/closed-and-recreated path that dependency-updates
-    # (which does auto-merge) uses.
-    needs_attention_block = text[
-        text.index("needs_attention=false") : text.index("is_recyclable=false")
-    ]
-    assert "automation/min-ha-version-update" in needs_attention_block
-
+    # dependency-updates auto-merges on its own (stale means CI is blocked),
+    # min-ha-version-update is recreated weekly regardless of whether a
+    # previous instance is open (closing costs nothing), and Dependabot PRs
+    # here can never resolve as opened (see dependabot.yml) — all three are
+    # closed after 7 days rather than left open.
     recyclable_block = text[
         text.index("is_recyclable=false") : text.index(
-            'if [ "$needs_attention" != "true" ]'
+            'if [ "$is_recyclable" != "true" ]'
         )
     ]
     assert "automation/dependency-updates" in recyclable_block
-    assert "automation/min-ha-version-update" not in recyclable_block
+    assert "automation/min-ha-version-update" in recyclable_block
+    assert "is_dependabot" in recyclable_block
 
 
 def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_order(
