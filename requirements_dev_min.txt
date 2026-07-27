@@ -19,7 +19,7 @@ pyserial>=3.5
 
 # Exact version keeps this in lockstep with hacs.json's floor — see the
 # comment above for how/why it moves.
-pytest-homeassistant-custom-component==0.13.305
+pytest-homeassistant-custom-component==0.13.308
 # Coverage reporting; already pulled in transitively but pinned here directly
 # since CI now invokes it explicitly (pytest --cov).
 pytest-cov
