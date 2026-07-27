@@ -1,13 +1,9 @@
-name: Refuse skip-ci on a release PR
+name: Enforce skip-ci scope
 description: >
-  Fails the step (::error + exit 1) if is_release and skip_ci are both
-  'true'. Shared by detect-release.yaml (the early, non-required-check
-  signal), hacs.yaml's validate job, and hassfest.yaml's validate job (each
-  the real, required-check enforcement for their workflow) -- previously
-  three-going-on-four identical inline copies of this echo/exit pair. Not
-  used by tests.yaml's tests-finished job: that job has no checkout step of
-  its own today, and adding one solely to resolve this local composite
-  action would cost more than the duplicated four lines it'd save.
+  Fails when skip-ci is used for a release or for anything other than a
+  documentation-only change. Shared by detect-release.yaml's early signal and
+  the required HACS/Hassfest jobs; tests.yaml repeats the check in its summary
+  job because that job intentionally has no checkout.
 
 inputs:
   is_release:
@@ -16,12 +12,17 @@ inputs:
   skip_ci:
     required: true
     description: "'true' if the skip-ci label is currently on this PR"
+  skip_ci_allowed:
+    required: true
+    description: "'true' if every changed path is documentation-only"
 
 runs:
   using: composite
   steps:
-    - if: inputs.is_release == 'true' && inputs.skip_ci == 'true'
+    - if: >-
+        inputs.skip_ci == 'true' &&
+        (inputs.is_release == 'true' || inputs.skip_ci_allowed != 'true')
       shell: bash
       run: |
-        echo "::error::skip-ci cannot be applied to a release PR — remove the label so this job runs normally before it auto-releases."
+        echo "::error::skip-ci is limited to documentation-only, non-release PRs — remove the label."
         exit 1

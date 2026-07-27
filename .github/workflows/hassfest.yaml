@@ -25,8 +25,8 @@ concurrency:
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
-  # than an inline job: tests.yaml and hacs.yaml need the exact same two
-  # signals (is_release, skip_ci) and previously each carried their own
+  # than an inline job: tests.yaml and hacs.yaml need the same three
+  # signals (is_release, skip_ci, skip_ci_allowed) and previously each carried their own
   # identical ~40-line copy of this job to get them.
   detect-release:
     uses: ./.github/workflows/detect-release.yaml
@@ -38,22 +38,18 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 15
     needs: [detect-release]
-    # Skips at the job level (→ a real "skipped" conclusion) in the one
-    # legitimate case: skip-ci is set AND detect-release confirmed this is
-    # NOT a release — see hacs.yaml's identical job for the full reasoning
-    # (this job is branch protection's actual required context, "validate",
-    # so a confirmed release must still dispatch it to hit the bail step
-    # below; an unconfirmed verdict fails closed to running the real check;
-    # !cancelled() backs this job off if this run itself gets superseded,
-    # rather than racing to complete real work that's about to be discarded).
-    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
+    # Skip only for a confirmed documentation-only, non-release PR.
+    # Invalid or unconfirmed label use dispatches this required job so the
+    # enforcement action fails it explicitly; !cancelled() also prevents a
+    # failed detector from silently bypassing the real validator.
+    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false' && needs.detect-release.outputs.skip_ci_allowed == 'true')"
     steps:
       # Checkout first (needed to resolve the local composite action below),
       # refuse-check second. No `if:` needed on it or the hassfest step
       # after: the refuse step failing already skips them via the default
       # per-step success() requirement.
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
-      - name: Refuse skip-ci on a release PR
+      - name: Refuse skip-ci outside documentation-only PRs
         # Duplicates detect-release's identical step (which only gives an
         # early signal — its own pass/fail isn't required by branch
         # protection) so *this* job explicitly fails instead of the
@@ -63,4 +59,5 @@ jobs:
         with:
           is_release: ${{ needs.detect-release.outputs.is_release }}
           skip_ci: ${{ needs.detect-release.outputs.skip_ci }}
+          skip_ci_allowed: ${{ needs.detect-release.outputs.skip_ci_allowed }}
       - uses: "home-assistant/actions/hassfest@e3fb68ebda13d88a0d695082f471ba2c83d025fb" # master @ 2026-06-22
