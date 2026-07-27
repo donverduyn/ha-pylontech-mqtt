@@ -143,35 +143,35 @@ updates:
         - "zeroconf"
         # </dependabot-exclude-generated>
 
+  # Same reasoning as the pip block above: open-pull-requests-limit: 0
+  # suppresses routine version-update PRs (individual and grouped alike)
+  # while leaving Dependabot's CVE-driven security updates enabled, since
+  # those aren't governed by this limit. No groups: block for Docker
+  # security updates, unlike pip -- pip's exists to keep security bumps
+  # off dependencies HA/phacc pin exactly (see its exclude-patterns list),
+  # which has no equivalent here.
   - package-ecosystem: "docker"
     directory: "/docker"
     schedule:
       interval: "weekly"
-    groups:
-      # Keep minor/patch Docker image updates in one ecosystem-specific PR;
-      # major image updates remain individual PRs for review.
-      docker:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
+    open-pull-requests-limit: 0
 
+  # Same as above, except a groups: block is still needed here: the
+  # codeql-action init/analyze subpaths must always land on the same
+  # version together (tests.yaml: analyze refuses to process a config
+  # init wrote at a different version), so even a security-only update
+  # against one of them has to stay bundled with the other, not just
+  # routine version updates. patterns: "*" bundles every github-actions
+  # security update into one PR, same trade-off pip's own security-updates
+  # group accepts: if the bundle fails CI, the whole group is blocked
+  # together rather than just the offending action.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     groups:
-      # Group minor/patch action updates into one ecosystem-specific PR;
-      # major action updates remain individual PRs for review. This also
-      # preserves atomic CodeQL init/analyze updates for their usual patch
-      # releases; tests.yaml requires both subpaths to use the same version.
-      # Dependabot does not scan .github/actions/** metadata. meta-lint's
-      # check_action_pins.py therefore fails if a workflow update leaves a
-      # composite action on a different commit of the same upstream action.
-      github-actions:
+      security-updates:
+        applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
