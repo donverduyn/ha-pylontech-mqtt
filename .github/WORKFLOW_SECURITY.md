@@ -22,6 +22,7 @@ commit SHAs and allow only selected actions. Allow GitHub-owned actions plus
 these repository patterns:
 
 - `aquasecurity/trivy-action@*`
+- `aquasecurity/setup-trivy@*`
 - `astral-sh/setup-uv@*`
 - `hacs/action@*`
 - `home-assistant/actions/*@*`
