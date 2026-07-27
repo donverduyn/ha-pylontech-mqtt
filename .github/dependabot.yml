@@ -13,6 +13,26 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
+    # homeassistant and pytest-homeassistant-custom-component (phacc) are
+    # fully ignored rather than merely excluded from the group below:
+    # this repo pins homeassistant in two lock files at two different,
+    # deliberately independent versions (requirements_dev.lock.txt tracks
+    # current, requirements_dev_min.lock.txt tracks the min-supported
+    # floor). Dependabot sees one dependency name across both manifests and
+    # can only edit each occurrence's version/hash line directly — it can't
+    # recompile against phacc's own exact `homeassistant==` pin, so the PR
+    # it opens is never internally consistent (and reads as an accidental
+    # "bump the min leg's old pin up to the current leg's target version"
+    # even when it's really overwriting both independently). Confirmed via
+    # PR #68 and #138: both touched both lock files under one target
+    # version, silently downgrading the current leg, and both failed CI.
+    # The only correct way to move either pin is scripts/update_dependencies.py
+    # (via dependency-updates.yaml for current, min-ha-version-update.yaml
+    # for the floor), which recompiles each leg's lock for real and keeps
+    # hacs.json/tests.yaml/the exclude-patterns list below in sync.
+    ignore:
+      - dependency-name: "homeassistant"
+      - dependency-name: "pytest-homeassistant-custom-component"
     # Bundles every currently-available minor/patch security update into
     # one PR instead of one PR per package, except for dependencies excluded
     # below because an HA/phacc release pins them exactly. Major security
@@ -24,9 +44,9 @@ updates:
     # merging several independent PRs in sequence. Trade-off: if the
     # bundle fails *our* CI (a real behavioral incompatibility Dependabot's
     # resolution check can't see), the whole group is blocked together,
-    # not just the offending package. The stale-automation workflow leaves
-    # blocked Dependabot PRs open and labels them for maintainer attention;
-    # closing one would prevent Dependabot from recreating that update.
+    # not just the offending package. The stale-automation workflow closes
+    # blocked Dependabot PRs after 7 days rather than leaving them open —
+    # see close-stale-automation-prs.yaml.
     groups:
       security-updates:
         applies-to: security-updates
@@ -39,10 +59,12 @@ updates:
         # (scripts/update_dependencies.py:update_dependabot_exclude_list) —
         # do not hand-edit; edit that function instead. Each name is pinned
         # exactly by the currently locked homeassistant/phacc releases. It is
-        # excluded from this group, not globally ignored, so Dependabot opens
-        # an individual security PR that exposes the blocked dependency. The
-        # stale-automation workflow keeps that PR visible and labels it for
-        # maintainer attention if the HA floor still blocks it.
+        # excluded from this group so a security update against one of them
+        # opens as its own individual PR instead of blocking the whole
+        # group. "homeassistant" itself is generated into this list too
+        # (phacc's own requires_dist exactly pins it) but is moot here: the
+        # `ignore:` block above already fully suppresses it before Dependabot
+        # ever reaches group evaluation, for the reason explained there.
         exclude-patterns:
         # <dependabot-exclude-generated>
         - "aiodns"
