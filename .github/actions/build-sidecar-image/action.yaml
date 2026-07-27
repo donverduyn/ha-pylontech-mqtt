@@ -2,9 +2,10 @@ name: Build and cache the sidecar CI image
 description: >
   Builds or restores the sidecar Docker image, smoke-tests and vulnerability
   scans it against the current runner and advisory database, and leaves a
-  compressed image archive for the e2e jobs. Cache entries created by every
-  push include platform and architecture identity so master builds safely seed
-  the cache used by later PRs.
+  compressed image archive for the e2e jobs. Cache entries include platform and
+  architecture identity, so the master-baseline.yaml run that shares this
+  composite safely seeds the cache later PRs restore -- a cache written by a PR
+  run is scoped to its own merge ref and no other PR can see it.
 
 runs:
   using: composite

@@ -90,7 +90,24 @@ is_dependabot() {
 # Required context names are read once from branch protection itself
 # rather than hardcoded, so this keeps working if they ever change.
 default_branch="$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name)"
-required_contexts="$(gh api "repos/$REPO/branches/$default_branch/protection/required_status_checks/contexts" 2>/dev/null || echo '[]')"
+
+# Reading branch protection needs the automation App's "Administration: read"
+# permission; contents/pull-requests/workflows alone get a 403. `gh api` writes
+# an error response's *body* to stdout while exiting non-zero, so the previous
+# `2>/dev/null || echo '[]'` fallback silently produced one variable holding
+# two concatenated JSON documents. Both readings of that value were observed in
+# production: `jq 'length'` returned "3\n0" (never "0", so the
+# no-required-contexts shortcut never fired) and `--argjson ctx` died with
+# "invalid JSON text", which before #163 became a false "pass" that merged
+# seconds after a rebase and after #163 made every eligible PR spin to its
+# timeout -- nothing could merge either way. There is no safe fallback here:
+# an empty list means "merge without checking anything". Fail closed instead.
+if ! required_contexts="$(
+  gh api "repos/$REPO/branches/$default_branch/protection/required_status_checks/contexts"
+)" || ! jq -e 'type == "array" and length > 0' >/dev/null 2>&1 <<<"$required_contexts"; then
+  echo "::error::Could not read $default_branch's required status check contexts. The automation App needs the 'Administration: read' repository permission (see .github/AUTOMATION_APP.md); refusing to merge anything without knowing which checks are required."
+  exit 1
+fi
 
 # Echoes exactly one of: pass | fail | timeout
 wait_for_required_checks() {
@@ -98,21 +115,18 @@ wait_for_required_checks() {
   local deadline runs classification
   deadline="$(( $(date +%s) + MAX_WAIT_SECONDS ))"
 
-  if [ "$(jq 'length' <<<"$required_contexts")" = "0" ]; then
-    echo "pass"
-    return
-  fi
-
+  # No "$required_contexts is empty" shortcut here on purpose: an empty list
+  # would mean "merge without verifying anything", and the only way to get one
+  # is a failed or malformed lookup, which is now rejected at startup instead.
   while true; do
     # Both the API call succeeding AND its output actually being one valid
-    # JSON array are required before trusting it -- a transient hiccup was
-    # observed producing output `gh api` itself exited 0 for that still
-    # failed to parse ("jq: invalid JSON text passed to --argjson"). That
-    # previously reached the classification step anyway, whose failure was
-    # then silently swallowed by the `!` below and misread as "no pending
-    # entries found", i.e. a false "pass" -- exactly the untested-commit
-    # risk this whole function exists to prevent. Every failure path here
-    # now falls through to the same safe "not yet complete" branch instead.
+    # JSON array are required before trusting it. Output that fails to parse
+    # ("jq: invalid JSON text passed to --argjson") previously reached the
+    # classification step anyway, whose failure was then silently swallowed
+    # by the `!` below and misread as "no pending entries found", i.e. a
+    # false "pass" -- exactly the untested-commit risk this whole function
+    # exists to prevent. Every failure path here now falls through to the
+    # same safe "not yet complete" branch instead.
     if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>/dev/null)" \
       && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$runs"; then
       # A required context can have more than one check-run entry for the
@@ -258,7 +272,10 @@ while read -r pr; do
   case "$(wait_for_required_checks "$number" "$head_sha")" in
     pass)
       echo "PR #$number: required checks passed — merging now."
-      gh pr merge "$url" --repo "$REPO" --squash \
+      # --delete-branch: the repository does not have "automatically delete
+      # head branches" enabled, so without this every merged Dependabot
+      # branch stays on the remote forever.
+      gh pr merge "$url" --repo "$REPO" --squash --delete-branch \
         || echo "PR #$number: merge attempt was rejected — leaving for the next run."
       ;;
     fail)

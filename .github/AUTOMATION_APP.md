@@ -15,6 +15,7 @@ Use these GitHub App settings:
 - Callback URL, setup URL, OAuth user authorization, device flow, and
   webhooks: disabled or blank
 - Repository permissions:
+  - Administration: read
   - Contents: read and write
   - Pull requests: read and write
   - Workflows: read and write
@@ -23,6 +24,22 @@ The Workflows permission is required because the minimum-version updater may
 change `.github/workflows/tests.yaml`, and App-authenticated PR branch updates
 must trigger the normal pull-request checks. Install the App only on this
 repository.
+
+The Administration permission is **read-only** and is required by
+`.github/scripts/daily-pr-sync.sh`, which reads the default branch's required
+status check contexts from branch protection before merging anything. That
+endpoint returns 403 for the other three permissions; `gh api` writes an error
+response's body to stdout while exiting non-zero, so a missing grant produced a
+variable holding two concatenated JSON documents rather than a clean failure —
+which made the merge path either fail open (attempting merges seconds after a
+rebase) or never merge at all. The script now refuses to run without this read,
+so granting it is mandatory, not optional.
+
+Changing an installed App's permissions requires the account that installed it
+to approve the new request before tokens carry it. Until that approval lands,
+`actions/create-github-app-token` fails outright when it asks for
+`permission-administration: read`, and **PR Auto-merge cannot run at all** —
+including its rebase and stale-close passes.
 
 ## Actions configuration
 

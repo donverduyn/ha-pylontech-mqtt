@@ -1,0 +1,125 @@
+name: Master baseline
+
+# Tests runs only while a change is still a PR (see tests.yaml). This workflow
+# deliberately does NOT re-validate master — branch protection requires
+# up-to-date branches and squash-merges, so the merged tree is the tree
+# tests.yaml already passed on. It exists for the two things *only* a
+# default-branch run can produce, both of which were lost with that push
+# trigger:
+#
+# 1. Actions caches other pull requests can restore. A cache written by a PR
+#    run is scoped to refs/pull/<n>/merge and is invisible to every other PR;
+#    only default-branch runs write entries any later PR can read. Without a
+#    master run, the uv/venv environments (~200 MB each, two lockfiles), the
+#    sidecar image, Trivy's vulnerability database, and mypy's incremental
+#    cache are rebuilt cold in every PR, forever, and never shared between
+#    them. Every cache key here is byte-identical to the one tests.yaml uses,
+#    which is what makes the entries interchangeable — keep them in sync.
+# 2. Default-branch code scanning. CodeQL alerts are tracked per ref: with no
+#    analysis of master, the repository's code-scanning results freeze at
+#    whichever commit was analyzed last (alerts fixed on master never close,
+#    new ones never appear), and each PR analysis loses the overlay base
+#    database that lets it run incrementally instead of building a full one.
+#
+# Nothing here gates anything: no job of this workflow is a required status
+# check, and it cannot be — master commits are already merged. A failure means
+# the cache or the scan needs attention, not that master is broken.
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Only the newest master commit's caches and scan results are worth having;
+  # an in-flight run for an older commit is superseded, not queued.
+  group: master-baseline
+  cancel-in-progress: true
+
+jobs:
+  python-env:
+    # Seeds the venv + setup-uv caches for both lockfiles, and mypy's
+    # incremental cache for the one the lint job uses.
+    name: "python-env (${{ matrix.ha-version }})"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors tests.yaml's pytest matrix; see its comment for why
+        # python-version tracks each lockfile's own homeassistant pin.
+        include:
+          - ha-version: current
+            lockfile: requirements_dev.lock.txt
+            python-version: "3.14"
+          - ha-version: min
+            lockfile: requirements_dev_min.lock.txt
+            python-version: "3.13"
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+      - uses: "./.github/actions/setup-python-env"
+        with:
+          python-version: ${{ matrix.python-version }}
+          lockfile: ${{ matrix.lockfile }}
+      - name: Cache mypy incremental cache
+        # Same key and restore-keys as tests.yaml's lint job. Only the
+        # "current" leg: that's the only lockfile lint runs against, and the
+        # key's hash is what makes the two entries interchangeable.
+        if: matrix.ha-version == 'current'
+        uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-${{ hashFiles('requirements_dev.lock.txt') }}-${{ github.sha }}
+          restore-keys: |
+            mypy-${{ runner.os }}-${{ hashFiles('requirements_dev.lock.txt') }}-
+      - name: Mypy
+        # Run purely to populate .mypy_cache above for later PRs to restore.
+        # This tree already passed mypy as a PR; a failure here means the
+        # cache didn't get written, which is worth surfacing.
+        if: matrix.ha-version == 'current'
+        run: mypy
+
+  sidecar-image:
+    # Seeds the docker-image-v2 cache plus Trivy's database/binary caches. No
+    # upload-artifact, unlike tests.yaml's docker-build: nothing downstream
+    # consumes the archive here, only the cache entry matters.
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 20
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+      - uses: ./.github/actions/build-sidecar-image
+
+  codeql:
+    # Keeps the default branch's code-scanning results current and produces
+    # the overlay base database PR analyses build on. Mirrors tests.yaml's
+    # codeql-analyze job; init and analyze must stay pinned to the same
+    # codeql-action SHA as each other and as that job (see its comment).
+    name: "codeql (${{ matrix.language }})"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+      - name: Initialize CodeQL
+        uses: "github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81" # v4.37.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Perform CodeQL Analysis
+        uses: "github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81" # v4.37.3
+        with:
+          category: "/language:${{ matrix.language }}"
