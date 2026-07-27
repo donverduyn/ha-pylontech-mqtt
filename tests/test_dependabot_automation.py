@@ -22,7 +22,14 @@ printf '%s\n' "$*" >>"$GH_LOG"
 if [ "$1" = "api" ]; then
   case "$2" in
     */protection/required_status_checks/contexts)
-      printenv GH_REQUIRED_CONTEXTS || printf '[]\n'
+      if [ -n "${GH_CONTEXTS_ERROR:-}" ]; then
+        # Mirrors real `gh api` behaviour on an error status: the response
+        # body goes to stdout, the diagnostic to stderr, exit code non-zero.
+        printf '%s\n' "$GH_CONTEXTS_ERROR"
+        echo "gh: Resource not accessible by integration (HTTP 403)" >&2
+        exit 1
+      fi
+      printenv GH_REQUIRED_CONTEXTS || printf '["ci"]\n'
       ;;
     */commits/*/check-runs)
       sha="${2##*/commits/}"
@@ -564,16 +571,18 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     # Both eligible, passing grouped PRs are merged for real (not gh's async
     # --auto) -- #3 before #4, matching processing order -- while the
     # failing (#1), individual (#2), and human (#5) PRs are never merged.
-    squash_calls = [call for call in calls if call.endswith("--squash")]
+    squash_calls = [call for call in calls if call.endswith("--squash --delete-branch")]
     assert squash_calls == [
-        "pr merge https://example.test/pr/3 --repo owner/repo --squash",
-        "pr merge https://example.test/pr/4 --repo owner/repo --squash",
+        "pr merge https://example.test/pr/3 --repo owner/repo --squash --delete-branch",
+        "pr merge https://example.test/pr/4 --repo owner/repo --squash --delete-branch",
     ]
 
     # A human PR's own auto-merge choice is never touched, and it never
     # gets merged by this workflow.
     assert "pr merge 5 --repo owner/repo --disable-auto" not in calls
-    assert not any("pr/5 --repo owner/repo --squash" in call for call in calls)
+    assert not any(
+        "pr/5 --repo owner/repo --squash --delete-branch" in call for call in calls
+    )
 
 
 def test_daily_sync_merges_individual_non_major_prs_not_just_grouped_ones(
@@ -630,10 +639,10 @@ def test_daily_sync_merges_individual_non_major_prs_not_just_grouped_ones(
     subprocess.run([DAILY_SYNC], check=True)
 
     calls = log.read_text().splitlines()
-    squash_calls = {call for call in calls if call.endswith("--squash")}
+    squash_calls = {call for call in calls if call.endswith("--squash --delete-branch")}
     assert squash_calls == {
-        "pr merge https://example.test/pr/1 --repo owner/repo --squash",
-        "pr merge https://example.test/pr/2 --repo owner/repo --squash",
+        "pr merge https://example.test/pr/1 --repo owner/repo --squash --delete-branch",
+        "pr merge https://example.test/pr/2 --repo owner/repo --squash --delete-branch",
     }
 
 
@@ -675,7 +684,7 @@ def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
     assert "pr diff 1 --repo owner/repo --name-only" in calls
     assert any(call.startswith("pr close 1 ") for call in calls)
-    assert not any(call.endswith("--squash") for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
 
 
 def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
@@ -739,7 +748,10 @@ def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
 
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert "pr merge https://example.test/pr/1 --repo owner/repo --squash" in calls
+    assert (
+        "pr merge https://example.test/pr/1 --repo owner/repo --squash --delete-branch"
+        in calls
+    )
 
 
 def test_daily_sync_never_merges_on_malformed_check_runs_output(
@@ -787,7 +799,65 @@ def test_daily_sync_never_merges_on_malformed_check_runs_output(
 
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert not any(call.endswith("--squash") for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value"),
+    [
+        # The real production failure: the automation App lacked
+        # "Administration: read", so this endpoint 403'd. `gh api` writes an
+        # error response's body to stdout while exiting non-zero, so the old
+        # `2>/dev/null || echo '[]'` fallback yielded one variable holding two
+        # concatenated JSON documents -- which read either as "nothing is
+        # required" (merging unverified) or broke every downstream jq call
+        # (merging nothing, after burning the run budget on timeouts).
+        ("GH_CONTEXTS_ERROR", '{"message":"Resource not accessible by integration"}'),
+        # An empty list is indistinguishable from "no checks are required",
+        # which would merge every PR without verifying anything.
+        ("GH_REQUIRED_CONTEXTS", "[]"),
+        # Anything that is not a JSON array cannot be classified at all.
+        ("GH_REQUIRED_CONTEXTS", "not json"),
+    ],
+)
+def test_daily_sync_refuses_to_run_without_a_usable_required_context_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env_name: str, env_value: str
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv(env_name, env_value)
+
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": "Bumps the docker group with 1 update: python.\n",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+
+    result = subprocess.run([DAILY_SYNC], capture_output=True, text=True)
+
+    # Fails closed and loudly, before touching a single PR.
+    assert result.returncode != 0
+    assert "Administration: read" in result.stdout
+    calls = log.read_text().splitlines()
+    assert not any(call.startswith("pr list") for call in calls)
+    assert not any("--squash" in call for call in calls)
 
 
 def test_daily_sync_skips_merge_when_branch_is_dirty_or_behind_after_rebase(
@@ -832,7 +902,7 @@ def test_daily_sync_skips_merge_when_branch_is_dirty_or_behind_after_rebase(
 
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert not any(call.endswith("--squash") for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
 
 
 def test_daily_sync_stops_merging_once_the_run_budget_is_spent(
@@ -876,4 +946,4 @@ def test_daily_sync_stops_merging_once_the_run_budget_is_spent(
 
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert not any(call.endswith("--squash") for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)

@@ -81,5 +81,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: automation/dependency-updates
         run: |
+          # No --delete-branch here, unlike daily-pr-sync.sh's synchronous
+          # merge: --auto only *enables* auto-merge and returns, so the merge
+          # itself happens later with no gh process left to delete anything.
+          # Cleaning up this branch is the repository's "automatically delete
+          # head branches" setting to do; the branch is recreated from scratch
+          # by the next scheduled run either way.
           gh pr merge "$BRANCH" --auto --squash \
             || echo "Could not enable auto-merge; leaving the PR for review."

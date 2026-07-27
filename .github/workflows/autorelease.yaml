@@ -102,19 +102,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TARGET_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
 
+          # Reads both values through jq's $ENV rather than interpolating them
+          # into the filter text, so neither can alter the program itself.
+          # shellcheck disable=SC2016 # $ENV.* is jq syntax, not shell expansion
           merged_pr="$(
             gh api "repos/$REPO/commits/$TARGET_SHA/pulls" \
-              --jq "[.[] | select(
+              --jq '[.[] | select(
                 .merged_at != null and
-                .merge_commit_sha == \"$TARGET_SHA\" and
-                .base.ref == \"master\"
-              )] | if length == 1 then .[0] else empty end"
+                .merge_commit_sha == $ENV.TARGET_SHA and
+                .base.ref == $ENV.DEFAULT_BRANCH
+              )] | if length == 1 then .[0] else empty end'
           )"
           if [ -z "$merged_pr" ]; then
-            echo "::error::Release commit $TARGET_SHA is not the merge commit of exactly one PR into master."
+            echo "::error::Release commit $TARGET_SHA is not the merge commit of exactly one PR into $DEFAULT_BRANCH."
             exit 1
           fi
 
@@ -133,6 +137,24 @@ jobs:
 
           echo "Reusing Tests run $run_id from PR #$pr_number ($pr_head_sha)."
           gh run watch "$run_id" --repo "$REPO" --exit-status
+
+          # A run whose jobs were all skipped also concludes "success", so the
+          # watch above is not by itself proof the suite ran. tests-finished is
+          # the required summary job (see tests.yaml): require *it* to have
+          # succeeded for real. A release PR can never legitimately skip it --
+          # skip-ci is limited to documentation-only, non-release PRs, and a
+          # manifest.json version bump is neither -- so this only ever rejects
+          # a release that genuinely was not tested.
+          summary="$(
+            gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "tests-finished")]
+                    | if length == 1 then .[0].conclusion else empty end'
+          )"
+          if [ "$summary" != "success" ]; then
+            echo "::error::Tests run $run_id has no single successful tests-finished job (got: ${summary:-none})."
+            exit 1
+          fi
+          echo "tests-finished succeeded in run $run_id."
 
   release:
     needs: [detect, require-pr-tests]

@@ -2,7 +2,11 @@ name: Mint automation app token
 description: >
   Creates a short-lived installation token for the HA Pylontech MQTT
   Automation GitHub App (see .github/AUTOMATION_APP.md), scoped to exactly
-  contents/pull-requests/workflows write. Shared by dependabot-auto-merge.yaml's
+  contents/pull-requests/workflows write plus administration read. The
+  administration grant is read-only and exists solely so daily-pr-sync.sh can
+  read the default branch's required status check contexts; that endpoint 403s
+  for the other three permissions, and the script refuses to merge without it.
+  Shared by dependabot-auto-merge.yaml's
   two jobs, which previously each carried an identical copy of this
   actions/create-github-app-token call. Not used by dependency-updates.yaml
   or min-ha-version-update.yaml, which each still carry their own inline
@@ -39,6 +43,7 @@ runs:
       with:
         client-id: ${{ inputs.client-id }}
         private-key: ${{ inputs.private-key }}
+        permission-administration: read
         permission-contents: write
         permission-pull-requests: write
         permission-workflows: write

@@ -151,7 +151,10 @@ jobs:
         # commit's sha so every run always saves a fresh cache entry; the
         # restore-keys prefix match falls back to the closest previous run's
         # cache so mypy's incremental mode only re-checks files that changed
-        # since then instead of the whole project cold.
+        # since then instead of the whole project cold. That fallback can only
+        # cross PR boundaries because master-baseline.yaml writes an entry
+        # under the same key on every master push: PR-written cache entries
+        # are scoped to their own merge ref and invisible to other PRs.
         uses: "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
         with:
           path: .mypy_cache
@@ -227,6 +230,9 @@ jobs:
     # which were real sources of bugs the old design hit in practice.
     # CodeQL deliberately remains part of Tests rather than a separate
     # workflow so the required summary below can gate on its result directly.
+    # master-baseline.yaml runs the same scan on every master push; that is
+    # what keeps the default branch's code-scanning results current and
+    # produces the overlay base database this job builds on incrementally.
     if: *skip_unless_real_check
     runs-on: "ubuntu-latest"
     timeout-minutes: 30
@@ -340,6 +346,9 @@ jobs:
     if: *skip_unless_real_check
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+      # master-baseline.yaml runs this same composite on every master push,
+      # which is what seeds the image cache this job restores: a cache written
+      # by a PR run is scoped to that PR's merge ref alone.
       - uses: ./.github/actions/build-sidecar-image
       - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7.0.1
         with:
