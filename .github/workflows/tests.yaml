@@ -1,9 +1,13 @@
 name: Tests
 
 on:
-  # Keep CodeQL and the rest of the validation suite together: every push is
-  # tested here, including default-branch pushes that may trigger a release.
+  # Keep CodeQL and the rest of the validation suite together. PR branches
+  # are covered by pull_request below; limiting push to master prevents every
+  # same-repository PR commit from running this full workflow twice while still
+  # preserving the exact push-triggered run autorelease waits for.
   push:
+    branches:
+      - master
   # Deliberately NOT adding labeled/unlabeled here (tried once, reverted):
   # `gh pr create --label` fires opened and labeled as two separate events
   # for the same commit, since GitHub has no atomic "create pre-labeled"
@@ -258,8 +262,9 @@ jobs:
     # separate checks:read permission to query check-runs by SHA, both of
     # which were real sources of bugs the old design hit in practice.
     # CodeQL deliberately remains part of Tests rather than a separate
-    # scheduled workflow. Because Tests runs on every push, default-branch
-    # commits receive a first-class scan and appear in code-scanning results.
+    # scheduled workflow. Because Tests runs on every master push, default-
+    # branch commits receive a first-class scan and appear in code-scanning
+    # results.
     if: *skip_unless_real_check
     runs-on: "ubuntu-latest"
     timeout-minutes: 30

@@ -20,7 +20,7 @@ inputs:
     description: "The App's Client ID (repo variable AUTOMATION_APP_CLIENT_ID)"
   private-key:
     required: true
-    description: "The App's private key PEM (repo secret AUTOMATION_APP_PRIVATE_KEY)"
+    description: "The App's private key PEM (automation environment secret)"
 
 outputs:
   token:

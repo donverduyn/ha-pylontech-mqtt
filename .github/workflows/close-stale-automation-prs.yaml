@@ -52,27 +52,31 @@ name: Review Stale Automation PRs
 # correctly closed per the reasoning above.
 #
 # The one ordering this DOES depend on: dependabot-auto-merge.yaml (PR
-# Auto-merge, daily 08:22, up to 55 minutes) can still be actively
-# rebasing/waiting-on-checks/merging a Dependabot PR when this runs — unlike
-# the two producers above, closing a PR out from under an in-flight merge
-# there doesn't just cost a redundant refresh, it can cancel a Dependabot
-# update that was seconds from landing. 09:30 UTC is scheduled comfortably
-# after PR Auto-merge's worst-case 55-minute window (ending 09:17 at the
-# latest) closes, so by the time this runs, every Dependabot PR that could
-# merge today already has.
+# Auto-merge) can still be actively rebasing/waiting-on-checks/merging a
+# Dependabot PR when this runs. Cron spacing cannot enforce that ordering
+# because scheduled workflows may be delayed independently. workflow_run
+# starts the weekly sweep only after Monday's scheduled PR Auto-merge run
+# completes successfully; the shared concurrency group also prevents a manual
+# sweep from overlapping a manual or scheduled maintenance run.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 9 * * 1"
+  workflow_run:
+    workflows: ["PR Auto-merge"]
+    types: [completed]
 
 permissions: {}
 
 concurrency:
-  group: review-stale-automation-prs
-  cancel-in-progress: true
+  group: dependency-pr-maintenance
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   review-stale:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' &&
+      github.event.workflow_run.conclusion == 'success')
     runs-on: "ubuntu-latest"
     timeout-minutes: 10
     permissions:
@@ -91,8 +95,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          SOURCE_RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
         run: |
           set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_run" ] \
+            && [ "$(date -u -d "$SOURCE_RUN_STARTED_AT" +%u)" != "1" ]; then
+            echo "The completed scheduled PR Auto-merge run was not Monday's run; no weekly stale sweep is due."
+            exit 0
+          fi
 
           prs="$(
             gh pr list --repo "$REPO" --state open --limit 1000 \

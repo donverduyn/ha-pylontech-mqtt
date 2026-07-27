@@ -15,6 +15,22 @@ Create these Actions environments:
   keep the branch restriction so branch-dispatched workflow revisions cannot
   publish.
 
+## Actions execution policy
+
+In **Settings → Actions → General**, require external actions to use full-length
+commit SHAs and allow only selected actions. Allow GitHub-owned actions plus
+these repository patterns:
+
+- `aquasecurity/trivy-action@*`
+- `astral-sh/setup-uv@*`
+- `hacs/action@*`
+- `home-assistant/actions/*@*`
+
+Do not enable the blanket "verified creators" allowance. The repository's
+`check_action_pins.py` remains a readable CI diagnostic, while the repository
+setting prevents a non-pinned action from beginning execution before that
+diagnostic runs.
+
 ## Default-branch ruleset
 
 Required status checks are configured by exact job name, not workflow name —
