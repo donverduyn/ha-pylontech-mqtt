@@ -1,8 +1,9 @@
 name: Auto-release
 
 # A push that changes manifest.json's version is a deliberate release request.
-# Every push is also tested by tests.yaml; publication waits for the exact
-# push-triggered Tests run to pass before calling the reusable release pipeline.
+# Tests runs only while the change is a PR. Before publishing, reuse the
+# successful pull-request-triggered Tests run associated with this merge
+# commit instead of running the full suite again on master.
 on:
   push:
     branches:
@@ -87,15 +88,16 @@ jobs:
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
-  wait-for-tests:
+  require-pr-tests:
     needs: detect
     if: needs.detect.outputs.release == 'true'
     runs-on: "ubuntu-latest"
-    timeout-minutes: 60
+    timeout-minutes: 10
     permissions:
       actions: read
+      pull-requests: read
     steps:
-      - name: Require the push-triggered Tests run for this commit
+      - name: Require the merged PR's Tests run
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -103,33 +105,40 @@ jobs:
         run: |
           set -euo pipefail
 
-          run_id=""
-          for _ in $(seq 1 60); do
-            run_id="$(
-              gh run list --repo "$REPO" --workflow tests.yaml \
-                --event push --commit "$TARGET_SHA" --limit 20 \
-                --json databaseId,createdAt \
-                --jq 'sort_by(.createdAt) | .[-1].databaseId // empty'
-            )"
-            if [ -n "$run_id" ]; then
-              break
-            fi
-            sleep 10
-          done
-
-          if [ -z "$run_id" ]; then
-            echo "::error::No push-triggered Tests run appeared for $TARGET_SHA."
+          merged_pr="$(
+            gh api "repos/$REPO/commits/$TARGET_SHA/pulls" \
+              --jq "[.[] | select(
+                .merged_at != null and
+                .merge_commit_sha == \"$TARGET_SHA\" and
+                .base.ref == \"master\"
+              )] | if length == 1 then .[0] else empty end"
+          )"
+          if [ -z "$merged_pr" ]; then
+            echo "::error::Release commit $TARGET_SHA is not the merge commit of exactly one PR into master."
             exit 1
           fi
 
-          echo "Waiting for Tests run $run_id for $TARGET_SHA."
+          pr_number="$(jq -r .number <<< "$merged_pr")"
+          pr_head_sha="$(jq -r .head.sha <<< "$merged_pr")"
+          run_id="$(
+            gh run list --repo "$REPO" --workflow tests.yaml \
+              --event pull_request --commit "$pr_head_sha" --limit 20 \
+              --json databaseId,createdAt \
+              --jq 'sort_by(.createdAt) | .[-1].databaseId // empty'
+          )"
+          if [ -z "$run_id" ]; then
+            echo "::error::No pull-request-triggered Tests run exists for PR #$pr_number head $pr_head_sha."
+            exit 1
+          fi
+
+          echo "Reusing Tests run $run_id from PR #$pr_number ($pr_head_sha)."
           gh run watch "$run_id" --repo "$REPO" --exit-status
 
   release:
-    needs: [detect, wait-for-tests]
+    needs: [detect, require-pr-tests]
     if: >-
       needs.detect.outputs.release == 'true' &&
-      needs.wait-for-tests.result == 'success'
+      needs.require-pr-tests.result == 'success'
     permissions:
       actions: read
       artifact-metadata: write
