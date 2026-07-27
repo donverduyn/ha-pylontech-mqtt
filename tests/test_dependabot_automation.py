@@ -191,6 +191,31 @@ def test_supersession_check_treats_a_pip_pr_still_ahead_of_master_as_current(
     assert result == "current"
 
 
+def test_supersession_check_is_superseded_if_any_one_of_several_files_meets_it(
+    tmp_path: Path,
+) -> None:
+    # A package can be pinned independently across more than one lockfile
+    # (e.g. requirements_dev.lock.txt vs requirements_dev_min.lock.txt),
+    # each leg free to move on its own schedule. PR #145 (orjson 3.11.3 ->
+    # 3.11.6) hit exactly this: by the time it was checked, the dev leg
+    # had already moved past the proposal to 3.11.9 via homeassistant's
+    # own exact transitive pin, while the min leg was still sitting at the
+    # pre-PR 3.11.3 -- genuinely still an upgrade from that leg's own
+    # point of view. One superseded leg is enough: the PR's single
+    # version number was never going to apply across every leg at once.
+    (tmp_path / "requirements_dev.lock.txt").write_text("orjson==3.11.9\n")
+    (tmp_path / "requirements_dev_min.lock.txt").write_text("orjson==3.11.3\n")
+
+    result = _run_supersession_check(
+        "chore(deps-dev): bump orjson from 3.11.3 to 3.11.6",
+        "Bumps orjson from 3.11.3 to 3.11.6.",
+        ["requirements_dev.lock.txt", "requirements_dev_min.lock.txt"],
+        tmp_path,
+    )
+
+    assert result == "superseded"
+
+
 def test_supersession_check_detects_a_docker_pr_already_superseded_on_master(
     tmp_path: Path,
 ) -> None:
