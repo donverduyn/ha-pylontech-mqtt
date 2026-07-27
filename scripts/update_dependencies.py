@@ -14,11 +14,13 @@ import datetime
 import functools
 import hashlib
 import html.parser
+import itertools
 import json
 import re
 import subprocess
 import urllib.request
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,9 +42,11 @@ DEPENDABOT_YML = ROOT / ".github" / "dependabot.yml"
 # before dropping support for anything older. See requirements_dev_min.txt
 # for the mechanism this drives.
 MIN_HA_VERSION_MONTHS_BEHIND = 6
-# How many pytest-homeassistant-custom-component releases to walk forward
-# (never backward) past the months-behind target looking for one whose
-# dependency set actually resolves, before giving up and failing loudly.
+# How many feature (major.minor) lines to walk forward (never backward)
+# past the months-behind target looking for one whose dependency set
+# actually resolves, before giving up and failing loudly. Each attempt
+# uses that feature line's own highest patch, so this is a budget of
+# calendar months, not individual patch releases.
 MIN_HA_VERSION_MAX_ATTEMPTS = 12
 
 NPM_VERSION_PINS: OrderedDict[str, str] = OrderedDict(
@@ -842,18 +846,73 @@ def update_dependabot_exclude_list() -> None:
     DEPENDABOT_YML.write_text(text)
 
 
-def refresh_min_ha_version() -> None:
-    cutoff = months_ago(MIN_HA_VERSION_MONTHS_BEHIND)
-    releases = phacc_releases_sorted()
-    candidate_indices = [i for i, (_, day) in enumerate(releases) if day <= cutoff]
-    if not candidate_indices:
+def min_ha_version_candidates(
+    releases: list[tuple[str, str]],
+    cutoff: str,
+    max_attempts: int,
+    ha_feature: Callable[[str], tuple[int, int]],
+) -> list[str]:
+    """Order phacc versions to try, each the highest patch of its own HA
+    feature (year.month) line -- never an early patch of a line whose
+    later patches also exist, since a single "closest release by date"
+    pick can land on one (e.g. an earlier run choosing homeassistant
+    2026.1.0 when .1-.3 already existed but hadn't crossed the
+    months-behind cutoff yet at the time).
+
+    Grouping is by the *resolved* homeassistant version's (year, month),
+    via `ha_feature` -- phacc's own version numbers (e.g. "0.13.308") are
+    an internal release counter with no relation to HA's calendar scheme,
+    so parsing the phacc version string itself groups nothing meaningful.
+
+    The first, months-behind-eligible feature line is bounded by `cutoff`
+    -- the whole point of the policy. Walking forward past it (only when
+    that line doesn't resolve) already means exceeding months-behind to
+    find *something* that works, so each further line uses its true
+    latest patch, cutoff or not: patches of one line share the same
+    dependency floor, so if a line's newest patch doesn't resolve, an
+    earlier patch of that same line won't either -- there's nothing extra
+    to gain from trying them one at a time.
+    """
+    eligible = [version for version, day in releases if day <= cutoff]
+    if not eligible:
         raise SystemExit(
             f"no pytest-homeassistant-custom-component release found on/before {cutoff}"
         )
-    start = candidate_indices[-1]
+    eligible_set = set(eligible)
+    start_index = next(i for i, (v, _) in enumerate(releases) if v == eligible[-1])
 
-    attempts = releases[start : start + MIN_HA_VERSION_MAX_ATTEMPTS]
-    for phacc_version, _ in attempts:
+    candidates: list[str] = []
+    is_first_group = True
+    for _, group in itertools.groupby(
+        releases[start_index:], key=lambda item: ha_feature(item[0])
+    ):
+        members = list(group)
+        if is_first_group:
+            # Bounded by the months-behind cutoff -- the whole point of
+            # the policy -- only for this very first feature line; every
+            # line reached below already means exceeding it to find
+            # something that resolves.
+            members = [m for m in members if m[0] in eligible_set]
+            is_first_group = False
+        candidates.append(members[-1][0])
+        if len(candidates) >= max_attempts:
+            break
+    return candidates
+
+
+def _resolved_ha_feature(phacc_version: str) -> tuple[int, int]:
+    year, month = homeassistant_pin_for_phacc(phacc_version).split(".")[:2]
+    return (int(year), int(month))
+
+
+def refresh_min_ha_version() -> None:
+    cutoff = months_ago(MIN_HA_VERSION_MONTHS_BEHIND)
+    releases = phacc_releases_sorted()
+    attempts = min_ha_version_candidates(
+        releases, cutoff, MIN_HA_VERSION_MAX_ATTEMPTS, _resolved_ha_feature
+    )
+
+    for phacc_version in attempts:
         ha_version = homeassistant_pin_for_phacc(phacc_version)
         python_floor = homeassistant_requires_python(ha_version)
         print(
@@ -871,8 +930,8 @@ def refresh_min_ha_version() -> None:
             return
 
     raise SystemExit(
-        f"none of {len(attempts)} pytest-homeassistant-custom-component releases from "
-        f"{attempts[0][0]} onward resolved cleanly — needs manual investigation"
+        f"none of {len(attempts)} pytest-homeassistant-custom-component feature lines "
+        f"from {attempts[0]} onward resolved cleanly — needs manual investigation"
     )
 
 
