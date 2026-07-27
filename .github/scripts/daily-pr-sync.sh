@@ -104,7 +104,17 @@ wait_for_required_checks() {
   fi
 
   while true; do
-    if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>&1)"; then
+    # Both the API call succeeding AND its output actually being one valid
+    # JSON array are required before trusting it -- a transient hiccup was
+    # observed producing output `gh api` itself exited 0 for that still
+    # failed to parse ("jq: invalid JSON text passed to --argjson"). That
+    # previously reached the classification step anyway, whose failure was
+    # then silently swallowed by the `!` below and misread as "no pending
+    # entries found", i.e. a false "pass" -- exactly the untested-commit
+    # risk this whole function exists to prevent. Every failure path here
+    # now falls through to the same safe "not yet complete" branch instead.
+    if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>/dev/null)" \
+      && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$runs"; then
       # A required context can have more than one check-run entry for the
       # same commit (re-runs, multiple triggering events observed on this
       # repo's own "tests-finished" context) -- classify each required
@@ -112,7 +122,7 @@ wait_for_required_checks() {
       # counting total entries against the number of required names, or
       # duplicates make this loop until timeout even once everything has
       # actually passed.
-      classification="$(jq -n --argjson ctx "$required_contexts" --argjson runs "$runs" '
+      if classification="$(jq -n --argjson ctx "$required_contexts" --argjson runs "$runs" '
         $ctx | map(. as $name |
           ($runs | map(select(.name == $name))) as $matches |
           if ($matches | any(.status == "completed" and (.conclusion == "success" or .conclusion == "neutral" or .conclusion == "skipped")))
@@ -121,22 +131,24 @@ wait_for_required_checks() {
           then "fail"
           else "pending"
           end
-        )')"
-
-      if ! jq -e 'any(. == "pending")' >/dev/null <<<"$classification"; then
-        if jq -e 'any(. == "fail")' >/dev/null <<<"$classification"; then
-          echo "fail"
-        else
-          echo "pass"
+        )' 2>/dev/null)"; then
+        if ! jq -e 'any(. == "pending")' >/dev/null 2>&1 <<<"$classification"; then
+          if jq -e 'any(. == "fail")' >/dev/null 2>&1 <<<"$classification"; then
+            echo "fail"
+          else
+            echo "pass"
+          fi
+          return
         fi
-        return
+      else
+        echo "PR #$number: classifying check-runs failed -- treating as not yet complete." >&2
       fi
     else
-      # A real failure (rate limit, transient API error, an expiring token)
-      # looks identical to "still running" unless logged separately --
-      # surfaced on stderr so it doesn't corrupt this function's
-      # pass/fail/timeout return value on stdout.
-      echo "PR #$number: gh api check-runs failed (${runs}) -- treating as not yet complete." >&2
+      # A real failure (rate limit, transient API error, an expiring
+      # token) looks identical to "still running" unless logged
+      # separately -- surfaced on stderr so it doesn't corrupt this
+      # function's pass/fail/timeout return value on stdout.
+      echo "PR #$number: gh api check-runs failed or returned unparseable output -- treating as not yet complete." >&2
     fi
 
     if [ "$(date +%s)" -ge "$deadline" ]; then
