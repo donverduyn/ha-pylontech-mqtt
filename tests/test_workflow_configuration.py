@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yaml"
+AUTORELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "autorelease.yaml"
 DETECT_RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "detect-release.yaml"
 HACS_WORKFLOW = ROOT / ".github" / "workflows" / "hacs.yaml"
 HASSFEST_WORKFLOW = ROOT / ".github" / "workflows" / "hassfest.yaml"
@@ -16,12 +17,21 @@ AUTOMATION_SECRET_CONSUMERS = {
 }
 
 
-def test_tests_push_trigger_is_limited_to_master() -> None:
+def test_tests_runs_automatically_only_for_pull_requests() -> None:
     text = TESTS_WORKFLOW.read_text()
     trigger = text[text.index("on:") : text.index("permissions:")]
 
-    assert "  push:\n    branches:\n      - master\n" in trigger
+    assert "\n  push:" not in trigger
     assert "  pull_request:\n" in trigger
+
+
+def test_autorelease_reuses_pr_tests_instead_of_waiting_for_push_tests() -> None:
+    text = AUTORELEASE_WORKFLOW.read_text()
+
+    assert "require-pr-tests:" in text
+    assert '--event pull_request --commit "$pr_head_sha"' in text
+    assert "--event push" not in text
+    assert "needs.require-pr-tests.result == 'success'" in text
 
 
 def test_automation_private_key_consumers_use_protected_environment() -> None:
