@@ -2,6 +2,7 @@
 
 import re
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -318,3 +319,135 @@ def test_update_dependabot_exclude_list_rewrites_only_group_exclusions(
     assert '        - "aiohttp"\n        - "pyjwt"\n' in text
     assert "ignore:" not in text
     assert "stale" not in text
+
+
+def _fake_ha_feature(mapping: dict[str, str]) -> Callable[[str], tuple[int, int]]:
+    def resolve(phacc_version: str) -> tuple[int, int]:
+        year, month = mapping[phacc_version].split(".")[:2]
+        return (int(year), int(month))
+
+    return resolve
+
+
+def test_min_ha_version_candidates_picks_the_newest_eligible_patch_of_its_feature():
+    # Real scenario this was built to fix: an earlier run picked whatever
+    # phacc release resolved to homeassistant 2026.1.0 (the release
+    # closest to the cutoff *at that time*), then later patches of the
+    # very same 2026.1 line (.1, .2, .3) crossed the months-behind cutoff
+    # too without ever being reconsidered. The first candidate must be the
+    # newest *eligible* patch of the newest eligible feature line, not
+    # whichever specific release happens to sit right at the cutoff.
+    # phacc's own version numbers are an unrelated internal counter (real
+    # example: "0.13.308") -- only the resolved HA version matters.
+    releases = [
+        ("0.13.100", "2026-01-06"),
+        ("0.13.101", "2026-01-13"),
+        ("0.13.102", "2026-01-20"),
+        ("0.13.103", "2026-01-27"),
+        ("0.13.104", "2026-02-03"),
+    ]
+    ha_feature = _fake_ha_feature(
+        {
+            "0.13.100": "2026.1.0",
+            "0.13.101": "2026.1.1",
+            "0.13.102": "2026.1.2",
+            "0.13.103": "2026.1.3",
+            "0.13.104": "2026.2.0",
+        }
+    )
+
+    candidates = update_dependencies.min_ha_version_candidates(
+        releases, cutoff="2026-01-31", max_attempts=12, ha_feature=ha_feature
+    )
+
+    assert candidates[0] == "0.13.103"
+
+
+def test_min_ha_version_candidates_walks_forward_by_whole_feature_line():
+    # Once the target line doesn't resolve (the caller drops a candidate
+    # after a failed compile), the next attempt must be the *next feature
+    # line's* newest patch -- never an earlier patch of the same line that
+    # already failed (they share the same dependency floor) or the next
+    # line's oldest patch when a newer one of it already exists too.
+    releases = [
+        ("0.13.100", "2026-01-06"),
+        ("0.13.101", "2026-01-13"),
+        ("0.13.102", "2026-02-03"),
+        ("0.13.103", "2026-02-10"),
+        ("0.13.104", "2026-03-03"),
+    ]
+    ha_feature = _fake_ha_feature(
+        {
+            "0.13.100": "2026.1.0",
+            "0.13.101": "2026.1.1",
+            "0.13.102": "2026.2.0",
+            "0.13.103": "2026.2.1",
+            "0.13.104": "2026.3.0",
+        }
+    )
+
+    candidates = update_dependencies.min_ha_version_candidates(
+        releases, cutoff="2026-01-31", max_attempts=12, ha_feature=ha_feature
+    )
+
+    assert candidates == ["0.13.101", "0.13.103", "0.13.104"]
+
+
+def test_min_ha_version_candidates_only_bounds_the_first_feature_by_cutoff():
+    # Walking forward past the months-behind target already means
+    # exceeding it to find something that resolves -- every feature line
+    # after the first uses its true latest patch regardless of whether
+    # that specific patch's own release date crosses the cutoff.
+    releases = [
+        ("0.13.100", "2026-01-06"),
+        ("0.13.101", "2026-06-01"),
+        ("0.13.102", "2027-01-01"),  # released after "today" in this test
+    ]
+    ha_feature = _fake_ha_feature(
+        {
+            "0.13.100": "2026.1.0",
+            "0.13.101": "2026.2.0",
+            "0.13.102": "2026.2.1",
+        }
+    )
+
+    candidates = update_dependencies.min_ha_version_candidates(
+        releases, cutoff="2026-01-10", max_attempts=12, ha_feature=ha_feature
+    )
+
+    assert candidates == ["0.13.100", "0.13.102"]
+
+
+def test_min_ha_version_candidates_respects_max_attempts_as_a_feature_budget():
+    releases = [
+        ("0.13.100", "2026-01-06"),
+        ("0.13.101", "2026-02-03"),
+        ("0.13.102", "2026-03-03"),
+        ("0.13.103", "2026-04-03"),
+    ]
+    ha_feature = _fake_ha_feature(
+        {
+            "0.13.100": "2026.1.0",
+            "0.13.101": "2026.2.0",
+            "0.13.102": "2026.3.0",
+            "0.13.103": "2026.4.0",
+        }
+    )
+
+    candidates = update_dependencies.min_ha_version_candidates(
+        releases, cutoff="2026-01-10", max_attempts=2, ha_feature=ha_feature
+    )
+
+    assert candidates == ["0.13.100", "0.13.101"]
+
+
+def test_min_ha_version_candidates_raises_when_nothing_is_old_enough():
+    releases = [("0.13.100", "2026-01-06")]
+
+    def unused_ha_feature(_phacc_version: str) -> tuple[int, int]:
+        raise AssertionError("must fail before ever resolving an HA feature")
+
+    with pytest.raises(SystemExit, match="no pytest-homeassistant-custom-component"):
+        update_dependencies.min_ha_version_candidates(
+            releases, cutoff="2025-01-01", max_attempts=12, ha_feature=unused_ha_feature
+        )
