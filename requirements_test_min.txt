@@ -1,9 +1,8 @@
-# Same dev toolchain as requirements_dev.txt, pinned to the minimum Home
-# Assistant version this integration declares support for (hacs.json's
-# "homeassistant" field) instead of whatever is current. Compiled
-# separately (requirements_dev_min.lock.txt) so CI can run the test suite
-# against both ends of the supported range — see
-# .github/workflows/tests.yaml's `ha-version` matrix.
+# Test-only environment pinned to the minimum Home Assistant version this
+# integration declares support for (hacs.json's "homeassistant" field).
+# Tooling such as Ruff, Mypy, Pyright, pre-commit, and pip-audit runs only in
+# the current development environment; keeping it out of this input prevents
+# unrelated tool constraints from affecting minimum-HA compatibility.
 #
 # The pin below and hacs.json's floor are refreshed automatically by
 # `scripts/update_dependencies.py --min-ha-version-only` (see
@@ -23,16 +22,3 @@ pytest-homeassistant-custom-component==0.13.308
 # Coverage reporting; already pulled in transitively but pinned here directly
 # since CI now invokes it explicitly (pytest --cov).
 pytest-cov
-
-# Code quality
-ruff
-pyright
-mypy
-# Runs the .pre-commit-config.yaml hooks; see CONTRIBUTING.md.
-pre-commit
-# Stubs for pyserial, imported by docker/main.py; mypy's strict mode requires
-# an explicit stub package rather than falling back to untyped/Any.
-types-pyserial
-
-# Vulnerability scanning
-pip-audit

@@ -259,14 +259,14 @@ def test_update_tests_workflow_min_python_patches_both_matrix_entries(
         "      matrix:\n"
         "        include:\n"
         "          - ha-version: min\n"
-        "            lockfile: requirements_dev_min.lock.txt\n"
+        "            lockfile: requirements_test_min.lock.txt\n"
         '            python-version: "3.13"\n'
         "  e2e:\n"
         "    strategy:\n"
         "      matrix:\n"
         "        include:\n"
         "          - ha-version: min\n"
-        "            lockfile: requirements_dev_min.lock.txt\n"
+        "            lockfile: requirements_test_min.lock.txt\n"
         '            python-version: "3.13"\n'
     )
     monkeypatch.setattr(update_dependencies, "TESTS_WORKFLOW", tests_workflow)
@@ -287,7 +287,7 @@ def test_update_tests_workflow_min_python_requires_exactly_two_matches(
         "      matrix:\n"
         "        include:\n"
         "          - ha-version: min\n"
-        "            lockfile: requirements_dev_min.lock.txt\n"
+        "            lockfile: requirements_test_min.lock.txt\n"
         '            python-version: "3.13"\n'
     )
     monkeypatch.setattr(update_dependencies, "TESTS_WORKFLOW", tests_workflow)
@@ -305,7 +305,7 @@ def test_tests_workflow_min_python_version_is_identical_across_both_matrices():
     """
     text = (_ROOT / ".github" / "workflows" / "tests.yaml").read_text()
     matches = re.findall(
-        r"- ha-version: min\n\s*lockfile: requirements_dev_min\.lock\.txt\n"
+        r"- ha-version: min\n\s*lockfile: requirements_test_min\.lock\.txt\n"
         r'\s*python-version: "([^"]+)"',
         text,
     )
@@ -374,11 +374,11 @@ def test_locked_pin_raises_when_the_package_is_not_pinned(tmp_path):
         update_dependencies.locked_pin(lock_file, "homeassistant")
 
 
-def test_collect_dependabot_exclude_names_unions_and_normalizes_both_ha_legs(
+def test_collect_dependabot_ignore_names_unions_and_normalizes_both_ha_legs(
     monkeypatch,
 ):
     monkeypatch.setattr(update_dependencies, "REQUIREMENTS_DEV_LOCK", "dev-lock")
-    monkeypatch.setattr(update_dependencies, "REQUIREMENTS_DEV_MIN_LOCK", "min-lock")
+    monkeypatch.setattr(update_dependencies, "REQUIREMENTS_TEST_MIN_LOCK", "min-lock")
 
     pinned_versions = {
         ("dev-lock", "homeassistant"): "2026.7.2",
@@ -399,7 +399,10 @@ def test_collect_dependabot_exclude_names_unions_and_normalizes_both_ha_legs(
             "paho-mqtt": "2.1.0",
         },
         ("homeassistant", "2026.1.0"): {"pyjwt": "2.10.1"},
-        ("pytest-homeassistant-custom-component", "0.13.346"): {"pytest": "9.0.3"},
+        ("pytest-homeassistant-custom-component", "0.13.346"): {
+            "homeassistant": "2026.7.1",
+            "pytest": "9.0.3",
+        },
         ("pytest-homeassistant-custom-component", "0.13.305"): {"pytest": "9.0.0"},
     }
 
@@ -408,36 +411,71 @@ def test_collect_dependabot_exclude_names_unions_and_normalizes_both_ha_legs(
 
     monkeypatch.setattr(update_dependencies, "exact_pins", _exact_pins)
 
-    names = update_dependencies.collect_dependabot_exclude_names()
+    names = update_dependencies.collect_dependabot_ignore_names()
 
     # "PyJWT" and "pyjwt" from the two legs collapse into one normalized
     # entry; the two pytest pins from either phacc leg collapse likewise.
     assert names == ["aiohttp", "paho-mqtt", "pyjwt", "pytest"]
 
 
-def test_update_dependabot_exclude_list_rewrites_only_group_exclusions(
+def test_update_dependabot_ignore_list_rewrites_generated_global_ignores(
     tmp_path, monkeypatch
 ):
     dependabot_yml = tmp_path / "dependabot.yml"
     dependabot_yml.write_text(
-        "        exclude-patterns:\n"
-        "        # <dependabot-exclude-generated>\n"
-        '        - "stale"\n'
-        "        # </dependabot-exclude-generated>\n"
+        "    ignore:\n"
+        '      - dependency-name: "manual-root"\n'
+        "      # <dependabot-ignore-generated>\n"
+        '      - dependency-name: "stale"\n'
+        "      # </dependabot-ignore-generated>\n"
     )
     monkeypatch.setattr(update_dependencies, "DEPENDABOT_YML", dependabot_yml)
     monkeypatch.setattr(
         update_dependencies,
-        "collect_dependabot_exclude_names",
+        "collect_dependabot_ignore_names",
         lambda: ["aiohttp", "pyjwt"],
     )
 
-    update_dependencies.update_dependabot_exclude_list()
+    update_dependencies.update_dependabot_ignore_list()
 
     text = dependabot_yml.read_text()
-    assert '        - "aiohttp"\n        - "pyjwt"\n' in text
-    assert "ignore:" not in text
+    assert '      - dependency-name: "aiohttp"\n' in text
+    assert '      - dependency-name: "pyjwt"\n' in text
+    assert "manual-root" in text
+    assert "exclude-patterns" not in text
     assert "stale" not in text
+
+
+def test_real_dependabot_config_suppresses_exact_pin_prs_at_source() -> None:
+    text = (_ROOT / ".github" / "dependabot.yml").read_text()
+    ignore_block = text.split("    ignore:", 1)[1].split("    groups:", 1)[0]
+
+    assert ignore_block.count("# <dependabot-ignore-generated>") == 1
+    assert ignore_block.count("# </dependabot-ignore-generated>") == 1
+    assert '      - dependency-name: "pytest"' in ignore_block
+    assert "exclude-patterns:" not in text
+
+
+def test_minimum_requirements_are_test_only() -> None:
+    requirements = {
+        line.split("==", 1)[0].split(">=", 1)[0]
+        for raw in (_ROOT / "requirements_test_min.txt").read_text().splitlines()
+        if (line := raw.strip()) and not line.startswith("#")
+    }
+
+    assert {
+        "pyserial",
+        "pytest-homeassistant-custom-component",
+        "pytest-cov",
+    } <= requirements
+    assert {
+        "ruff",
+        "pyright",
+        "mypy",
+        "pre-commit",
+        "types-pyserial",
+        "pip-audit",
+    }.isdisjoint(requirements)
 
 
 def _fake_ha_feature(mapping: dict[str, str]) -> Callable[[str], tuple[int, int]]:

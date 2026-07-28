@@ -1,15 +1,11 @@
 # Pinned to a specific patch release, by digest, for reproducible builds.
 # Bump deliberately; check https://hub.docker.com/_/python/tags for updates,
-# then re-resolve the digest (e.g. `docker buildx imagetools inspect
-# python:3.13.14-slim` or via the registry API) — do not just edit the tag.
-# Kept on 3.13 because that's still the floor CI actually exercises this
-# code under: the "min" pytest/e2e leg (requirements_dev_min.lock.txt, HA's
-# declared minimum) and pyproject.toml's ruff target both stay on 3.13, so
-# shipping a different interpreter here would leave that floor effectively
-# untested. (The devcontainer, and the "current" pytest/e2e leg plus mypy/
-# pyright's parse target, moved to 3.14 in lockstep with the "current" HA
-# pin needing it — see requirements_dev.lock.txt/pyproject.toml — but that
-# doesn't change what this always-3.13-tested production runtime needs.)
+# then re-resolve the digest (e.g. docker buildx imagetools inspect
+# python:3.14.6-slim, or via the registry API) — do not just edit the tag.
+# The production sidecar follows the current Python 3.14 toolchain. The
+# minimum-HA pytest/e2e leg still runs the shared Python code under 3.13 via
+# requirements_test_min.lock.txt, so compatibility with the declared floor
+# remains tested independently of the container interpreter.
 FROM python:3.14.6-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
 
 # Set by the release workflow (.github/workflows/release.yaml) from the tag

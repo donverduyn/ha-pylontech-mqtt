@@ -5,10 +5,6 @@
 #      human PRs alike, including ones that can never be merged
 #      automatically -- so every branch stays as fresh as automation can
 #      make it, even a PR stuck failing on its own merits.
-#   1a. Any Dependabot update proposing a version for a package the locked
-#      homeassistant/phacc releases pin exactly is closed on the spot: no
-#      rebase can make it resolvable (see
-#      dependabot-phacc-pinned-check.sh).
 #   2. Any Dependabot update Dependabot didn't group as a minor/patch
 #      update -- an individual PR, or a major-version bump either way --
 #      gets checked for supersession first (see below) and closed if
@@ -261,42 +257,12 @@ while read -r pr; do
   pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
   bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
 
-  # Checked before the supersession call below because it needs no extra API
-  # request, and because it recognises a strictly stronger blocker: a
-  # superseded PR merely proposes something already done, while this one
-  # proposes something that can never resolve at all. Left visible as an
-  # opened PR (dependabot.yml excludes these names from the security-updates
-  # group rather than ignoring them, deliberately), but closed here within a
-  # day with the specific reason instead of failing `pytest (min)` for the
-  # seven days it used to take close-stale-automation-prs.yaml's generic age
-  # sweep to reach it.
-  # Non-zero here means the generated block in dependabot.yml no longer
-  # parses, not that this PR is unclassifiable -- the script already returns
-  # "ok" for the latter. Surfaced as its own ::error:: annotation and skipped
-  # rather than merged past, so the run stays red until someone looks while
-  # the rest of the maintenance pass still happens.
-  if ! phacc_pinned="$("$script_dir"/dependabot-phacc-pinned-check.sh "$title" "$body")"; then
-    echo "PR #$number: skipping the exact-pin check; see the error above."
-    phacc_pinned="ok"
-  fi
-  if [ "$phacc_pinned" = "blocked" ]; then
-    echo "PR #$number: proposes a version for a package the locked homeassistant/phacc releases pin exactly — closing."
-    gh pr close "$number" --repo "$REPO" --comment \
-      "Closing: this PR bumps a package that the currently-locked \`homeassistant\`/\`pytest-homeassistant-custom-component\` releases pin exactly, so the dependency set cannot resolve at any version this PR could propose — rebasing it will not help. Moving that pin is \`scripts/update_dependencies.py\`'s job (dependency-updates.yaml for the current leg, min-ha-version-update.yaml for the floor); once one of those lands, a still-relevant advisory surfaces again on its own." \
-      || echo "PR #$number: could not close; PR may have changed concurrently."
-    continue
-  fi
 
-  # Grouping is Dependabot's own ecosystem-level packaging choice, not a
-  # safety signal -- a security update for an excluded package (single,
-  # minor-or-patch) or an action with no tagged releases to compare
-  # against (single, unknown, e.g. home-assistant/actions/hassfest) is no
-  # riskier than a grouped one, so it isn't skipped below. But anything
-  # not already going through the grouped-and-merged path still needs a
-  # supersession check first: an individual PR stuck failing for real
-  # (e.g. blocked by an older lockfile's exact transitive pin) would
-  # otherwise retry and fail forever instead of ever being recognized as
-  # already-satisfied and closed.
+  # Dependabot grouping is an ecosystem-level packaging choice, not a
+  # safety signal. An individual update or an action with no tagged releases
+  # to compare is no riskier than a grouped update, but anything outside the
+  # grouped-and-merged path still needs a supersession check so stale PRs do
+  # not retry forever after the base branch has already overtaken them.
   if [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; then
     changed_files="$(gh pr diff "$number" --repo "$REPO" --name-only 2>/dev/null || true)"
     supersession="$("$script_dir"/dependabot-supersession-check.sh "$title" "$body" <<<"$changed_files")"
