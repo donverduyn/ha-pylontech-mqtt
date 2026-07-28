@@ -142,9 +142,14 @@ jobs:
           # watch above is not by itself proof the suite ran. tests-finished is
           # the required summary job (see tests.yaml): require *it* to have
           # succeeded for real. A release PR can never legitimately skip it --
-          # skip-ci is limited to documentation-only, non-release PRs, and a
-          # manifest.json version bump is neither -- so this only ever rejects
-          # a release that genuinely was not tested.
+          # skip-ci is refused outright on any PR that bumps manifest.json's
+          # version (detect-release.yaml and .github/actions/
+          # refuse-skip-ci-on-release), which is exactly what makes a PR a
+          # release -- so this only ever rejects a release that genuinely was
+          # not tested. (skip-ci is otherwise unrestricted on non-release PRs;
+          # it used to additionally require documentation-only changed paths,
+          # and that restriction was removed -- see detect-release.yaml's
+          # header.)
           summary="$(
             gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
               --jq '[.jobs[] | select(.name == "tests-finished")]

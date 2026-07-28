@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
-  # than an inline job: tests.yaml and hassfest.yaml need the same three
+  # than an inline job: tests.yaml and hassfest.yaml need the same two
   # signals (is_release, skip_ci) and previously each carried their own
   # identical ~40-line copy of this job to get them.
   detect-release:

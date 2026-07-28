@@ -55,6 +55,14 @@ docker/*.env
 # after the GitHub App configuration is tested; never commit actual values.
 secrets.env
 
+# Private keys. The automation GitHub App's PEM belongs in the `automation`
+# environment secret AUTOMATION_APP_PRIVATE_KEY (see .github/AUTOMATION_APP.md),
+# never in the tree -- but a downloaded copy lands in the repository root as
+# privatekey.pem by default, where `git add --all` would stage it into a public
+# repository. Ignored by pattern so that can't happen by accident.
+*.pem
+*.key
+
 # Home Assistant / HACS
 *.log
 

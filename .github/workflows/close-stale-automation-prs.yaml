@@ -83,8 +83,13 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 10
     permissions:
+      # pull-requests: write covers both actions this job takes on a PR --
+      # closing it and posting the explanatory comment. A PR comment is
+      # created through the shared issue-comments endpoint, but for a pull
+      # request that endpoint accepts pull-requests: write; `issues: write`
+      # used to be granted alongside and was never needed.
+      # contents: write is for the head-branch ref deletion after the close.
       contents: write
-      issues: write
       pull-requests: write
     steps:
       # Needed only to run .github/scripts/dependabot-bump-kind.sh -- this
