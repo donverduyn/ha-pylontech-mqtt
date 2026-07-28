@@ -19,6 +19,30 @@ concurrency:
   queue: max
 
 jobs:
+  # Seeds the default-branch Actions caches every PR restores, and keeps the
+  # default branch's CodeQL results current. Called rather than triggered on
+  # its own `push:` so a merge produces one run instead of two — see that
+  # workflow's header for the mechanism and for the concurrency trade this
+  # inherits.
+  #
+  # No `needs:`, so it runs alongside detect rather than behind it: it has
+  # nothing to do with whether this push is a release, and gating it on detect
+  # would delay cache seeding on every ordinary merge for no reason. It is
+  # equally not in any release job's `needs:` — a cache or scan failure must
+  # never block publishing a release that require-pr-tests has already cleared.
+  #
+  # The grants below are the ceiling for the called workflow: its codeql job
+  # requests exactly these, and a reusable workflow cannot exceed what its
+  # caller allows. Its other two jobs declare none and inherit that file's own
+  # `permissions: {}`.
+  baseline:
+    uses: ./.github/workflows/master-baseline.yaml
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+
   detect:
     runs-on: "ubuntu-latest"
     timeout-minutes: 10

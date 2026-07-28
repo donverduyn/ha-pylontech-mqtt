@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -67,8 +68,17 @@ def test_master_baseline_seeds_default_branch_caches_and_code_scanning() -> None
     text = MASTER_BASELINE_WORKFLOW.read_text()
     trigger = text[text.index("on:") : text.index("permissions:")]
 
-    assert "  push:\n    branches:\n      - master\n" in trigger
+    # Reached by autorelease.yaml calling it, not by a `push:` trigger of its
+    # own: both wanted the same event, and two triggers listed two runs against
+    # every merge. A called workflow's jobs run inside the caller's run, so the
+    # default-branch execution these caches and scans require is preserved
+    # while a merge produces one run. The call is asserted below, since without
+    # it this workflow would silently stop running on master altogether.
+    assert "  workflow_call:\n" in trigger
+    assert "  push:" not in trigger
     assert "  pull_request:" not in trigger
+    autorelease_text = AUTORELEASE_WORKFLOW.read_text()
+    assert "uses: ./.github/workflows/master-baseline.yaml" in autorelease_text
 
     # The three cache producers plus the default-branch scan.
     assert "./.github/actions/setup-python-env" in text
@@ -88,6 +98,17 @@ def test_master_baseline_seeds_default_branch_caches_and_code_scanning() -> None
     # Not a gate: master commits are already merged, so no job here may post a
     # required status check's name.
     assert "\n  tests-finished:" not in text
+
+    # Nor may it gate the release. Now that these jobs run inside
+    # autorelease.yaml's run, a failure here -- a newly disclosed advisory
+    # failing Trivy, a CodeQL hiccup -- must not stop a release that
+    # require-pr-tests has already cleared, so no release job may take
+    # `baseline` as a dependency.
+    needs = re.findall(r"^\s*needs:.*$", autorelease_text, re.MULTILINE)
+    assert needs, "autorelease.yaml should still declare job dependencies"
+    assert not [line for line in needs if "baseline" in line], (
+        f"no autorelease job may depend on baseline; found: {needs}"
+    )
 
 
 def test_automation_app_token_can_read_branch_protection() -> None:
@@ -126,10 +147,9 @@ def test_pr_workflows_cancel_only_stale_pr_runs() -> None:
 
 
 def test_meta_lint_verifies_required_status_check_contexts_resolve() -> None:
-    # Branch protection matches by the exact string a check-run posts under,
-    # and GitHub does not block a PR on a required context no run produces --
-    # so renaming one of these jobs silently stops it being enforced instead
-    # of failing. Nothing else in the repository can see that list.
+    # Branch protection matches by the exact string a check-run posts under.
+    # Renaming one of these jobs leaves the PR blocked waiting for the old
+    # context; this checker identifies the rename as the cause.
     assert (
         "run: python3 .github/scripts/check_required_contexts.py"
         in TESTS_WORKFLOW.read_text()

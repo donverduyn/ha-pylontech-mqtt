@@ -24,19 +24,34 @@ name: Master baseline
 # Nothing here gates anything: no job of this workflow is a required status
 # check, and it cannot be — master commits are already merged. A failure means
 # the cache or the scan needs attention, not that master is broken.
+#
+# Invoked by autorelease.yaml rather than triggering on master pushes itself.
+# Both wanted to run on exactly the same event, and two `push:` triggers meant
+# two separate runs listed against every merge. A called workflow's jobs run
+# *inside* the caller's run, so this is now one run per merge with these jobs
+# alongside autorelease's own — the same consolidation release.yaml and
+# detect-release.yaml already use. (This workflow still appears in the Actions
+# sidebar, as those two do; what it no longer does is produce a run of its own.)
+#
+# Deliberately no `concurrency:` here any more. It used to carry
+# `group: master-baseline, cancel-in-progress: true` on the reasoning that only
+# the newest master commit's caches and scan are worth having. As a called
+# workflow it has no run of its own to group, and the caller's policy governs:
+# autorelease uses cancel-in-progress:false + queue:max, because a queued
+# version bump must never be superseded. That trade is accepted rather than
+# worked around -- re-adding a cancelling group here would cancel jobs inside
+# an in-flight autorelease run. What it costs: a burst of merges seeds the
+# cache once per merge instead of once for the newest, and during a real
+# release (build-and-scan alone allows 45 minutes) a following merge's refresh
+# queues behind it. Neither is a correctness problem -- every cache key here is
+# content-hashed, so a late refresh only risks one PR missing a hit -- while
+# the property the caller's policy protects, never dropping a release, is not
+# one this workflow may weaken.
 on:
-  push:
-    branches:
-      - master
+  workflow_call:
   workflow_dispatch:
 
 permissions: {}
-
-concurrency:
-  # Only the newest master commit's caches and scan results are worth having;
-  # an in-flight run for an older commit is superseded, not queued.
-  group: master-baseline
-  cancel-in-progress: true
 
 jobs:
   python-env:
