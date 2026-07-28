@@ -32,7 +32,16 @@ Do not enable the blanket "verified creators" allowance. The repository's
 setting prevents a non-pinned action from beginning execution before that
 diagnostic runs.
 
-## Default-branch ruleset
+## Default-branch protection
+
+The default branch uses **classic branch protection**, not a repository
+ruleset. That is load-bearing, not incidental: `.github/scripts/daily-pr-sync.sh`
+reads the required contexts from the classic
+`/repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts`
+endpoint, which a ruleset does not populate. Recreating these rules as a
+ruleset would 404 that read, and because the script refuses to merge anything
+when it cannot learn which checks are required (deliberately — see below), all
+Dependabot auto-merge would stop. Migrate only together with that script.
 
 Required status checks are configured by exact job name, not workflow name —
 GitHub matches on the job's displayed check-run name, which is the job `id`
@@ -103,11 +112,24 @@ restriction was removed deliberately; applying the label is now a maintainer
 judgement call on each pull request, with no mechanical backstop. Treat it as
 equivalent to merging unreviewed and untested, because that is what it is.
 
-The one remaining restriction is that `skip-ci` still fails a release pull
-request (one that bumps `manifest.json`'s version). That is not a policy
-preference: `autorelease.yaml`'s `require-pr-tests` job demands a real
-successful `tests-finished` before publishing, so a skipped suite on a version
-bump does not merge faster — it fails the release.
+Two restrictions remain.
+
+`skip-ci` still fails a release pull request (one that bumps
+`manifest.json`'s version). That is not a policy preference:
+`autorelease.yaml`'s `require-pr-tests` job demands a real successful
+`tests-finished` before publishing, so a skipped suite on a version bump does
+not merge faster — it fails the release.
+
+`skip-ci` is also ignored on any pull request whose author is a bot
+(`detect-release.yaml` reads `author.is_bot` and reports `skip_ci=false`
+regardless of the label). The label represents a maintainer's judgement about
+a change the maintainer wrote, and a bot-authored pull request is exactly the
+kind that merges with no human in the loop: `.github/scripts/daily-pr-sync.sh`
+merges a Dependabot pull request once its required contexts report a
+non-failing conclusion, and a *skipped* required job reports one. Without this
+restriction, a `skip-ci` label reaching a Dependabot or automation pull request
+would hand the daily sync a green-looking, wholly untested pull request to
+merge on its own.
 
 Where repository workflow-execution protections are available, restrict
 `workflow_dispatch` execution to maintainers.
@@ -117,3 +139,21 @@ Where repository workflow-execution protections are available, restrict
 Enable immutable GitHub Releases in repository settings. The release workflow
 also fails when a Git tag, GitHub Release, or versioned GHCR tag already exists;
 it never updates a published release identity in place.
+
+The requirement that a release be tested is enforced by `autorelease.yaml`'s
+`require-pr-tests` job, not by `release.yaml`. `release.yaml`'s own `validate`
+job checks release *identity* only — tag shape, agreement with
+`manifest.json`, ancestry from the default branch, and that nothing is already
+published under that name.
+
+That matters because `release.yaml` also accepts a direct
+`workflow_dispatch`, which exists to re-cut a release whose earlier attempt
+failed partway through publication, and which therefore bypasses
+`require-pr-tests`. This is intentional (see that workflow's header): the
+commit being re-cut is one `autorelease.yaml` already accepted. It does mean
+the dispatch entry point is capable of publishing an arbitrary
+default-branch-reachable commit whose version bump never went through a tested
+PR. Two repository settings are what bound that, and both are load-bearing:
+
+- the `release` environment's deployment-branch restriction, and
+- restricting `workflow_dispatch` execution to maintainers.

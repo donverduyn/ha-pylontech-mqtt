@@ -50,23 +50,9 @@ runs:
       run: docker load -i /tmp/pylon2mqtt-ci.tar.gz
     - name: Smoke test the built image
       shell: bash
-      # Run on both newly built and restored bytes. The cache key proves the
-      # archive is byte-identical, but the runner's Docker/runtime environment
-      # can change independently and still needs exercising.
-      run: |
-        set +e
-        output="$(docker run --rm pylon2mqtt:ci 2>&1)"
-        code=$?
-        set -e
-        echo "$output"
-        if [ "$code" -ne 1 ]; then
-          echo "::error::Expected exit code 1 (fail-fast config validation), got $code"
-          exit 1
-        fi
-        if ! echo "$output" | grep -q "MQTT_BROKER environment variable is required"; then
-          echo "::error::Expected fail-fast MQTT_BROKER validation message was not logged"
-          exit 1
-        fi
+      # Run on both newly built and restored bytes; see the script's header for
+      # why, and for why it is a real *.sh file rather than an inline block.
+      run: .github/scripts/smoke-test-sidecar-image.sh pylon2mqtt:ci
     - name: Gate on fixable high or critical vulnerabilities
       # Always rescan, including cache hits: advisory data, severity, and fix
       # availability change independently of image bytes. Reusing a previously

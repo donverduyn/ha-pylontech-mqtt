@@ -77,13 +77,37 @@ jobs:
         # that landed just after it started: as long as it arrives before
         # this step executes (checkout + step startup — normally a few
         # seconds), it's visible here even though no second event fires.
+        #
+        # The label is honoured only on a human-authored PR. skip-ci is a
+        # maintainer judgement call about a change the maintainer wrote (see
+        # this file's header and .github/WORKFLOW_SECURITY.md); a bot-authored
+        # PR has no such judgement behind it, and it is exactly the kind of PR
+        # automation merges without a human in the loop --
+        # .github/scripts/daily-pr-sync.sh merges a Dependabot PR once its
+        # required contexts report a non-failing conclusion, and a *skipped*
+        # required job reports one. Ignoring the label here means a skip-ci
+        # label landing on a Dependabot or automation PR (however it got
+        # there) leaves the real suite running rather than handing the daily
+        # sync a green-looking, wholly untested PR to merge.
         id: labels
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' \
-              | grep -qx 'skip-ci'; then
+          set -euo pipefail
+          pr="$(gh pr view "$PR_NUMBER" --json labels,author)"
+
+          if [ "$(jq -r '.author.is_bot' <<<"$pr")" = "true" ]; then
+            echo "PR #$PR_NUMBER is authored by $(jq -r '.author.login' <<<"$pr") (a bot) — skip-ci does not apply."
+            echo "skip_ci=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Matched inside jq rather than by piping into `grep -qx`: under
+          # `set -o pipefail`, grep -q can exit on the first match while jq is
+          # still writing, and jq's resulting SIGPIPE death (141) would become
+          # the pipeline's status and silently flip a real label to "false".
+          if [ "$(jq -r '[.labels[].name] | any(. == "skip-ci")' <<<"$pr")" = "true" ]; then
             echo "skip_ci=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip_ci=false" >> "$GITHUB_OUTPUT"

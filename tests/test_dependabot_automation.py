@@ -15,6 +15,10 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 CREATE_OR_UPDATE_PR_ACTION = (
     ROOT / ".github" / "actions" / "create-or-update-pr" / "action.yaml"
 )
+# The action above is now a thin wrapper; its shell lives in this script so
+# that meta-lint's ShellCheck step covers it (actionlint does not lint
+# composite actions, so shell inline in one is linted by nothing).
+CREATE_OR_UPDATE_PR_SCRIPT = ROOT / ".github" / "scripts" / "create-or-update-pr.sh"
 AUTO_MERGE_WORKFLOW = ROOT / ".github" / "workflows" / "dependabot-auto-merge.yaml"
 
 STALE_WORKFLOW = ROOT / ".github" / "workflows" / "close-stale-automation-prs.yaml"
@@ -408,7 +412,12 @@ def test_automation_pr_push_leases_against_a_freshly_fetched_ref() -> None:
     # Fixed at the push rather than by serializing the workflows: serializing
     # would not even close it, since gh pr update-branch applies the rebase
     # asynchronously and it can land after the lock releases.
-    text = CREATE_OR_UPDATE_PR_ACTION.read_text()
+    # Reads the script, not the composite action that invokes it: the push
+    # logic moved out of the action's `run:` block so ShellCheck would cover
+    # it. The action is asserted to still delegate here, so the two cannot
+    # drift apart silently.
+    assert "create-or-update-pr.sh" in CREATE_OR_UPDATE_PR_ACTION.read_text()
+    text = CREATE_OR_UPDATE_PR_SCRIPT.read_text()
 
     assert 'git fetch --no-tags origin "$BRANCH"' in text
     assert 'lease="$BRANCH:$(git rev-parse FETCH_HEAD)"' in text

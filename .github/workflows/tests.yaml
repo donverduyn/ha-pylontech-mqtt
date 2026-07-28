@@ -206,7 +206,23 @@ jobs:
           echo "$HADOLINT_SHA256  /tmp/hadolint" | sha256sum -c
           chmod +x /tmp/hadolint
       - name: actionlint
-        run: /tmp/actionlint -color .github/workflows/*.yaml
+        # *.y*ml, not *.yaml: GitHub honours both extensions, so a workflow
+        # added as .yml would run in production while being silently skipped
+        # here. Matches check_action_pins.py's own glob, which already covers
+        # both.
+        #
+        # Covers .github/workflows/ only. actionlint does not lint composite
+        # actions, so shell written inline in a .github/actions/*/action.y*ml
+        # `run:` block receives neither actionlint's own checks nor the
+        # shellcheck pass it embeds for workflow `run:` blocks, and the
+        # ShellCheck step below can't reach it either (it discovers *.sh
+        # files, and those are YAML). Every composite step carrying real
+        # logic therefore delegates to a .github/scripts/*.sh file --
+        # create-or-update-pr.sh, smoke-test-sidecar-image.sh -- which the
+        # ShellCheck step does cover. What remains inline in a composite is
+        # single-command steps (docker build/load/save) with no branching or
+        # quoting worth linting; keep it that way.
+        run: /tmp/actionlint -color .github/workflows/*.y*ml
       - name: Verify external action pins
         run: python3 .github/scripts/check_action_pins.py
       - name: Verify required status check contexts still name real jobs
@@ -223,13 +239,17 @@ jobs:
         # scripts are covered automatically instead of silently skipped --
         # mirrors pre-commit's shellcheck hook, which auto-discovers the same
         # way via `types: [shell]`.
-        run: git ls-files '*.sh' | xargs shellcheck
+        # xargs -r: with no matches, a bare xargs runs shellcheck with no
+        # arguments, which exits non-zero on usage and fails meta-lint for a
+        # reason that has nothing to do with the code being linted.
+        run: git ls-files '*.sh' | xargs -r shellcheck
       - name: Hadolint
         # Discovered via git ls-files rather than a hand-maintained path
         # list, so a new Dockerfile is covered automatically instead of
         # silently skipped -- mirrors pre-commit's hadolint hook, which
         # auto-discovers the same way via `types: [dockerfile]`.
-        run: git ls-files '*Dockerfile*' | xargs /tmp/hadolint
+        # xargs -r for the same reason as ShellCheck above.
+        run: git ls-files '*Dockerfile*' | xargs -r /tmp/hadolint
 
   codeql-analyze:
     name: "codeql-analyze (${{ matrix.language }})"

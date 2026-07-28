@@ -338,9 +338,12 @@ while read -r pr; do
   case "$(wait_for_required_checks "$number" "$head_sha")" in
     pass)
       echo "PR #$number: required checks passed — merging now."
-      # --delete-branch: the repository does not have "automatically delete
-      # head branches" enabled, so without this every merged Dependabot
-      # branch stays on the remote forever.
+      # --delete-branch is belt-and-braces: the repository does have
+      # "automatically delete head branches" enabled (it did not when this
+      # merge path was first written, which is what the flag was added for),
+      # so this normally deletes a branch GitHub was about to delete anyway.
+      # Kept because it makes the cleanup this script's own doing rather than
+      # a repository setting's, and costs nothing when the setting is on.
       gh pr merge "$url" --repo "$REPO" --squash --delete-branch \
         || echo "PR #$number: merge attempt was rejected — leaving for the next run."
       ;;

@@ -5,6 +5,32 @@ name: Release
 # exist. Cross-service publication cannot be atomic, so a versioned image may
 # remain after a late failure; preflight checks refuse to overwrite that state
 # and turn recovery into an explicit maintainer decision.
+#
+# Two entry points, and they are deliberately not equally guarded:
+#
+# - workflow_call, from autorelease.yaml. That caller gates on its
+#   require-pr-tests job, which resolves the merged PR behind this commit and
+#   requires a real successful `tests-finished` from that PR's own Tests run
+#   before it will invoke this workflow at all. Nothing in *this* file
+#   re-checks that; the validate job below verifies release *identity* (tag
+#   shape, manifest agreement, ancestry, nothing published under this name
+#   yet), never test results.
+#
+# - workflow_dispatch, for re-cutting a release whose earlier attempt failed
+#   partway through publication. That path bypasses require-pr-tests, and is
+#   meant to: the commit being re-cut is one autorelease.yaml already accepted
+#   and released from, so re-verifying the merged PR's Tests run would only
+#   re-derive a fact already established, while adding a step that can itself
+#   fail (the PR lookup needs the commit to still be exactly one PR's merge
+#   commit) at precisely the moment recovery has to be cheap. Do not read this
+#   entry point as "releases don't need tests" -- read it as "this commit's
+#   tests were checked on the way in, and this is a retry of that same
+#   release".
+#
+# What keeps the dispatch path from becoming a general untested-release door
+# is not this workflow: it is the `release` environment's default-branch
+# deployment restriction, plus restricting workflow_dispatch to maintainers.
+# Both live in repository settings -- see .github/WORKFLOW_SECURITY.md.
 on:
   workflow_call:
     inputs:
@@ -47,6 +73,10 @@ jobs:
       - name: Validate identity and preflight immutable names
         id: release
         env:
+          # Derived rather than hardcoded to "master", matching every other
+          # workflow here: a default-branch rename would otherwise turn the
+          # ancestry gate below into an unconditional failure.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
           REPO: ${{ github.repository }}
@@ -77,9 +107,9 @@ jobs:
             exit 1
           fi
 
-          git fetch --no-tags origin master
-          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/master; then
-            echo "::error::Commit $TARGET_SHA is not reachable from origin/master."
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          if ! git merge-base --is-ancestor "$TARGET_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::Commit $TARGET_SHA is not reachable from origin/$DEFAULT_BRANCH."
             exit 1
           fi
 
