@@ -33,7 +33,7 @@ concurrency:
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
   # than an inline job: tests.yaml and hassfest.yaml need the same three
-  # signals (is_release, skip_ci, skip_ci_allowed) and previously each carried their own
+  # signals (is_release, skip_ci) and previously each carried their own
   # identical ~40-line copy of this job to get them.
   detect-release:
     uses: ./.github/workflows/detect-release.yaml
@@ -46,11 +46,11 @@ jobs:
     timeout-minutes: 15
     name: HACS Action
     needs: [detect-release]
-    # Skip only for a confirmed documentation-only, non-release PR.
-    # Invalid or unconfirmed label use dispatches this required job so the
-    # enforcement action fails it explicitly; !cancelled() also prevents a
-    # failed detector from silently bypassing the real validator.
-    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false' && needs.detect-release.outputs.skip_ci_allowed == 'true')"
+    # Skip only for a confirmed non-release PR carrying skip-ci. Use of the
+    # label on a release, or an unconfirmed verdict, dispatches this required
+    # job so the enforcement action fails it explicitly; !cancelled() also
+    # prevents a failed detector from silently bypassing the real validator.
+    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
     steps:
       # Checkout first (needed to resolve the local composite action below),
       # refuse-check second. No `if:` needed on it or the validation step
@@ -58,7 +58,7 @@ jobs:
       # per-step success() requirement, and it's the only way this job gets
       # dispatched without also being the real-check path.
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
-      - name: Refuse skip-ci outside documentation-only PRs
+      - name: Refuse skip-ci on a release PR
         # Duplicates detect-release's identical step (which only gives an
         # early signal — its own pass/fail isn't required by branch
         # protection) so *this* job explicitly fails instead of the
@@ -68,7 +68,6 @@ jobs:
         with:
           is_release: ${{ needs.detect-release.outputs.is_release }}
           skip_ci: ${{ needs.detect-release.outputs.skip_ci }}
-          skip_ci_allowed: ${{ needs.detect-release.outputs.skip_ci_allowed }}
       - name: HACS validation
         uses: "hacs/action@d556e736723344f83838d08488c983a15381059a" # 22.5.0
         with:

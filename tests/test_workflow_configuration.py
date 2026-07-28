@@ -14,6 +14,9 @@ BUILD_IMAGE_ACTION = (
     ROOT / ".github" / "actions" / "build-sidecar-image" / "action.yaml"
 )
 APP_TOKEN_ACTION = ROOT / ".github" / "actions" / "automation-app-token" / "action.yml"
+REFUSE_SKIP_CI_ACTION = (
+    ROOT / ".github" / "actions" / "refuse-skip-ci-on-release" / "action.yml"
+)
 WORKFLOWS = ROOT / ".github" / "workflows"
 AUTOMATION_SECRET_CONSUMERS = {
     "dependabot-auto-merge.yaml",
@@ -153,19 +156,46 @@ def test_tests_downstream_jobs_override_transitive_skip_and_fail_closed() -> Non
     assert '&& [ "$r" != "skipped" ]' not in text
 
 
-def test_skip_ci_is_limited_to_documentation_only_non_release_prs() -> None:
-    detector = DETECT_RELEASE_WORKFLOW.read_text()
+def test_skip_ci_bypasses_ci_entirely_on_any_non_release_pr() -> None:
+    # The documentation-only restriction was removed deliberately: skip-ci is
+    # now a complete CI bypass on any non-release PR, since a skipped job
+    # reports a conclusion branch protection treats as satisfied.
+    # Asserted against the executable body, not the whole file: the headers
+    # explain in prose why the old skip_ci_allowed output was dropped.
+    detector = DETECT_RELEASE_WORKFLOW.read_text().split("\njobs:", 1)[1]
 
-    assert "skip_ci_allowed:" in detector
-    assert "*.md|LICENSE|LICENSE.*)" in detector
-    assert 'git diff --name-only --no-renames -z "$BASE_SHA" HEAD' in detector
-    assert 'done < "$changed_paths"' in detector
-    assert "< <(git diff" not in detector
+    assert "skip_ci_allowed" not in detector
+    assert "*.md|LICENSE|LICENSE.*)" not in detector
 
     for caller_path in (TESTS_WORKFLOW, HACS_WORKFLOW, HASSFEST_WORKFLOW):
         caller = caller_path.read_text()
-        assert "needs.detect-release.outputs.skip_ci_allowed == 'true'" in caller
-        assert "skip_ci_allowed" in caller
+        assert "skip_ci_allowed" not in caller, caller_path.name
+        assert (
+            "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' "
+            "&& needs.detect-release.outputs.is_release == 'false')" in caller
+        ), caller_path.name
+
+
+def test_skip_ci_is_still_refused_on_a_release_pr() -> None:
+    # Not a policy preference: autorelease.yaml's require-pr-tests demands a
+    # real successful tests-finished before publishing, so skip-ci on a
+    # version bump fails the release rather than speeding anything up.
+    assert (
+        "inputs.skip_ci == 'true' && inputs.is_release == 'true'"
+        in REFUSE_SKIP_CI_ACTION.read_text()
+    )
+
+    # tests.yaml repeats the check inline; its summary job has no checkout, so
+    # it cannot resolve the local composite action.
+    tests = TESTS_WORKFLOW.read_text()
+    assert "needs.detect-release.outputs.skip_ci == 'true' &&" in tests
+    assert "needs.detect-release.outputs.is_release == 'true'" in tests
+
+    for caller_path in (HACS_WORKFLOW, HASSFEST_WORKFLOW):
+        assert (
+            "uses: ./.github/actions/refuse-skip-ci-on-release"
+            in caller_path.read_text()
+        ), caller_path.name
 
 
 def test_cached_sidecar_is_loaded_smoke_tested_and_rescanned() -> None:
