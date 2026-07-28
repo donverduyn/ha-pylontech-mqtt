@@ -48,11 +48,16 @@ contexts are:
 - `validate` — `hassfest.yaml`'s job, no `name:` override.
 
 This list lives only in GitHub's branch protection UI, not in any workflow
-file — nothing in CI verifies it stays in sync. If any of these three jobs
-is ever renamed (its `name:` key, or its job `id` for the two without one),
-update branch protection's required-checks list in the same PR, or that
-check silently stops being enforced (GitHub does not block a PR on a
-required-context string that no run ever posts under — see
+file, so nothing can read the authoritative copy at lint time. What CI does
+verify, via `meta-lint`'s `.github/scripts/check_required_contexts.py` step, is
+that each context named above still resolves to a real, non-matrixed job that
+actually posts it, and that this document still records it. If any of these
+three jobs is ever renamed (its `name:` key, or its job `id` for the two
+without one), that step fails — update branch protection's required-checks
+list, `REQUIRED_CONTEXTS` in that script, and the list above together in the
+same PR. Without it, a rename silently stops the check being enforced instead
+of failing (GitHub does not block a PR on a required-context string that no run
+ever posts under — see
 [status checks docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets-and-branch-protection-rules/about-protected-branches)).
 
 `.github/scripts/daily-pr-sync.sh` reads this same list from the branch
@@ -86,11 +91,23 @@ enable one non-author approval, stale-approval dismissal, and Code Owner review
 together. `.github/CODEOWNERS` assigns workflow and dependency automation
 changes to the maintainer in the meantime.
 
-The `skip-ci` label is limited in `detect-release.yaml` to non-release pull
-requests whose changed paths are all Markdown or license files. Any source,
-workflow, action, script, dependency, or configuration change with that label
-runs the full suite and fails each required summary check until the label is
-removed.
+The `skip-ci` label skips the entire suite on any non-release pull request.
+Because a skipped job reports a `skipped` conclusion that branch protection
+treats as satisfied, the label is a complete CI bypass: a pull request carrying
+it merges without pytest, lint, meta-lint, e2e, the Docker build, or CodeQL
+having run, whatever it changes.
+
+It was previously restricted to pull requests whose changed paths were all
+Markdown or license files, which is what kept that bypass narrow. That
+restriction was removed deliberately; applying the label is now a maintainer
+judgement call on each pull request, with no mechanical backstop. Treat it as
+equivalent to merging unreviewed and untested, because that is what it is.
+
+The one remaining restriction is that `skip-ci` still fails a release pull
+request (one that bumps `manifest.json`'s version). That is not a policy
+preference: `autorelease.yaml`'s `require-pr-tests` job demands a real
+successful `tests-finished` before publishing, so a skipped suite on a version
+bump does not merge faster — it fails the release.
 
 Where repository workflow-execution protections are available, restrict
 `workflow_dispatch` execution to maintainers.

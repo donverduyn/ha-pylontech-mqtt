@@ -1,9 +1,10 @@
 name: Enforce skip-ci scope
 description: >
-  Fails when skip-ci is used for a release or for anything other than a
-  documentation-only change. Shared by detect-release.yaml's early signal and
-  the required HACS/Hassfest jobs; tests.yaml repeats the check in its summary
-  job because that job intentionally has no checkout.
+  Fails when skip-ci is used on a release PR. Shared by detect-release.yaml's
+  early signal and the required HACS/Hassfest jobs; tests.yaml repeats the
+  check in its summary job because that job intentionally has no checkout.
+  skip-ci is otherwise unrestricted -- see detect-release.yaml's header for
+  why the documentation-only restriction was removed and why this one stays.
 
 inputs:
   is_release:
@@ -12,17 +13,12 @@ inputs:
   skip_ci:
     required: true
     description: "'true' if the skip-ci label is currently on this PR"
-  skip_ci_allowed:
-    required: true
-    description: "'true' if every changed path is documentation-only"
 
 runs:
   using: composite
   steps:
-    - if: >-
-        inputs.skip_ci == 'true' &&
-        (inputs.is_release == 'true' || inputs.skip_ci_allowed != 'true')
+    - if: inputs.skip_ci == 'true' && inputs.is_release == 'true'
       shell: bash
       run: |
-        echo "::error::skip-ci is limited to documentation-only, non-release PRs — remove the label."
+        echo "::error::skip-ci cannot be used on a release PR: autorelease.yaml requires a real successful tests-finished before it will publish. Remove the label."
         exit 1

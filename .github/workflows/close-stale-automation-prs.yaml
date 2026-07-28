@@ -53,16 +53,28 @@ name: Review Stale Automation PRs
 #
 # The one ordering this DOES depend on: dependabot-auto-merge.yaml (PR
 # Auto-merge) can still be actively rebasing/waiting-on-checks/merging a
-# Dependabot PR when this runs. Cron spacing cannot enforce that ordering
-# because scheduled workflows may be delayed independently. workflow_run
-# starts the weekly sweep only after Monday's scheduled PR Auto-merge run
-# completes successfully; the shared concurrency group also prevents a manual
-# sweep from overlapping a manual or scheduled maintenance run.
+# Dependabot PR when this runs. That ordering is enforced by the shared
+# dependency-pr-maintenance concurrency group below, which queues this behind
+# any in-flight maintenance run whatever triggered either of them.
+#
+# This used to be a workflow_run trigger on PR Auto-merge's completion
+# instead, on the reasoning that cron spacing cannot order two independently
+# delayed schedules. The concurrency group makes that ordering unconditional,
+# so all workflow_run added on top of it was fragility: it made Monday's PR
+# Auto-merge cron firing, that run being the scheduled one rather than a
+# dispatch, and its concluding success into three independent preconditions
+# for the sweep happening at all, any one of which cost a full week when it
+# missed. GitHub delays and drops scheduled runs under load and disables
+# schedules outright after 60 days of repository inactivity, so those misses
+# are real. A plain weekly cron has one precondition instead of three, and
+# encodes "Monday" once (here) rather than in both a cron and a `date +%u`
+# comparison in the run step. It fires at 09:30 UTC, past PR Auto-merge's
+# 08:22 start plus its 55-minute ceiling, so in the normal case it does not
+# even queue.
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["PR Auto-merge"]
-    types: [completed]
+  schedule:
+    - cron: "30 9 * * 1"
 
 permissions: {}
 
@@ -73,10 +85,6 @@ concurrency:
 
 jobs:
   review-stale:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'schedule' &&
-      github.event.workflow_run.conclusion == 'success')
     runs-on: "ubuntu-latest"
     timeout-minutes: 10
     permissions:
@@ -95,15 +103,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SOURCE_RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
         run: |
           set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "workflow_run" ] \
-            && [ "$(date -u -d "$SOURCE_RUN_STARTED_AT" +%u)" != "1" ]; then
-            echo "The completed scheduled PR Auto-merge run was not Monday's run; no weekly stale sweep is due."
-            exit 0
-          fi
 
           prs="$(
             gh pr list --repo "$REPO" --state open --limit 1000 \

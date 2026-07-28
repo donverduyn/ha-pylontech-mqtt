@@ -62,7 +62,29 @@ runs:
         git checkout -B "$BRANCH"
         git add --all
         git commit -m "$COMMIT_MESSAGE"
-        git push --force-with-lease origin "$BRANCH"
+
+        # Lease against this branch as it exists *now*, not as actions/checkout
+        # recorded it minutes ago. A bare --force-with-lease leases against the
+        # checkout-time remote-tracking ref, and daily-pr-sync.sh rebases every
+        # open PR -- including this branch's own -- on its daily run, which on
+        # Mondays starts five minutes after this workflow's. That rebase broke
+        # the stale lease and failed the push outright, even though the commit
+        # being pushed is wholly derived from this run's checkout of the base
+        # branch plus `make update-deps`: there is nothing on the remote branch
+        # worth preserving. Re-fetching narrows the lease to what it should
+        # have been all along -- a genuine concurrent push landing inside this
+        # fetch-to-push window -- instead of rejecting a rebase that already
+        # happened and does not matter.
+        #
+        # An empty <expect> ("$BRANCH:") is git's spelling of "this ref must
+        # not exist yet", which is the correct lease the first time a branch is
+        # published, and is what a failed fetch means here.
+        if git fetch --no-tags origin "$BRANCH" 2>/dev/null; then
+          lease="$BRANCH:$(git rev-parse FETCH_HEAD)"
+        else
+          lease="$BRANCH:"
+        fi
+        git push --force-with-lease="$lease" origin "$BRANCH"
 
         pr_number="$(
           gh pr list --head "$BRANCH" --state open \

@@ -29,14 +29,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Every real job below (pytest/lint/docker-build/meta-lint/e2e/
-# codeql-analyze) can be skipped only when detect-release confirms all three
-# facts: the skip-ci label is present, the PR is not a release, and every
-# changed path is documentation-only. Any unconfirmed verdict or an invalid
-# use of the label fails closed to running the real jobs; the required summary
-# then fails explicitly while the invalid label remains. A skipped job reports
-# a "skipped" conclusion that branch protection treats as satisfied, so this
-# path restriction is part of the security boundary rather than an optimization.
-# codeql-gate and e2e derive their legitimate skip from their direct parents.
+# codeql-analyze) can be skipped when detect-release confirms two facts: the
+# skip-ci label is present, and the PR is not a release. Any unconfirmed
+# verdict or use of the label on a release fails closed to running the real
+# jobs; the required summary then fails explicitly while the invalid label
+# remains. codeql-gate and e2e derive their legitimate skip from their direct
+# parents.
+#
+# A skipped job reports a "skipped" conclusion that branch protection treats
+# as satisfied, so the label is a genuine, complete CI bypass on any non-
+# release PR — not merely an optimization. It used to additionally require
+# every changed path to be documentation-only, which is what kept that bypass
+# narrow; that restriction was removed deliberately (see detect-release.yaml's
+# header), making it the maintainer's judgement call on every PR that carries
+# the label.
 # pytest defines this condition once as a YAML anchor (&skip_unless_real_check);
 # lint/meta-lint/docker-build/codeql-analyze alias it rather than
 # repeating the string.
@@ -44,7 +50,7 @@ concurrency:
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather
   # than an inline job: hacs.yaml and hassfest.yaml need the exact same two
-  # signals (is_release, skip_ci, skip_ci_allowed) and previously each carried their own
+  # signals (is_release, skip_ci) and previously each carried their own
   # identical ~40-line copy of this job to get them.
   detect-release:
     uses: ./.github/workflows/detect-release.yaml
@@ -57,8 +63,8 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 20
     needs: [detect-release]
-    # Skips only when skip-ci is set and detect-release confirms this is
-    # both documentation-only and not a release. Every other combination runs.
+    # Skips only when skip-ci is set and detect-release confirms this is not
+    # a release. Every other combination runs.
     # The leading !cancelled() matters even though this job doesn't want
     # to unconditionally run: a job's `if:` is implicitly ANDed with
     # success() of its `needs` unless the condition itself calls
@@ -76,7 +82,7 @@ jobs:
     # Anchored here and aliased by lint/meta-lint/docker-build below — same
     # condition, defined once. (Can't use env: for this instead: the env
     # context isn't available in job-level `if:`.)
-    if: &skip_unless_real_check "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false' && needs.detect-release.outputs.skip_ci_allowed == 'true')"
+    if: &skip_unless_real_check "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
     strategy:
       fail-fast: false
       matrix:
@@ -203,6 +209,13 @@ jobs:
         run: /tmp/actionlint -color .github/workflows/*.yaml
       - name: Verify external action pins
         run: python3 .github/scripts/check_action_pins.py
+      - name: Verify required status check contexts still name real jobs
+        # Branch protection matches by the exact string a check-run posts
+        # under, and GitHub does not block a PR on a required context no run
+        # produces -- so renaming one of these jobs would silently stop that
+        # check being enforced rather than fail. This catches it in the same
+        # PR as the rename.
+        run: python3 .github/scripts/check_required_contexts.py
       - name: ShellCheck
         # Preinstalled on ubuntu-latest runners; covers every shell script in
         # the repo (docker/Dockerfile has no other shell to lint). Discovered
@@ -434,29 +447,37 @@ jobs:
     # this doesn't display as "Tests / Tests" against the workflow's own
     # name.
     #
-    # Skip only for a confirmed documentation-only, non-release PR. In
-    # every other case this required context runs, rejects an invalid skip-ci
-    # label, and requires every summarized job to have succeeded for real.
+    # Skip only for a confirmed non-release PR carrying skip-ci. In every
+    # other case this required context runs, rejects the label on a release,
+    # and requires every summarized job to have succeeded for real.
     # !cancelled() backs off only when a newer PR event supersedes the run.
     runs-on: "ubuntu-latest"
     timeout-minutes: 5
     needs: [detect-release, pytest, lint, docker-build, meta-lint, e2e, codeql-analyze, codeql-gate]
-    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false' && needs.detect-release.outputs.skip_ci_allowed == 'true')"
+    if: "!cancelled() && !(needs.detect-release.outputs.skip_ci == 'true' && needs.detect-release.outputs.is_release == 'false')"
     steps:
       # Not .github/actions/refuse-skip-ci-on-release (which detect-release.yaml/
       # hacs.yaml/hassfest.yaml use): a local composite action needs the repo
       # checked out to resolve, and this job -- unlike those -- has no checkout
       # step of its own; the loop below reads only `needs.*.result`. Adding a
       # checkout solely to share these four lines would cost more than it saves.
-      - name: Refuse skip-ci outside documentation-only PRs
+      - name: Refuse skip-ci on a release PR
         if: >-
           needs.detect-release.outputs.skip_ci == 'true' &&
-          (needs.detect-release.outputs.is_release == 'true' ||
-          needs.detect-release.outputs.skip_ci_allowed != 'true')
+          needs.detect-release.outputs.is_release == 'true'
         run: |
-          echo "::error::skip-ci is limited to documentation-only, non-release PRs — remove the label."
+          echo "::error::skip-ci cannot be used on a release PR: autorelease.yaml requires a real successful tests-finished before it will publish. Remove the label."
           exit 1
       - name: Check all required jobs passed
+        # detect-release is in needs: but deliberately absent from the list
+        # below. It is a detector, not a check: if it fails for any reason its
+        # outputs come back empty, the skip condition above evaluates false,
+        # and every real job runs and is verified here anyway -- that is the
+        # "fails closed to running the checks" behaviour, so failing this
+        # summary on it too would reject a PR whose entire suite passed. The
+        # one thing its failure could otherwise hide, an invalid skip-ci
+        # label, is re-checked by the step above rather than inferred from
+        # this job's result.
         run: |
           for r in "${{ needs.pytest.result }}" "${{ needs.lint.result }}" \
                    "${{ needs.docker-build.result }}" "${{ needs.meta-lint.result }}" \

@@ -1,9 +1,18 @@
 name: Detect release
 
 # Reusable workflow shared by tests.yaml/hacs.yaml/hassfest.yaml: each of
-# those pull_request-triggered workflows needs the same three signals — whether
-# this PR bumps manifest.json's version (a release), whether the skip-ci label is
-# currently on the PR, and whether every changed path is documentation-only.
+# those pull_request-triggered workflows needs the same two signals — whether
+# this PR bumps manifest.json's version (a release), and whether the skip-ci
+# label is currently on the PR.
+#
+# skip-ci used to additionally require every changed path to be documentation
+# only, computed here as a third `skip_ci_allowed` output. That restriction was
+# removed deliberately: the label is now a full CI bypass on any non-release
+# PR, and the maintainer owns judging when that is safe. The release guard
+# below stays, and is not a policy preference — autorelease.yaml's
+# require-pr-tests job demands a real successful `tests-finished` before it
+# will publish, so a skipped suite on a version bump does not merge faster, it
+# fails the release outright.
 # The callers previously carried an
 # identical ~40-line copy of this job to get them, since a plain `needs:`
 # reference can't cross workflow files. A reusable workflow's outputs can:
@@ -19,9 +28,6 @@ on:
       skip_ci:
         description: "true if the skip-ci label is currently on this PR"
         value: ${{ jobs.detect-release.outputs.skip_ci }}
-      skip_ci_allowed:
-        description: "true if every changed path is documentation-only"
-        value: ${{ jobs.detect-release.outputs.skip_ci_allowed }}
 
 permissions: {}
 
@@ -42,12 +48,11 @@ jobs:
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
       skip_ci: ${{ steps.labels.outputs.skip_ci }}
-      skip_ci_allowed: ${{ steps.check.outputs.skip_ci_allowed }}
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
         with:
           persist-credentials: false
-      - name: Classify release and skip-ci scope against the PR base
+      - name: Classify whether this PR is a release
         id: check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -62,21 +67,6 @@ jobs:
           else
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
-
-          skip_ci_allowed=true
-          changed_paths="$RUNNER_TEMP/skip-ci-changed-paths"
-          git diff --name-only --no-renames -z "$BASE_SHA" HEAD > "$changed_paths"
-          while IFS= read -r -d '' path; do
-            case "$path" in
-              *.md|LICENSE|LICENSE.*)
-                ;;
-              *)
-                echo "skip-ci requires documentation-only changes; found: $path"
-                skip_ci_allowed=false
-                ;;
-            esac
-          done < "$changed_paths"
-          echo "skip_ci_allowed=$skip_ci_allowed" >> "$GITHUB_OUTPUT"
       - name: Look up the skip-ci label live
         # github.event.pull_request.labels is a snapshot frozen at whichever
         # event triggered *this* run — a label attached a moment after that
@@ -98,7 +88,7 @@ jobs:
           else
             echo "skip_ci=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Refuse skip-ci outside documentation-only PRs
+      - name: Refuse skip-ci on a release PR
         # Early, fast (~4s) signal only — this job's own pass/fail isn't a
         # required status check, so each caller's actual required-check job
         # (tests-finished/validate) independently repeats this exact check
@@ -107,4 +97,3 @@ jobs:
         with:
           is_release: ${{ steps.check.outputs.is_release }}
           skip_ci: ${{ steps.labels.outputs.skip_ci }}
-          skip_ci_allowed: ${{ steps.check.outputs.skip_ci_allowed }}

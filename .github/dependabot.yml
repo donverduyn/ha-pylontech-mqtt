@@ -61,7 +61,13 @@ updates:
         # exactly by the currently locked homeassistant/phacc releases. It is
         # excluded from this group so a security update against one of them
         # opens as its own individual PR instead of blocking the whole
-        # group. "homeassistant" itself is generated into this list too
+        # group. That individual PR still cannot resolve — the exact pin is
+        # what makes it unbuildable, not the grouping — so daily-pr-sync.sh
+        # reads this generated block back (via
+        # .github/scripts/dependabot-phacc-pinned-check.sh) and closes it
+        # within a day naming the package, instead of leaving it failing
+        # `pytest (min)` until the weekly age sweep.
+        # "homeassistant" itself is generated into this list too
         # (phacc's own requires_dist exactly pins it) but is moot here: the
         # `ignore:` block above already fully suppresses it before Dependabot
         # ever reaches group evaluation, for the reason explained there.

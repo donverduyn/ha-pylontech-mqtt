@@ -8,6 +8,17 @@ on:
 permissions: {}
 
 concurrency:
+  # Deliberately this workflow's own group, not the dependency-pr-maintenance
+  # one dependabot-auto-merge.yaml and close-stale-automation-prs.yaml share.
+  # This run does race PR Auto-merge -- daily-pr-sync.sh rebases every open PR,
+  # including this one's automation/dependency-updates branch, and on Mondays
+  # the two crons are five minutes apart -- but that race is a stale
+  # --force-with-lease, and it is fixed where it happens, in
+  # create-or-update-pr's push (see its comment). Serializing the two
+  # workflows would not even close it (gh pr update-branch applies the rebase
+  # asynchronously, so it can land after PR Auto-merge's run ends and the lock
+  # releases) while costing this weekly refresh up to an hour queued behind a
+  # 55-minute maintenance run.
   group: dependency-updates
   cancel-in-progress: true
 
@@ -37,9 +48,19 @@ jobs:
         with:
           client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          # No permission-workflows: write here, unlike
+          # min-ha-version-update.yaml. That grant lets a token push files
+          # under .github/workflows/, and the only writer of one is
+          # update_tests_workflow_min_python(), reachable solely through
+          # refresh_min_ha_version() -- i.e. only under
+          # --min-ha-version-only, which this workflow does not pass. The
+          # dependabot.yml this run does rewrite is ordinary repository
+          # content, not a workflow file. Worth keeping tight specifically
+          # here: this is the one automation token whose PR auto-merges
+          # below, so it is the only one that could land a workflow change
+          # without a human ever looking at it.
           permission-contents: write
           permission-pull-requests: write
-          permission-workflows: write
 
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
         with:

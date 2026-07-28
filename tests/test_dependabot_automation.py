@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,7 +11,12 @@ import pytest
 ROOT = Path(__file__).parents[1]
 PR_KIND = ROOT / ".github" / "scripts" / "dependabot-pr-kind.sh"
 SUPERSESSION_CHECK = ROOT / ".github" / "scripts" / "dependabot-supersession-check.sh"
+PHACC_PINNED_CHECK = ROOT / ".github" / "scripts" / "dependabot-phacc-pinned-check.sh"
 DAILY_SYNC = ROOT / ".github" / "scripts" / "daily-pr-sync.sh"
+WORKFLOWS = ROOT / ".github" / "workflows"
+CREATE_OR_UPDATE_PR_ACTION = (
+    ROOT / ".github" / "actions" / "create-or-update-pr" / "action.yaml"
+)
 AUTO_MERGE_WORKFLOW = ROOT / ".github" / "workflows" / "dependabot-auto-merge.yaml"
 
 STALE_WORKFLOW = ROOT / ".github" / "workflows" / "close-stale-automation-prs.yaml"
@@ -31,11 +37,26 @@ if [ "$1" = "api" ]; then
       fi
       printenv GH_REQUIRED_CONTEXTS || printf '["ci"]\n'
       ;;
-    */commits/*/check-runs)
+    */commits/*/check-runs*)
+      # Trailing glob: the real call carries a ?per_page=100 query so that
+      # --paginate walks every page (see daily-pr-sync.sh).
       sha="${2##*/commits/}"
-      sha="${sha%/check-runs}"
+      sha="${sha%%/check-runs*}"
       checkruns_var="GH_CHECKRUNS_$sha"
-      printenv "$checkruns_var" || printf '[]\n'
+      raw="$(printenv "$checkruns_var" || printf '[]')"
+      # GH_CHECKRUNS_* fixtures stay written as the array the old, un-paginated
+      # `--jq '[.check_runs[] | ...]'` produced. Real `gh api --paginate --jq
+      # '.check_runs[]'` emits one object per line across all pages instead,
+      # for `jq -s` to slurp back, so reshape here rather than rewriting every
+      # fixture. A value that is not exactly one JSON array (the concatenated
+      # "[...][...]" malformed-output fixture) is passed through untouched --
+      # that is the input under test.
+      if jq -e -s 'length == 1 and (.[0] | type) == "array"' \
+        >/dev/null 2>&1 <<<"$raw"; then
+        jq -c '.[]' <<<"$raw"
+      else
+        printf '%s\n' "$raw"
+      fi
       ;;
     *)
       echo "unexpected gh api path: $2" >&2
@@ -95,6 +116,17 @@ def _install_fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GH_LOG", str(log))
     monkeypatch.setenv("GH_TOKEN", "test-token")
     monkeypatch.setenv("REPO", "owner/repo")
+
+    # Point dependabot-phacc-pinned-check.sh at a fixture rather than the
+    # repository's own generated exclude-patterns block. That block is
+    # regenerated from whatever homeassistant/phacc pin is locked at the time,
+    # so leaving these tests reading it would make unrelated cases (which
+    # happen to use real package names like "requests") start closing PRs the
+    # next time `make update-deps` runs.
+    dependabot_yml = _write_exclude_block(
+        tmp_path, ["exactly-pinned-package", "pytest"]
+    )
+    monkeypatch.setenv("DEPENDABOT_YML", str(dependabot_yml))
     return log
 
 
@@ -149,6 +181,199 @@ def test_dependabot_pr_kind_fails_closed_for_single_or_unknown_bodies(
     )
 
     assert result.stdout == "single\n"
+
+
+def _write_exclude_block(tmp_path: Path, names: list[str]) -> Path:
+    path = tmp_path / "dependabot.yml"
+    generated = "\n".join(f'        - "{name}"' for name in names)
+    path.write_text(
+        "    groups:\n"
+        "      security-updates:\n"
+        "        exclude-patterns:\n"
+        "        # <dependabot-exclude-generated>\n"
+        f"{generated}\n"
+        "        # </dependabot-exclude-generated>\n"
+    )
+    return path
+
+
+def _run_phacc_pinned_check(title: str, body: str, dependabot_yml: Path | None) -> str:
+    env = dict(os.environ)
+    if dependabot_yml is not None:
+        env["DEPENDABOT_YML"] = str(dependabot_yml)
+    result = subprocess.run(
+        [PHACC_PINNED_CHECK, title, body],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return result.stdout.strip()
+
+
+def test_phacc_pinned_check_reads_the_real_generated_block() -> None:
+    # The one end-to-end assertion of the contract between
+    # update_dependabot_exclude_list() (which writes the block) and this
+    # script (which reads it back): marker spelling, indentation, `- "name"`
+    # syntax and double-quoting, none of which anything else checks. Every
+    # other test here writes the fixture by hand in that same format, so they
+    # could only ever agree with each other. Uses the repository's real
+    # dependabot.yml and a name taken from it at runtime rather than a
+    # hardcoded one, so it does not need updating when the list is
+    # regenerated.
+    dependabot_yml = ROOT / ".github" / "dependabot.yml"
+    block = dependabot_yml.read_text().split("# <dependabot-exclude-generated>", 1)[1]
+    block = block.split("# </dependabot-exclude-generated>", 1)[0]
+    names = re.findall(r'-\s*"([^"]+)"', block)
+    assert names, "the generated exclude-patterns block is empty"
+
+    assert (
+        _run_phacc_pinned_check(f"bump {names[0]} from 1.0.0 to 1.0.1", "", None)
+        == "blocked"
+    )
+
+
+def test_phacc_pinned_check_blocks_a_package_pinned_exactly_by_phacc(
+    tmp_path: Path,
+) -> None:
+    # The live shape of this: five open PRs (#139/#142/#143/#146/#147) sat
+    # failing `pytest (min)` for a week each with
+    # "Because pytest-homeassistant-custom-component==0.13.308 depends on
+    # pytest==9.0.0 and you require pytest==9.0.3 ... unsatisfiable". No
+    # rebase can resolve that, so waiting on checks only burns run budget.
+    dependabot_yml = _write_exclude_block(tmp_path, ["pytest", "pyjwt"])
+
+    assert (
+        _run_phacc_pinned_check(
+            "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3", "", dependabot_yml
+        )
+        == "blocked"
+    )
+    # The generated body section is read too, not just the title -- a grouped
+    # PR's title carries no dependency name at all.
+    assert (
+        _run_phacc_pinned_check(
+            "chore(deps): bump the security-updates group",
+            "Bumps the security-updates group with 1 update: pyjwt.\n\n"
+            "Updates `pyjwt` from 2.10.1 to 2.13.0\n",
+            dependabot_yml,
+        )
+        == "blocked"
+    )
+
+
+def test_phacc_pinned_check_normalizes_names_the_way_pypi_does(
+    tmp_path: Path,
+) -> None:
+    # update_dependabot_exclude_list() writes already-normalised names, but
+    # Dependabot renders whatever the PR's own manifest spells.
+    dependabot_yml = _write_exclude_block(tmp_path, ["paho-mqtt", "pytest-asyncio"])
+
+    for rendered in ("paho.mqtt", "paho_mqtt", "Paho-MQTT"):
+        assert (
+            _run_phacc_pinned_check(
+                f"bump {rendered} from 1.0 to 2.0", "", dependabot_yml
+            )
+            == "blocked"
+        ), rendered
+
+
+@pytest.mark.parametrize(
+    ("title", "body"),
+    [
+        # Not in the generated list at all -- an ordinary, mergeable bump.
+        ("chore(deps): bump actions/checkout from 4.0.0 to 7.0.1", ""),
+        # Nothing parseable to compare: fails open rather than closing a PR
+        # this cannot classify, since closing is not reversible here.
+        ("chore(deps): bump the docker group", "Bumps something unrecognized.\n"),
+        ("", ""),
+    ],
+)
+def test_phacc_pinned_check_fails_open_for_anything_it_cannot_confirm(
+    tmp_path: Path, title: str, body: str
+) -> None:
+    dependabot_yml = _write_exclude_block(tmp_path, ["pytest"])
+
+    assert _run_phacc_pinned_check(title, body, dependabot_yml) == "ok"
+
+
+def test_phacc_pinned_check_reads_only_the_generated_block(tmp_path: Path) -> None:
+    # A hand-written exclusion outside the markers is a grouping preference,
+    # not a statement that the package is exactly pinned, so it must not cause
+    # a close.
+    path = tmp_path / "dependabot.yml"
+    path.write_text(
+        "        exclude-patterns:\n"
+        '        - "hand-written-exclusion"\n'
+        "        # <dependabot-exclude-generated>\n"
+        '        - "pytest"\n'
+        "        # </dependabot-exclude-generated>\n"
+    )
+
+    assert _run_phacc_pinned_check("bump pytest from 1 to 2", "", path) == "blocked"
+    assert (
+        _run_phacc_pinned_check("bump hand-written-exclusion from 1 to 2", "", path)
+        == "ok"
+    )
+
+
+def test_phacc_pinned_check_fails_loudly_without_a_readable_generated_list(
+    tmp_path: Path,
+) -> None:
+    # Distinct from an unclassifiable PR, which fails open: this is the
+    # repository's own file no longer matching the format
+    # update_dependabot_exclude_list() writes. Returning "ok" there would
+    # disable the check permanently and silently, bringing back exactly the
+    # week-of-red-PRs symptom it exists to prevent.
+    markerless = tmp_path / "dependabot.yml"
+    markerless.write_text("version: 2\nupdates: []\n")
+
+    for target in (tmp_path / "nowhere" / "dependabot.yml", markerless):
+        result = subprocess.run(
+            [PHACC_PINNED_CHECK, "bump pytest from 1 to 2", ""],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "DEPENDABOT_YML": str(target)},
+        )
+        assert result.returncode != 0, target
+        assert "::error::" in result.stderr, target
+        assert result.stdout.strip() == "", target
+
+
+def test_daily_sync_keeps_running_but_stays_red_on_an_unreadable_exclude_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unparseable generated block must not merge PRs past the check, and
+    # must not take down the whole maintenance pass either -- rebases still
+    # need to happen. The script's ::error:: is what keeps the run red.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("DEPENDABOT_YML", str(tmp_path / "nowhere.yml"))
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3",
+                    "body": "Bumps pytest from 9.0.0 to 9.0.3.",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert not any(call.startswith("pr close 1 ") for call in calls)
 
 
 def _run_supersession_check(
@@ -344,26 +569,86 @@ def test_auto_merge_workflow_is_daily_schedule_only_and_runs_the_sync_script() -
     assert "run: .github/scripts/daily-pr-sync.sh" in text
 
 
-def test_stale_cleanup_follows_successful_monday_auto_merge_without_overlap() -> None:
-    # Cron spacing cannot guarantee ordering because GitHub may delay scheduled
-    # workflows independently. The stale sweep must be triggered by completion
-    # of PR Auto-merge itself, and manual runs must share its concurrency group.
+def test_stale_cleanup_never_overlaps_a_maintenance_run() -> None:
+    # PR Auto-merge can be mid-rebase/mid-merge on a Dependabot PR when the
+    # sweep fires. Cron spacing cannot order two independently delayed
+    # schedules, so the shared concurrency group is what enforces it -- for
+    # every trigger of either workflow, not just the scheduled ones.
     auto_merge_text = AUTO_MERGE_WORKFLOW.read_text()
     assert 'cron: "22 8 * * *"' in auto_merge_text
     assert "timeout-minutes: 55" in auto_merge_text
-    assert "group: dependency-pr-maintenance" in auto_merge_text
-    assert "queue: max" in auto_merge_text
 
     stale_text = STALE_WORKFLOW.read_text()
-    assert "workflow_run:" in stale_text
-    assert 'workflows: ["PR Auto-merge"]' in stale_text
-    assert "types: [completed]" in stale_text
-    assert "github.event.workflow_run.event == 'schedule'" in stale_text
-    assert "github.event.workflow_run.conclusion == 'success'" in stale_text
-    assert 'date -u -d "$SOURCE_RUN_STARTED_AT" +%u' in stale_text
-    assert "group: dependency-pr-maintenance" in stale_text
-    assert "cancel-in-progress: false" in stale_text
-    assert "queue: max" in stale_text
+    for text in (auto_merge_text, stale_text):
+        assert "group: dependency-pr-maintenance" in text
+        assert "cancel-in-progress: false" in text
+        assert "queue: max" in text
+
+
+def test_stale_cleanup_runs_on_a_plain_weekly_cron() -> None:
+    # Previously triggered by workflow_run on PR Auto-merge's completion, which
+    # made three separate things load-bearing for the sweep happening at all:
+    # Monday's PR Auto-merge cron firing, that run being the scheduled one
+    # rather than a dispatch, and its concluding success. Any one miss cost a
+    # full week. The concurrency group above already guarantees the ordering
+    # workflow_run was there for, so the trigger only added failure modes.
+    text = STALE_WORKFLOW.read_text()
+
+    assert 'cron: "30 9 * * 1"' in text
+    assert "workflow_run:" not in text
+    # "Monday" must be encoded once, in the cron -- not also as a date +%u
+    # comparison against a source run's start time. Checked against the shell
+    # body rather than the whole file, which explains the change in prose.
+    shell_body = text.split("        run: |", 1)[1]
+    assert "SOURCE_RUN_STARTED_AT" not in shell_body
+    assert "+%u" not in shell_body
+
+
+def test_automation_pr_push_leases_against_a_freshly_fetched_ref() -> None:
+    # daily-pr-sync.sh rebases every open PR, including the automation/*
+    # branches the two producers push. A bare --force-with-lease leases against
+    # the remote-tracking ref actions/checkout recorded minutes earlier, so
+    # that rebase broke the lease and failed the producer outright -- on
+    # Mondays their crons are five and eight minutes from PR Auto-merge's.
+    # Fixed at the push rather than by serializing the workflows: serializing
+    # would not even close it, since gh pr update-branch applies the rebase
+    # asynchronously and it can land after the lock releases.
+    text = CREATE_OR_UPDATE_PR_ACTION.read_text()
+
+    assert 'git fetch --no-tags origin "$BRANCH"' in text
+    assert 'lease="$BRANCH:$(git rev-parse FETCH_HEAD)"' in text
+    # Empty <expect> is git's "this ref must not exist yet", the correct lease
+    # the first time a branch is published.
+    assert 'lease="$BRANCH:"' in text
+    assert 'git push --force-with-lease="$lease" origin "$BRANCH"' in text
+    assert "git push --force-with-lease origin" not in text
+
+
+def test_producers_are_not_serialized_behind_the_maintenance_run() -> None:
+    # They push disjoint branches and do not interact, so with the lease race
+    # fixed above there is nothing left to serialize -- joining the
+    # maintenance group would only delay the weekly refresh by up to the
+    # 55-minute ceiling of a run it has no conflict with.
+    for workflow_name in ("dependency-updates.yaml", "min-ha-version-update.yaml"):
+        text = (WORKFLOWS / workflow_name).read_text()
+        assert "group: dependency-pr-maintenance" not in text, workflow_name
+
+
+def test_auto_merged_dependency_pr_token_cannot_write_workflow_files() -> None:
+    # dependency-updates.yaml is the only automation PR that auto-merges, so
+    # it is the only token that could land a change without a human looking at
+    # it. `make update-deps` writes no file under .github/workflows/ -- only
+    # --min-ha-version-only does, via update_tests_workflow_min_python().
+    dependency_updates = (WORKFLOWS / "dependency-updates.yaml").read_text()
+    min_ha_version = (WORKFLOWS / "min-ha-version-update.yaml").read_text()
+
+    # Matched as an indented mapping key, not a substring: both files also
+    # mention the grant in prose explaining its presence or absence.
+    grant = "\n          permission-workflows: write\n"
+    assert "--auto --squash" in dependency_updates
+    assert grant not in dependency_updates
+    assert grant in min_ha_version
+    assert "--auto" not in min_ha_version
 
 
 def test_stale_cleanup_closes_every_recyclable_pr_with_no_leave_open_bucket() -> None:
@@ -685,6 +970,150 @@ def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
     assert "pr diff 1 --repo owner/repo --name-only" in calls
     assert any(call.startswith("pr close 1 ") for call in calls)
     assert not any(call.endswith("--squash --delete-branch") for call in calls)
+
+
+def test_daily_sync_closes_a_pr_bumping_a_package_phacc_pins_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # _install_fake_gh's fixture list contains "pytest". Such a PR must be
+    # closed on sight: it cannot resolve at any version, so rebasing it and
+    # then waiting MAX_WAIT_SECONDS for checks that will certainly fail only
+    # spends the run budget that later, mergeable PRs need.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3",
+                    "body": "Bumps pytest from 9.0.0 to 9.0.3.",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    # Still rebased first: every open PR is, regardless of what happens next.
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert any(call.startswith("pr close 1 ") for call in calls)
+    # Closed before the supersession check, which costs an extra API call and
+    # could only ever reach the same "do not merge" conclusion.
+    assert not any(call.startswith("pr diff 1 ") for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
+    # The close comment must name the real fix path, not just refuse.
+    close_call = next(call for call in calls if call.startswith("pr close 1 "))
+    assert "scripts/update_dependencies.py" in close_call
+
+
+def test_daily_sync_waits_for_the_rebase_to_land_before_reading_head_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `gh pr update-branch` returns once GitHub accepts the request; the
+    # rebase lands asynchronously. A BEHIND read straight afterwards means the
+    # PR still points at its pre-rebase commit -- whose required checks are
+    # already green from before the rebase, so trusting it would merge a
+    # commit never tested against the current base.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("REBASE_SETTLE_SECONDS", "0")
+    monkeypatch.setenv("REBASE_SETTLE_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+    # GitHub is still computing mergeability -- indistinguishable from
+    # "the rebase has not landed", and equally not a basis for merging.
+    monkeypatch.setenv("GH_MERGE_STATE_1", "UNKNOWN")
+
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": (
+                        "Bumps the docker group with 1 update: python.\n\n"
+                        "Updates `python` from 3.13 to 3.14\n"
+                    ),
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
+    # Never even asked which commit to gate on: the branch state was not a
+    # basis for merging in the first place.
+    assert not any("headRefOid" in call for call in calls)
+
+
+def test_daily_sync_reads_every_page_of_check_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This endpoint returns 30 per page by default, and one commit here
+    # already carries ~17 across tests.yaml/hacs.yaml/hassfest.yaml. Two
+    # re-runs of Tests push the required contexts off page one, where they
+    # would match nothing, classify as "pending", and leave every eligible PR
+    # spinning to MAX_WAIT_SECONDS with no error anywhere. Asserted against
+    # the call the fake gh actually recorded rather than the script's source
+    # text, so reflowing the invocation doesn't fail this.
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": (
+                        "Bumps the docker group with 1 update: python.\n\n"
+                        "Updates `python` from 3.13 to 3.14\n"
+                    ),
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                },
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert any(
+        "check-runs?per_page=100" in call and "--paginate" in call for call in calls
+    )
 
 
 def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
