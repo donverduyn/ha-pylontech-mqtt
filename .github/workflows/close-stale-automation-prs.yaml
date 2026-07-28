@@ -108,7 +108,7 @@ jobs:
 
           prs="$(
             gh pr list --repo "$REPO" --state open --limit 1000 \
-              --json number,author,headRefName,createdAt,title,body
+              --json number,author,headRefName,isCrossRepository,createdAt,title,body
           )"
 
           if [ "$(echo "$prs" | jq 'length')" = "0" ]; then
@@ -121,6 +121,7 @@ jobs:
             number="$(echo "$pr" | jq -r .number)"
             author="$(echo "$pr" | jq -r '.author.login // ""')"
             head_ref="$(echo "$pr" | jq -r .headRefName)"
+            is_cross_repository="$(echo "$pr" | jq -r .isCrossRepository)"
             created_at="$(echo "$pr" | jq -r .createdAt)"
             created_epoch="$(date -d "$created_at" +%s)"
             age_days=$(( (now - created_epoch) / 86400 ))
@@ -141,8 +142,9 @@ jobs:
             fi
 
             is_recyclable=false
-            if [ "$head_ref" = "automation/dependency-updates" ] \
-              || [ "$head_ref" = "automation/min-ha-version-update" ]; then
+            if [ "$is_cross_repository" = "false" ] \
+              && { [ "$head_ref" = "automation/dependency-updates" ] \
+                || [ "$head_ref" = "automation/min-ha-version-update" ]; }; then
               is_recyclable=true
             elif [ "$is_dependabot" = "true" ] && [ "$is_major_bump" != "true" ]; then
               is_recyclable=true
@@ -176,9 +178,13 @@ jobs:
 
             # Best effort: the PR is already closed even if branch deletion
             # is temporarily rejected.
-            gh api "repos/$REPO/git/refs/heads/$head_ref" -X DELETE \
-              >/dev/null 2>&1 \
-              && echo "Deleted branch $head_ref." \
-              || echo "Could not delete branch $head_ref; leaving it in place."
+            if [ "$is_cross_repository" = "false" ]; then
+              gh api "repos/$REPO/git/refs/heads/$head_ref" -X DELETE \
+                >/dev/null 2>&1 \
+                && echo "Deleted branch $head_ref." \
+                || echo "Could not delete branch $head_ref; leaving it in place."
+            else
+              echo "Head branch belongs to a fork; no base-repository ref was deleted."
+            fi
             echo "::endgroup::"
           done < <(echo "$prs" | jq -c '.[]')

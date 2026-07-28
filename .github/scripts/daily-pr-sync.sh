@@ -44,10 +44,10 @@
 # rejected with "only users with push access can use that command."
 #
 # dependabot-supersession-check.sh does the comparison directly instead,
-# reading the currently-pinned version straight out of this job's own
-# checkout (already the base branch, no extra API calls needed) rather
-# than trusting Dependabot to notice on its own. Closing a confirmed-
-# superseded PR only tells GitHub not to recreate *that exact* stale
+# reading the currently-pinned version from one exact snapshot of the current
+# default-branch commit, resolved immediately before each decision, rather than
+# trusting either Dependabot or the job's now-stale initial checkout. Closing a
+# confirmed-superseded PR only tells GitHub not to recreate *that exact* stale
 # version pair; Dependabot remains free to open a fresh PR the next time a
 # genuinely newer version appears.
 set -euo pipefail
@@ -84,6 +84,48 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 is_dependabot() {
   [ "$1" = "dependabot[bot]" ] || [ "$1" = "app/dependabot" ]
+}
+
+# Materialize the PR's changed files from one exact, freshly-read default-
+# branch commit. The working tree is only the checkout from the start of this
+# run; after this script merges an earlier PR it is stale, so reading it for a
+# later supersession decision can miss the version that just landed.
+# Echoes the temporary snapshot directory, or returns non-zero. Callers must
+# remove a successful snapshot.
+snapshot_default_branch_files() {
+  local changed_files="$1"
+  local base_sha snapshot file target_dir
+
+  if ! base_sha="$(
+    gh api "repos/$REPO/commits/$default_branch" --jq .sha 2>/dev/null
+  )" || [ -z "$base_sha" ]; then
+    echo "Could not resolve the current $default_branch commit for a supersession check." >&2
+    return 1
+  fi
+
+  snapshot="$(mktemp -d)" || return 1
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    case "$file" in
+      /*|../*|*/../*|*/..)
+        echo "Refusing unsafe changed-file path '$file'." >&2
+        rm -r -- "$snapshot"
+        return 1
+        ;;
+    esac
+
+    target_dir="$snapshot/$(dirname -- "$file")"
+    if ! mkdir -p -- "$target_dir" \
+      || ! gh api "repos/$REPO/contents/$file?ref=$base_sha" \
+        -H "Accept: application/vnd.github.raw+json" \
+        >"$snapshot/$file"; then
+      echo "Could not read '$file' from $default_branch at $base_sha." >&2
+      rm -r -- "$snapshot"
+      return 1
+    fi
+  done <<<"$changed_files"
+
+  printf '%s\n' "$snapshot"
 }
 
 # `gh pr checks` reports a PR-level rollup that can lag behind a rebase: it
@@ -134,8 +176,14 @@ fi
 # Echoes exactly one of: pass | fail | timeout
 wait_for_required_checks() {
   local number="$1" sha="$2"
-  local deadline runs classification
+  local deadline runs classification now remaining sleep_for
   deadline="$(( $(date +%s) + MAX_WAIT_SECONDS ))"
+  # The per-PR ceiling must not extend the run-level ceiling. Without this
+  # clamp, a wait started one second before run_deadline could consume another
+  # full MAX_WAIT_SECONDS and collide with the job's 55-minute hard timeout.
+  if [ "$deadline" -gt "$run_deadline" ]; then
+    deadline="$run_deadline"
+  fi
 
   # No "$required_contexts is empty" shortcut here on purpose: an empty list
   # would mean "merge without verifying anything", and the only way to get one
@@ -202,12 +250,18 @@ wait_for_required_checks() {
       echo "PR #$number: gh api check-runs failed or returned unparseable output -- treating as not yet complete." >&2
     fi
 
-    if [ "$(date +%s)" -ge "$deadline" ]; then
+    now="$(date +%s)"
+    if [ "$now" -ge "$deadline" ]; then
       echo "timeout"
       return
     fi
 
-    sleep "$POLL_INTERVAL_SECONDS"
+    remaining="$(( deadline - now ))"
+    sleep_for="$POLL_INTERVAL_SECONDS"
+    if [ "$sleep_for" -gt "$remaining" ]; then
+      sleep_for="$remaining"
+    fi
+    sleep "$sleep_for"
   done
 }
 
@@ -265,7 +319,16 @@ while read -r pr; do
   # not retry forever after the base branch has already overtaken them.
   if [ "$pr_kind" != "group" ] || [ "$bump_kind" != "minor-or-patch" ]; then
     changed_files="$(gh pr diff "$number" --repo "$REPO" --name-only 2>/dev/null || true)"
-    supersession="$("$script_dir"/dependabot-supersession-check.sh "$title" "$body" <<<"$changed_files")"
+    if base_snapshot="$(snapshot_default_branch_files "$changed_files")"; then
+      supersession="$(
+        cd -- "$base_snapshot"
+        "$script_dir"/dependabot-supersession-check.sh "$title" "$body" \
+          <<<"$changed_files"
+      )"
+      rm -r -- "$base_snapshot"
+    else
+      supersession="unknown"
+    fi
     if [ "$supersession" = "superseded" ]; then
       echo "PR #$number: $pr_kind/$bump_kind Dependabot update — proposed version is already superseded on $default_branch, closing."
       gh pr close "$number" --repo "$REPO" --comment \
@@ -284,15 +347,11 @@ while read -r pr; do
 
   # `gh pr update-branch` returns as soon as GitHub accepts the request; the
   # rebase itself lands asynchronously. Both mergeStateStatus and headRefOid
-  # can still describe the pre-rebase commit for a moment afterwards -- and
-  # that commit's required checks are already green from before the rebase,
-  # so wait_for_required_checks would immediately report "pass" for a commit
-  # that was never tested against the current base. Strict branch protection
-  # would reject the resulting merge as BEHIND, but that makes the safety a
-  # repository setting's doing rather than this script's, which is exactly
-  # the coupling the head-SHA scoping above exists to avoid. Poll past both
-  # BEHIND (rebase not landed) and UNKNOWN (GitHub still computing
-  # mergeability) before trusting either field.
+  # can still describe the pre-rebase commit for a moment afterwards.
+  # mergeStateStatus can even be a stale CLEAN immediately after an earlier PR
+  # changed the base. Prove the current baseRefOid is actually an ancestor of
+  # the candidate head instead of trusting that rollup alone; only then bind
+  # the later check wait and merge to that exact head SHA.
   # Clamped to the run budget as well as its own: this wait can repeat once
   # per PR, so without the clamp a day with many PRs stuck BEHIND could spend
   # REBASE_SETTLE_SECONDS on each and push past the job's timeout-minutes,
@@ -302,6 +361,11 @@ while read -r pr; do
   if [ "$settle_deadline" -gt "$run_deadline" ]; then
     settle_deadline="$run_deadline"
   fi
+  branch_ready=false
+  merge_state=UNKNOWN
+  ancestry_status=unknown
+  head_sha=""
+  base_sha=""
   while true; do
     if ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then
       echo "PR #$number: could not read merge state (${merge_state}) — leaving for the next run."
@@ -310,17 +374,31 @@ while read -r pr; do
       # done < <(...)` in this same shell, not a pipeline subshell.
       continue 2
     fi
-    if [ "$merge_state" != "BEHIND" ] && [ "$merge_state" != "UNKNOWN" ]; then
+
+    if [ "$merge_state" = "DIRTY" ]; then
       break
     fi
+    if [ "$merge_state" != "BEHIND" ] && [ "$merge_state" != "UNKNOWN" ]; then
+      if ! head_sha="$(gh pr view "$number" --repo "$REPO" --json headRefOid --jq .headRefOid 2>&1)" \
+        || ! base_sha="$(gh pr view "$number" --repo "$REPO" --json baseRefOid --jq .baseRefOid 2>&1)"; then
+        echo "PR #$number: could not read head/base commits — leaving for the next run."
+        continue 2
+      fi
+      if ancestry_status="$(
+        gh api "repos/$REPO/compare/$base_sha...$head_sha" --jq .status 2>/dev/null
+      )" && { [ "$ancestry_status" = "ahead" ] || [ "$ancestry_status" = "identical" ]; }; then
+        branch_ready=true
+        break
+      fi
+    fi
+
     if [ "$(date +%s)" -ge "$settle_deadline" ]; then
       break
     fi
     sleep "$REBASE_SETTLE_INTERVAL_SECONDS"
   done
-  if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BEHIND" ] \
-    || [ "$merge_state" = "UNKNOWN" ]; then
-    echo "PR #$number: branch state is $merge_state after rebase — leaving for the next run."
+  if [ "$branch_ready" != "true" ]; then
+    echo "PR #$number: branch is not proven current after rebase (state: $merge_state, ancestry: $ancestry_status) — leaving for the next run."
     continue
   fi
 
@@ -329,22 +407,43 @@ while read -r pr; do
     continue
   fi
 
-  if ! head_sha="$(gh pr view "$number" --repo "$REPO" --json headRefOid --jq .headRefOid 2>&1)"; then
-    echo "PR #$number: could not read head commit (${head_sha}) — leaving for the next run."
-    continue
-  fi
-
   echo "PR #$number: waiting for required checks on commit $head_sha."
   case "$(wait_for_required_checks "$number" "$head_sha")" in
     pass)
-      echo "PR #$number: required checks passed — merging now."
+      # Re-read both refs after the check wait. A force-push must not swap in a
+      # different, unchecked head, and a base change must not make this head
+      # stale between the settle check and the merge attempt.
+      if ! merge_head="$(gh pr view "$number" --repo "$REPO" --json headRefOid --jq .headRefOid 2>&1)" \
+        || ! merge_base="$(gh pr view "$number" --repo "$REPO" --json baseRefOid --jq .baseRefOid 2>&1)" \
+        || ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then
+        echo "PR #$number: could not re-read branch state after checks — leaving for the next run."
+        continue
+      fi
+      if [ "$merge_head" != "$head_sha" ]; then
+        echo "PR #$number: head changed from $head_sha to $merge_head after checks — leaving for the next run."
+        continue
+      fi
+      if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BEHIND" ] \
+        || [ "$merge_state" = "UNKNOWN" ]; then
+        echo "PR #$number: branch state became $merge_state after checks — leaving for the next run."
+        continue
+      fi
+      if ! merge_ancestry="$(
+        gh api "repos/$REPO/compare/$merge_base...$merge_head" --jq .status 2>/dev/null
+      )" || { [ "$merge_ancestry" != "ahead" ] && [ "$merge_ancestry" != "identical" ]; }; then
+        echo "PR #$number: base is no longer an ancestor of the checked head — leaving for the next run."
+        continue
+      fi
+
+      echo "PR #$number: required checks passed on the current head — merging now."
       # --delete-branch is belt-and-braces: the repository does have
       # "automatically delete head branches" enabled (it did not when this
       # merge path was first written, which is what the flag was added for),
       # so this normally deletes a branch GitHub was about to delete anyway.
       # Kept because it makes the cleanup this script's own doing rather than
       # a repository setting's, and costs nothing when the setting is on.
-      gh pr merge "$url" --repo "$REPO" --squash --delete-branch \
+      gh pr merge "$url" --repo "$REPO" --match-head-commit "$head_sha" \
+        --squash --delete-branch \
         || echo "PR #$number: merge attempt was rejected — leaving for the next run."
       ;;
     fail)

@@ -64,9 +64,9 @@ actually posts it, and that this document still records it. If any of these
 three jobs is ever renamed (its `name:` key, or its job `id` for the two
 without one), that step fails — update branch protection's required-checks
 list, `REQUIRED_CONTEXTS` in that script, and the list above together in the
-same PR. Without it, a rename silently stops the check being enforced instead
-of failing (GitHub does not block a PR on a required-context string that no run
-ever posts under — see
+same PR. Without it, a rename leaves the pull request blocked indefinitely on
+an expected context that the renamed job never posts, without identifying the
+rename as the cause — see
 [status checks docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets-and-branch-protection-rules/about-protected-branches)).
 
 `.github/scripts/daily-pr-sync.sh` reads this same list from the branch
