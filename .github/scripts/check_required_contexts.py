@@ -2,12 +2,12 @@
 """Verify the default branch's required status checks still name real jobs.
 
 Branch protection matches required status checks by the exact string a
-check-run posts under, and GitHub does not block a pull request on a required
-context that no run ever produces -- so renaming a job silently stops that
-check being enforced instead of failing loudly. The list itself lives only in
-GitHub's branch protection UI (`.github/scripts/daily-pr-sync.sh` reads it from
-the API at runtime rather than hardcoding it), which means nothing in the
-repository could catch that drift.
+check-run posts under. Renaming a required job therefore leaves pull requests
+blocked forever waiting for the old context, with no diagnostic that connects
+the pending check to the job rename. The list itself lives only in GitHub's
+branch protection UI (`.github/scripts/daily-pr-sync.sh` reads it from the API
+at runtime rather than hardcoding it), which means nothing in the repository
+would otherwise explain that drift.
 
 This asserts the other half: that each context recorded in
 `.github/WORKFLOW_SECURITY.md` still resolves to a job that actually posts it.

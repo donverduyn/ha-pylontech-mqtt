@@ -60,6 +60,19 @@ if [ "$1" = "api" ]; then
         printf '%s\n' "$raw"
       fi
       ;;
+    */commits/*)
+      printenv GH_BASE_COMMIT_SHA || echo "base-sha"
+      ;;
+    */contents/*)
+      file="${2#*/contents/}"
+      file="${file%%\?*}"
+      cat "${GH_BASE_TREE:-$PWD}/$file"
+      ;;
+    */compare/*)
+      head="${2##*...}"
+      status_var="GH_COMPARE_STATUS_$head"
+      printenv "$status_var" || echo "ahead"
+      ;;
     *)
       echo "unexpected gh api path: $2" >&2
       exit 1
@@ -78,8 +91,24 @@ case "$1 $2" in
   "pr view")
     case "$*" in
       *headRefOid*)
-        sha_var="GH_HEAD_SHA_$3"
-        printenv "$sha_var" || echo "sha$3"
+        sequence_var="GH_HEAD_SHA_SEQUENCE_$3"
+        if sequence="$(printenv "$sequence_var")"; then
+          count_file="$GH_LOG.head-count-$3"
+          count=0
+          if [ -f "$count_file" ]; then
+            count="$(cat "$count_file")"
+          fi
+          count=$((count + 1))
+          printf '%s\n' "$count" >"$count_file"
+          sed -n "${count}p" <<<"$sequence"
+        else
+          sha_var="GH_HEAD_SHA_$3"
+          printenv "$sha_var" || echo "sha$3"
+        fi
+        ;;
+      *baseRefOid*)
+        base_var="GH_BASE_SHA_$3"
+        printenv "$base_var" || echo "base$3"
         ;;
       *)
         state_var="GH_MERGE_STATE_$3"
@@ -508,6 +537,22 @@ def test_stale_cleanup_treats_all_three_pr_kinds_as_recyclable() -> None:
     assert "is_dependabot" in recyclable_block
 
 
+def test_stale_cleanup_only_recycles_repository_owned_automation_branches() -> None:
+    text = STALE_WORKFLOW.read_text()
+
+    assert "isCrossRepository" in text
+    recyclable_block = text[
+        text.index("is_recyclable=false") : text.index(
+            'if [ "$is_recyclable" != "true" ]'
+        )
+    ]
+    assert '[ "$is_cross_repository" = "false" ]' in recyclable_block
+
+    deletion_block = text[text.index("# Best effort:") :]
+    assert '[ "$is_cross_repository" = "false" ]' in deletion_block
+    assert "Head branch belongs to a fork" in deletion_block
+
+
 def test_stale_cleanup_exempts_confirmed_major_dependabot_bumps() -> None:
     # Closing a PR only blocks Dependabot from recreating that *exact*
     # proposed version -- not the dependency, and not any newer release
@@ -662,8 +707,10 @@ def test_daily_sync_rebases_every_open_pr_and_merges_each_eligible_group_in_orde
     # failing (#1), individual (#2), and human (#5) PRs are never merged.
     squash_calls = [call for call in calls if call.endswith("--squash --delete-branch")]
     assert squash_calls == [
-        "pr merge https://example.test/pr/3 --repo owner/repo --squash --delete-branch",
-        "pr merge https://example.test/pr/4 --repo owner/repo --squash --delete-branch",
+        "pr merge https://example.test/pr/3 --repo owner/repo "
+        "--match-head-commit sha3 --squash --delete-branch",
+        "pr merge https://example.test/pr/4 --repo owner/repo "
+        "--match-head-commit sha4 --squash --delete-branch",
     ]
 
     # A human PR's own auto-merge choice is never touched, and it never
@@ -730,8 +777,10 @@ def test_daily_sync_merges_individual_non_major_prs_not_just_grouped_ones(
     calls = log.read_text().splitlines()
     squash_calls = {call for call in calls if call.endswith("--squash --delete-branch")}
     assert squash_calls == {
-        "pr merge https://example.test/pr/1 --repo owner/repo --squash --delete-branch",
-        "pr merge https://example.test/pr/2 --repo owner/repo --squash --delete-branch",
+        "pr merge https://example.test/pr/1 --repo owner/repo "
+        "--match-head-commit sha1 --squash --delete-branch",
+        "pr merge https://example.test/pr/2 --repo owner/repo "
+        "--match-head-commit sha2 --squash --delete-branch",
     }
 
 
@@ -742,11 +791,16 @@ def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
     monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
 
-    # requirements_dev.lock.txt already pins requests past what PR #1
-    # proposes -- dependabot-supersession-check.sh reads it straight from
-    # the working tree daily-pr-sync.sh runs in, exactly as it would from
-    # a real checkout.
-    (tmp_path / "requirements_dev.lock.txt").write_text("requests==2.34.2\n")
+    # The checkout is stale, as it becomes after daily-pr-sync merges an
+    # earlier PR. The freshly resolved base branch is already past what PR #1
+    # proposes, so supersession must use that exact remote snapshot.
+    checkout = tmp_path / "checkout"
+    current_base = tmp_path / "current-base"
+    checkout.mkdir()
+    current_base.mkdir()
+    (checkout / "requirements_dev.lock.txt").write_text("requests==2.32.5\n")
+    (current_base / "requirements_dev.lock.txt").write_text("requests==2.34.2\n")
+    monkeypatch.setenv("GH_BASE_TREE", str(current_base))
 
     monkeypatch.setenv(
         "GH_PRS",
@@ -767,7 +821,7 @@ def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
     )
     monkeypatch.setenv("GH_CHANGED_FILES_1", "requirements_dev.lock.txt")
 
-    subprocess.run([DAILY_SYNC], check=True, cwd=tmp_path)
+    subprocess.run([DAILY_SYNC], check=True, cwd=checkout)
 
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
@@ -827,6 +881,85 @@ def test_daily_sync_waits_for_the_rebase_to_land_before_reading_head_state(
     # Never even asked which commit to gate on: the branch state was not a
     # basis for merging in the first place.
     assert not any("headRefOid" in call for call in calls)
+
+
+def test_daily_sync_rejects_stale_clean_state_when_base_is_not_an_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("REBASE_SETTLE_SECONDS", "0")
+    monkeypatch.setenv("REBASE_SETTLE_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    monkeypatch.setenv("GH_MERGE_STATE_1", "CLEAN")
+    monkeypatch.setenv("GH_COMPARE_STATUS_sha1", "diverged")
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": "Bumps the docker group with 1 update: python.\n",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                }
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert "api repos/owner/repo/compare/base1...sha1 --jq .status" in calls
+    assert not any("check-runs" in call for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
+
+
+def test_daily_sync_never_merges_a_head_that_changed_after_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _install_fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GH_REQUIRED_CONTEXTS", '["ci"]')
+    monkeypatch.setenv("GH_HEAD_SHA_SEQUENCE_1", "sha1\nsha2")
+    monkeypatch.setenv(
+        "GH_CHECKRUNS_sha1",
+        '[{"name":"ci","status":"completed","conclusion":"success"}]',
+    )
+    monkeypatch.setenv(
+        "GH_PRS",
+        json.dumps(
+            [
+                {
+                    "number": 1,
+                    "author": {"login": "app/dependabot"},
+                    "url": "https://example.test/pr/1",
+                    "title": "chore(deps): bump the docker group",
+                    "body": "Bumps the docker group with 1 update: python.\n",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                }
+            ]
+        ),
+    )
+
+    subprocess.run([DAILY_SYNC], check=True)
+
+    calls = log.read_text().splitlines()
+    assert sum("headRefOid" in call for call in calls) == 2
+    assert any("commits/sha1/check-runs" in call for call in calls)
+    assert not any(call.endswith("--squash --delete-branch") for call in calls)
 
 
 def test_daily_sync_reads_every_page_of_check_runs(
@@ -938,8 +1071,8 @@ def test_daily_sync_merges_when_a_required_context_has_duplicate_check_runs(
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
     assert (
-        "pr merge https://example.test/pr/1 --repo owner/repo --squash --delete-branch"
-        in calls
+        "pr merge https://example.test/pr/1 --repo owner/repo "
+        "--match-head-commit sha1 --squash --delete-branch" in calls
     )
 
 
@@ -1136,3 +1269,12 @@ def test_daily_sync_stops_merging_once_the_run_budget_is_spent(
     calls = log.read_text().splitlines()
     assert "pr update-branch 1 --repo owner/repo --rebase" in calls
     assert not any(call.endswith("--squash --delete-branch") for call in calls)
+
+
+def test_daily_sync_clamps_each_check_wait_to_the_run_deadline() -> None:
+    text = DAILY_SYNC.read_text()
+
+    assert 'if [ "$deadline" -gt "$run_deadline" ]; then' in text
+    assert 'deadline="$run_deadline"' in text
+    assert 'if [ "$sleep_for" -gt "$remaining" ]; then' in text
+    assert 'sleep_for="$remaining"' in text

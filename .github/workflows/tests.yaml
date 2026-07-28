@@ -227,10 +227,9 @@ jobs:
         run: python3 .github/scripts/check_action_pins.py
       - name: Verify required status check contexts still name real jobs
         # Branch protection matches by the exact string a check-run posts
-        # under, and GitHub does not block a PR on a required context no run
-        # produces -- so renaming one of these jobs would silently stop that
-        # check being enforced rather than fail. This catches it in the same
-        # PR as the rename.
+        # under. Renaming one of these jobs would leave the PR blocked forever
+        # waiting for the old context, without pointing back to the rename.
+        # This catches it in the same PR with an actionable error.
         run: python3 .github/scripts/check_required_contexts.py
       - name: ShellCheck
         # Preinstalled on ubuntu-latest runners; covers every shell script in
