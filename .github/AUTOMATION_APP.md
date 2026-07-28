@@ -21,9 +21,16 @@ Use these GitHub App settings:
   - Workflows: read and write
 
 The Workflows permission is required because the minimum-version updater may
-change `.github/workflows/tests.yaml`, and App-authenticated PR branch updates
-must trigger the normal pull-request checks. Install the App only on this
-repository.
+change `.github/workflows/tests.yaml`, and because PR Auto-merge merges
+Dependabot PRs that bump action pins in those same files. App-authenticated PR
+branch updates must trigger the normal pull-request checks. Install the App
+only on this repository.
+
+Each workflow requests a narrower token than the App itself holds, so this
+grant does not reach every run: `dependency-updates.yaml` deliberately omits
+`permission-workflows: write`, because `make update-deps` writes no file under
+`.github/workflows/` and its pull request is the one that auto-merges. See that
+workflow's own comment on the step.
 
 The Administration permission is **read-only** and is required by
 `.github/scripts/daily-pr-sync.sh`, which reads the default branch's required

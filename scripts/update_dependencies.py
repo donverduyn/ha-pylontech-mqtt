@@ -876,8 +876,13 @@ def update_dependabot_exclude_list() -> None:
     pinned right now, so it can't drift stale between homeassistant/phacc
     version bumps. These names are deliberately not put in Dependabot's
     global ignore list: an excluded update falls back to an individual
-    security PR, where the blocker remains visible until the
-    stale-automation workflow closes it as stale. The two exceptions are
+    security PR, where the blocker stays visible instead of disappearing
+    silently. That PR is then closed within a day by daily-pr-sync.sh, which
+    reads this same generated block back out of dependabot.yml (see
+    .github/scripts/dependabot-phacc-pinned-check.sh) and comments the
+    specific package and fix path — rather than being left to fail
+    `pytest (min)` for the week it took close-stale-automation-prs.yaml's
+    generic age sweep to reach it. The two exceptions are
     homeassistant and pytest-homeassistant-custom-component themselves
     (see dependabot.yml's separate, hand-maintained `ignore:` block): unlike
     everything in this generated list, which is a dependency *of* one of

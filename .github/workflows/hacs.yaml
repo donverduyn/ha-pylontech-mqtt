@@ -21,8 +21,14 @@ permissions: {}
 concurrency:
   # See tests.yaml's identical group key for why this no longer needs an
   # event-kind suffix: labeled/unlabeled can't trigger this workflow at all.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # github.run_id rather than github.ref as the non-PR fallback, and
+  # cancellation restricted to pull requests, both matching tests.yaml: every
+  # non-PR trigger here resolves to refs/heads/master, so a shared ref key
+  # would let a manual dispatch cancel the in-flight weekly run -- which is
+  # the one run that exists to catch drift in the floating validator image
+  # this action delegates to.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # See detect-release.yaml for why this is a reusable-workflow call rather

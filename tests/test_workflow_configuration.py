@@ -1,6 +1,9 @@
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+REQUIRED_CONTEXTS_SCRIPT = ROOT / ".github" / "scripts" / "check_required_contexts.py"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yaml"
 AUTORELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "autorelease.yaml"
 DETECT_RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "detect-release.yaml"
@@ -17,6 +20,13 @@ AUTOMATION_SECRET_CONSUMERS = {
     "dependency-updates.yaml",
     "min-ha-version-update.yaml",
 }
+# All three pull-request-triggered workflows share one key. Written once here
+# rather than in each test, so changing it is a one-line edit.
+PR_CONCURRENCY_GROUP = (
+    "group: ${{ github.workflow }}-"
+    "${{ github.event.pull_request.number || github.run_id }}"
+)
+PR_CONCURRENCY_CANCEL = "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
 
 
 def test_tests_runs_automatically_only_for_pull_requests() -> None:
@@ -99,14 +109,36 @@ def test_automation_private_key_consumers_use_protected_environment() -> None:
         assert "    environment: automation\n" in workflow
 
 
-def test_tests_concurrency_cancels_only_stale_pr_runs() -> None:
-    text = TESTS_WORKFLOW.read_text()
+def test_pr_workflows_cancel_only_stale_pr_runs() -> None:
+    # Every non-PR trigger on hacs.yaml/hassfest.yaml resolves to
+    # refs/heads/master, so their previous github.ref group key let a manual
+    # dispatch cancel the in-flight weekly run -- the one run that exists to
+    # catch drift in the floating validator images hacs/action and
+    # home-assistant/actions/hassfest delegate to. All three now use
+    # tests.yaml's key, which gives each non-PR run a group of its own.
+    for workflow_path in (TESTS_WORKFLOW, HACS_WORKFLOW, HASSFEST_WORKFLOW):
+        text = workflow_path.read_text()
+        assert PR_CONCURRENCY_GROUP in text, workflow_path.name
+        assert PR_CONCURRENCY_CANCEL in text, workflow_path.name
 
+
+def test_meta_lint_verifies_required_status_check_contexts_resolve() -> None:
+    # Branch protection matches by the exact string a check-run posts under,
+    # and GitHub does not block a PR on a required context no run produces --
+    # so renaming one of these jobs silently stops it being enforced instead
+    # of failing. Nothing else in the repository can see that list.
     assert (
-        "group: ${{ github.workflow }}-"
-        "${{ github.event.pull_request.number || github.run_id }}" in text
+        "run: python3 .github/scripts/check_required_contexts.py"
+        in TESTS_WORKFLOW.read_text()
     )
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+
+    result = subprocess.run(
+        [sys.executable, str(REQUIRED_CONTEXTS_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_tests_downstream_jobs_override_transitive_skip_and_fail_closed() -> None:

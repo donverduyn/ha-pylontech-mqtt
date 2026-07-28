@@ -5,6 +5,10 @@
 #      human PRs alike, including ones that can never be merged
 #      automatically -- so every branch stays as fresh as automation can
 #      make it, even a PR stuck failing on its own merits.
+#   1a. Any Dependabot update proposing a version for a package the locked
+#      homeassistant/phacc releases pin exactly is closed on the spot: no
+#      rebase can make it resolvable (see
+#      dependabot-phacc-pinned-check.sh).
 #   2. Any Dependabot update Dependabot didn't group as a minor/patch
 #      update -- an individual PR, or a major-version bump either way --
 #      gets checked for supersession first (see below) and closed if
@@ -61,6 +65,13 @@ set -euo pipefail
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-30}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
 
+# How long to let GitHub catch up with a rebase this script just requested
+# before reading the PR's post-rebase state. Separate from, and much shorter
+# than, the check wait above: this only covers GitHub's own asynchronous
+# processing of the update-branch request, not any CI.
+REBASE_SETTLE_SECONDS="${REBASE_SETTLE_SECONDS:-120}"
+REBASE_SETTLE_INTERVAL_SECONDS="${REBASE_SETTLE_INTERVAL_SECONDS:-5}"
+
 # Overall per-run budget for check-waiting, independent of the above. This
 # wait can repeat once per eligible PR with nothing else capping how many
 # eligible PRs appear in one run, so without a run-level budget too, several
@@ -109,6 +120,21 @@ if ! required_contexts="$(
   exit 1
 fi
 
+# Branch protection's list is the only copy that decides whether a PR is
+# actually blocked, and it lives solely in GitHub's UI -- meta-lint's
+# check_required_contexts.py can only check the two committed transcriptions
+# (its own REQUIRED_CONTEXTS map and WORKFLOW_SECURITY.md) against the
+# workflow files, never against this. This run already holds the list and the
+# Administration: read grant needed to fetch it, so it is the one place the
+# loop can be closed. A warning rather than a hard failure: an intentional
+# protection edit should not stop the day's maintenance, it should just not
+# pass unnoticed -- the committed copies are what a later reader trusts.
+expected_contexts="$(python3 "$script_dir/check_required_contexts.py" --list | sort || true)"
+actual_contexts="$(jq -r '.[]' <<<"$required_contexts" | sort)"
+if [ -n "$expected_contexts" ] && [ "$expected_contexts" != "$actual_contexts" ]; then
+  echo "::warning::$default_branch's required status checks have drifted from the committed list. Branch protection requires: $(tr '\n' ' ' <<<"$actual_contexts"). check_required_contexts.py expects: $(tr '\n' ' ' <<<"$expected_contexts"). Update REQUIRED_CONTEXTS and .github/WORKFLOW_SECURITY.md, or the protection rule."
+fi
+
 # Echoes exactly one of: pass | fail | timeout
 wait_for_required_checks() {
   local number="$1" sha="$2"
@@ -127,8 +153,23 @@ wait_for_required_checks() {
     # false "pass" -- exactly the untested-commit risk this whole function
     # exists to prevent. Every failure path here now falls through to the
     # same safe "not yet complete" branch instead.
-    if runs="$(gh api "repos/$REPO/commits/$sha/check-runs" --jq '[.check_runs[] | {name, status, conclusion}]' 2>/dev/null)" \
-      && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$runs"; then
+    # --paginate, not a single default-page request: this endpoint returns 30
+    # check-runs per page, and one commit here already carries ~17 across
+    # tests.yaml/hacs.yaml/hassfest.yaml (three of which are the same
+    # "detect-release / detect-release" name). A single re-run of Tests adds
+    # eleven more, so two re-runs push the required contexts off page one --
+    # they would then match nothing, classify as "pending", and every eligible
+    # PR would spin to MAX_WAIT_SECONDS and never merge, with no error
+    # anywhere. --jq '.check_runs[]' (rather than a `[...]`-wrapped filter)
+    # emits one object per line across all pages for `jq -s` to slurp into a
+    # single array; a wrapped filter would print one array per page as
+    # separate top-level JSON values instead. Same shape tests.yaml's
+    # codeql-gate uses, and for the same reason.
+    if runs="$(
+      gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" --paginate \
+        --jq '.check_runs[] | {name, status, conclusion}' 2>/dev/null \
+        | jq -s '.'
+    )" && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$runs"; then
       # A required context can have more than one check-run entry for the
       # same commit (re-runs, multiple triggering events observed on this
       # repo's own "tests-finished" context) -- classify each required
@@ -220,6 +261,32 @@ while read -r pr; do
   pr_kind="$("$script_dir"/dependabot-pr-kind.sh "$body")"
   bump_kind="$("$script_dir"/dependabot-bump-kind.sh "$title" "$body")"
 
+  # Checked before the supersession call below because it needs no extra API
+  # request, and because it recognises a strictly stronger blocker: a
+  # superseded PR merely proposes something already done, while this one
+  # proposes something that can never resolve at all. Left visible as an
+  # opened PR (dependabot.yml excludes these names from the security-updates
+  # group rather than ignoring them, deliberately), but closed here within a
+  # day with the specific reason instead of failing `pytest (min)` for the
+  # seven days it used to take close-stale-automation-prs.yaml's generic age
+  # sweep to reach it.
+  # Non-zero here means the generated block in dependabot.yml no longer
+  # parses, not that this PR is unclassifiable -- the script already returns
+  # "ok" for the latter. Surfaced as its own ::error:: annotation and skipped
+  # rather than merged past, so the run stays red until someone looks while
+  # the rest of the maintenance pass still happens.
+  if ! phacc_pinned="$("$script_dir"/dependabot-phacc-pinned-check.sh "$title" "$body")"; then
+    echo "PR #$number: skipping the exact-pin check; see the error above."
+    phacc_pinned="ok"
+  fi
+  if [ "$phacc_pinned" = "blocked" ]; then
+    echo "PR #$number: proposes a version for a package the locked homeassistant/phacc releases pin exactly — closing."
+    gh pr close "$number" --repo "$REPO" --comment \
+      "Closing: this PR bumps a package that the currently-locked \`homeassistant\`/\`pytest-homeassistant-custom-component\` releases pin exactly, so the dependency set cannot resolve at any version this PR could propose — rebasing it will not help. Moving that pin is \`scripts/update_dependencies.py\`'s job (dependency-updates.yaml for the current leg, min-ha-version-update.yaml for the floor); once one of those lands, a still-relevant advisory surfaces again on its own." \
+      || echo "PR #$number: could not close; PR may have changed concurrently."
+    continue
+  fi
+
   # Grouping is Dependabot's own ecosystem-level packaging choice, not a
   # safety signal -- a security update for an excluded package (single,
   # minor-or-patch) or an action with no tagged releases to compare
@@ -249,11 +316,44 @@ while read -r pr; do
     fi
   fi
 
-  if ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then
-    echo "PR #$number: could not read merge state (${merge_state}) — leaving for the next run."
-    continue
+  # `gh pr update-branch` returns as soon as GitHub accepts the request; the
+  # rebase itself lands asynchronously. Both mergeStateStatus and headRefOid
+  # can still describe the pre-rebase commit for a moment afterwards -- and
+  # that commit's required checks are already green from before the rebase,
+  # so wait_for_required_checks would immediately report "pass" for a commit
+  # that was never tested against the current base. Strict branch protection
+  # would reject the resulting merge as BEHIND, but that makes the safety a
+  # repository setting's doing rather than this script's, which is exactly
+  # the coupling the head-SHA scoping above exists to avoid. Poll past both
+  # BEHIND (rebase not landed) and UNKNOWN (GitHub still computing
+  # mergeability) before trusting either field.
+  # Clamped to the run budget as well as its own: this wait can repeat once
+  # per PR, so without the clamp a day with many PRs stuck BEHIND could spend
+  # REBASE_SETTLE_SECONDS on each and push past the job's timeout-minutes,
+  # which is the runner-imposed hard kill RUN_BUDGET_SECONDS exists to keep
+  # this script clear of.
+  settle_deadline="$(( $(date +%s) + REBASE_SETTLE_SECONDS ))"
+  if [ "$settle_deadline" -gt "$run_deadline" ]; then
+    settle_deadline="$run_deadline"
   fi
-  if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BEHIND" ]; then
+  while true; do
+    if ! merge_state="$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus 2>&1)"; then
+      echo "PR #$number: could not read merge state (${merge_state}) — leaving for the next run."
+      # continue 2, not 1: skip to the next PR rather than re-polling this
+      # one. Reaches the outer loop because it is a plain `while read ...
+      # done < <(...)` in this same shell, not a pipeline subshell.
+      continue 2
+    fi
+    if [ "$merge_state" != "BEHIND" ] && [ "$merge_state" != "UNKNOWN" ]; then
+      break
+    fi
+    if [ "$(date +%s)" -ge "$settle_deadline" ]; then
+      break
+    fi
+    sleep "$REBASE_SETTLE_INTERVAL_SECONDS"
+  done
+  if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "BEHIND" ] \
+    || [ "$merge_state" = "UNKNOWN" ]; then
     echo "PR #$number: branch state is $merge_state after rebase — leaving for the next run."
     continue
   fi

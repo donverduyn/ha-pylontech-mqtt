@@ -203,6 +203,13 @@ jobs:
         run: /tmp/actionlint -color .github/workflows/*.yaml
       - name: Verify external action pins
         run: python3 .github/scripts/check_action_pins.py
+      - name: Verify required status check contexts still name real jobs
+        # Branch protection matches by the exact string a check-run posts
+        # under, and GitHub does not block a PR on a required context no run
+        # produces -- so renaming one of these jobs would silently stop that
+        # check being enforced rather than fail. This catches it in the same
+        # PR as the rename.
+        run: python3 .github/scripts/check_required_contexts.py
       - name: ShellCheck
         # Preinstalled on ubuntu-latest runners; covers every shell script in
         # the repo (docker/Dockerfile has no other shell to lint). Discovered
@@ -457,6 +464,15 @@ jobs:
           echo "::error::skip-ci is limited to documentation-only, non-release PRs — remove the label."
           exit 1
       - name: Check all required jobs passed
+        # detect-release is in needs: but deliberately absent from the list
+        # below. It is a detector, not a check: if it fails for any reason its
+        # outputs come back empty, the skip condition above evaluates false,
+        # and every real job runs and is verified here anyway -- that is the
+        # "fails closed to running the checks" behaviour, so failing this
+        # summary on it too would reject a PR whose entire suite passed. The
+        # one thing its failure could otherwise hide, an invalid skip-ci
+        # label, is re-checked by the step above rather than inferred from
+        # this job's result.
         run: |
           for r in "${{ needs.pytest.result }}" "${{ needs.lint.result }}" \
                    "${{ needs.docker-build.result }}" "${{ needs.meta-lint.result }}" \

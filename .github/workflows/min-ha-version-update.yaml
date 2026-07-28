@@ -8,6 +8,10 @@ on:
 permissions: {}
 
 concurrency:
+  # This workflow's own group, not dependency-pr-maintenance -- see
+  # dependency-updates.yaml's identical block for why the --force-with-lease
+  # race against daily-pr-sync.sh is fixed in create-or-update-pr's push
+  # rather than by serializing these workflows against each other.
   group: min-ha-version-update
   cancel-in-progress: true
 
