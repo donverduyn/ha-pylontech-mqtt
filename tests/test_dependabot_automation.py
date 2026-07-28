@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import pytest
 ROOT = Path(__file__).parents[1]
 PR_KIND = ROOT / ".github" / "scripts" / "dependabot-pr-kind.sh"
 SUPERSESSION_CHECK = ROOT / ".github" / "scripts" / "dependabot-supersession-check.sh"
-PHACC_PINNED_CHECK = ROOT / ".github" / "scripts" / "dependabot-phacc-pinned-check.sh"
 DAILY_SYNC = ROOT / ".github" / "scripts" / "daily-pr-sync.sh"
 WORKFLOWS = ROOT / ".github" / "workflows"
 CREATE_OR_UPDATE_PR_ACTION = (
@@ -117,16 +115,6 @@ def _install_fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GH_TOKEN", "test-token")
     monkeypatch.setenv("REPO", "owner/repo")
 
-    # Point dependabot-phacc-pinned-check.sh at a fixture rather than the
-    # repository's own generated exclude-patterns block. That block is
-    # regenerated from whatever homeassistant/phacc pin is locked at the time,
-    # so leaving these tests reading it would make unrelated cases (which
-    # happen to use real package names like "requests") start closing PRs the
-    # next time `make update-deps` runs.
-    dependabot_yml = _write_exclude_block(
-        tmp_path, ["exactly-pinned-package", "pytest"]
-    )
-    monkeypatch.setenv("DEPENDABOT_YML", str(dependabot_yml))
     return log
 
 
@@ -183,199 +171,6 @@ def test_dependabot_pr_kind_fails_closed_for_single_or_unknown_bodies(
     assert result.stdout == "single\n"
 
 
-def _write_exclude_block(tmp_path: Path, names: list[str]) -> Path:
-    path = tmp_path / "dependabot.yml"
-    generated = "\n".join(f'        - "{name}"' for name in names)
-    path.write_text(
-        "    groups:\n"
-        "      security-updates:\n"
-        "        exclude-patterns:\n"
-        "        # <dependabot-exclude-generated>\n"
-        f"{generated}\n"
-        "        # </dependabot-exclude-generated>\n"
-    )
-    return path
-
-
-def _run_phacc_pinned_check(title: str, body: str, dependabot_yml: Path | None) -> str:
-    env = dict(os.environ)
-    if dependabot_yml is not None:
-        env["DEPENDABOT_YML"] = str(dependabot_yml)
-    result = subprocess.run(
-        [PHACC_PINNED_CHECK, title, body],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    return result.stdout.strip()
-
-
-def test_phacc_pinned_check_reads_the_real_generated_block() -> None:
-    # The one end-to-end assertion of the contract between
-    # update_dependabot_exclude_list() (which writes the block) and this
-    # script (which reads it back): marker spelling, indentation, `- "name"`
-    # syntax and double-quoting, none of which anything else checks. Every
-    # other test here writes the fixture by hand in that same format, so they
-    # could only ever agree with each other. Uses the repository's real
-    # dependabot.yml and a name taken from it at runtime rather than a
-    # hardcoded one, so it does not need updating when the list is
-    # regenerated.
-    dependabot_yml = ROOT / ".github" / "dependabot.yml"
-    block = dependabot_yml.read_text().split("# <dependabot-exclude-generated>", 1)[1]
-    block = block.split("# </dependabot-exclude-generated>", 1)[0]
-    names = re.findall(r'-\s*"([^"]+)"', block)
-    assert names, "the generated exclude-patterns block is empty"
-
-    assert (
-        _run_phacc_pinned_check(f"bump {names[0]} from 1.0.0 to 1.0.1", "", None)
-        == "blocked"
-    )
-
-
-def test_phacc_pinned_check_blocks_a_package_pinned_exactly_by_phacc(
-    tmp_path: Path,
-) -> None:
-    # The live shape of this: five open PRs (#139/#142/#143/#146/#147) sat
-    # failing `pytest (min)` for a week each with
-    # "Because pytest-homeassistant-custom-component==0.13.308 depends on
-    # pytest==9.0.0 and you require pytest==9.0.3 ... unsatisfiable". No
-    # rebase can resolve that, so waiting on checks only burns run budget.
-    dependabot_yml = _write_exclude_block(tmp_path, ["pytest", "pyjwt"])
-
-    assert (
-        _run_phacc_pinned_check(
-            "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3", "", dependabot_yml
-        )
-        == "blocked"
-    )
-    # The generated body section is read too, not just the title -- a grouped
-    # PR's title carries no dependency name at all.
-    assert (
-        _run_phacc_pinned_check(
-            "chore(deps): bump the security-updates group",
-            "Bumps the security-updates group with 1 update: pyjwt.\n\n"
-            "Updates `pyjwt` from 2.10.1 to 2.13.0\n",
-            dependabot_yml,
-        )
-        == "blocked"
-    )
-
-
-def test_phacc_pinned_check_normalizes_names_the_way_pypi_does(
-    tmp_path: Path,
-) -> None:
-    # update_dependabot_exclude_list() writes already-normalised names, but
-    # Dependabot renders whatever the PR's own manifest spells.
-    dependabot_yml = _write_exclude_block(tmp_path, ["paho-mqtt", "pytest-asyncio"])
-
-    for rendered in ("paho.mqtt", "paho_mqtt", "Paho-MQTT"):
-        assert (
-            _run_phacc_pinned_check(
-                f"bump {rendered} from 1.0 to 2.0", "", dependabot_yml
-            )
-            == "blocked"
-        ), rendered
-
-
-@pytest.mark.parametrize(
-    ("title", "body"),
-    [
-        # Not in the generated list at all -- an ordinary, mergeable bump.
-        ("chore(deps): bump actions/checkout from 4.0.0 to 7.0.1", ""),
-        # Nothing parseable to compare: fails open rather than closing a PR
-        # this cannot classify, since closing is not reversible here.
-        ("chore(deps): bump the docker group", "Bumps something unrecognized.\n"),
-        ("", ""),
-    ],
-)
-def test_phacc_pinned_check_fails_open_for_anything_it_cannot_confirm(
-    tmp_path: Path, title: str, body: str
-) -> None:
-    dependabot_yml = _write_exclude_block(tmp_path, ["pytest"])
-
-    assert _run_phacc_pinned_check(title, body, dependabot_yml) == "ok"
-
-
-def test_phacc_pinned_check_reads_only_the_generated_block(tmp_path: Path) -> None:
-    # A hand-written exclusion outside the markers is a grouping preference,
-    # not a statement that the package is exactly pinned, so it must not cause
-    # a close.
-    path = tmp_path / "dependabot.yml"
-    path.write_text(
-        "        exclude-patterns:\n"
-        '        - "hand-written-exclusion"\n'
-        "        # <dependabot-exclude-generated>\n"
-        '        - "pytest"\n'
-        "        # </dependabot-exclude-generated>\n"
-    )
-
-    assert _run_phacc_pinned_check("bump pytest from 1 to 2", "", path) == "blocked"
-    assert (
-        _run_phacc_pinned_check("bump hand-written-exclusion from 1 to 2", "", path)
-        == "ok"
-    )
-
-
-def test_phacc_pinned_check_fails_loudly_without_a_readable_generated_list(
-    tmp_path: Path,
-) -> None:
-    # Distinct from an unclassifiable PR, which fails open: this is the
-    # repository's own file no longer matching the format
-    # update_dependabot_exclude_list() writes. Returning "ok" there would
-    # disable the check permanently and silently, bringing back exactly the
-    # week-of-red-PRs symptom it exists to prevent.
-    markerless = tmp_path / "dependabot.yml"
-    markerless.write_text("version: 2\nupdates: []\n")
-
-    for target in (tmp_path / "nowhere" / "dependabot.yml", markerless):
-        result = subprocess.run(
-            [PHACC_PINNED_CHECK, "bump pytest from 1 to 2", ""],
-            capture_output=True,
-            text=True,
-            check=False,
-            env={**os.environ, "DEPENDABOT_YML": str(target)},
-        )
-        assert result.returncode != 0, target
-        assert "::error::" in result.stderr, target
-        assert result.stdout.strip() == "", target
-
-
-def test_daily_sync_keeps_running_but_stays_red_on_an_unreadable_exclude_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # An unparseable generated block must not merge PRs past the check, and
-    # must not take down the whole maintenance pass either -- rebases still
-    # need to happen. The script's ::error:: is what keeps the run red.
-    log = _install_fake_gh(tmp_path, monkeypatch)
-    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
-    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("DEPENDABOT_YML", str(tmp_path / "nowhere.yml"))
-    monkeypatch.setenv(
-        "GH_PRS",
-        json.dumps(
-            [
-                {
-                    "number": 1,
-                    "author": {"login": "app/dependabot"},
-                    "url": "https://example.test/pr/1",
-                    "title": "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3",
-                    "body": "Bumps pytest from 9.0.0 to 9.0.3.",
-                    "createdAt": "2026-01-01T00:00:00Z",
-                    "autoMergeRequest": None,
-                    "isDraft": False,
-                },
-            ]
-        ),
-    )
-
-    subprocess.run([DAILY_SYNC], check=True)
-
-    calls = log.read_text().splitlines()
-    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert not any(call.startswith("pr close 1 ") for call in calls)
-
-
 def _run_supersession_check(
     title: str, body: str, changed_files: list[str], cwd: Path
 ) -> str:
@@ -426,7 +221,7 @@ def test_supersession_check_is_superseded_if_any_one_of_several_files_meets_it(
     tmp_path: Path,
 ) -> None:
     # A package can be pinned independently across more than one lockfile
-    # (e.g. requirements_dev.lock.txt vs requirements_dev_min.lock.txt),
+    # (e.g. requirements_dev.lock.txt vs requirements_test_min.lock.txt),
     # each leg free to move on its own schedule. PR #145 (orjson 3.11.3 ->
     # 3.11.6) hit exactly this: by the time it was checked, the dev leg
     # had already moved past the proposal to 3.11.9 via homeassistant's
@@ -435,12 +230,12 @@ def test_supersession_check_is_superseded_if_any_one_of_several_files_meets_it(
     # point of view. One superseded leg is enough: the PR's single
     # version number was never going to apply across every leg at once.
     (tmp_path / "requirements_dev.lock.txt").write_text("orjson==3.11.9\n")
-    (tmp_path / "requirements_dev_min.lock.txt").write_text("orjson==3.11.3\n")
+    (tmp_path / "requirements_test_min.lock.txt").write_text("orjson==3.11.3\n")
 
     result = _run_supersession_check(
         "chore(deps-dev): bump orjson from 3.11.3 to 3.11.6",
         "Bumps orjson from 3.11.3 to 3.11.6.",
-        ["requirements_dev.lock.txt", "requirements_dev_min.lock.txt"],
+        ["requirements_dev.lock.txt", "requirements_test_min.lock.txt"],
         tmp_path,
     )
 
@@ -689,11 +484,11 @@ def test_stale_cleanup_treats_all_three_pr_kinds_as_recyclable() -> None:
     text = STALE_WORKFLOW.read_text()
 
     # dependency-updates auto-merges on its own (stale means CI is blocked),
-    # min-ha-version-update is recreated weekly regardless of whether a
-    # previous instance is open (closing costs nothing), and most Dependabot
-    # PRs here can never resolve as opened (see dependabot.yml) — all three
-    # are closed after 7 days rather than left open, except a confirmed
-    # major-version Dependabot bump (see the exemption test below).
+    # dependency-updates auto-merges on its own (stale means CI is blocked),
+    # min-ha-version-update is recreated weekly (closing costs nothing), and
+    # a stale non-major Dependabot PR is blocked or outdated automation. All
+    # three are recycled after 7 days, except a confirmed major-version
+    # Dependabot bump (see the exemption test below).
     recyclable_block = text[
         text.index("is_recyclable=false") : text.index(
             'if [ "$is_recyclable" != "true" ]'
@@ -970,50 +765,6 @@ def test_daily_sync_closes_an_individual_pr_confirmed_superseded_on_master(
     assert "pr diff 1 --repo owner/repo --name-only" in calls
     assert any(call.startswith("pr close 1 ") for call in calls)
     assert not any(call.endswith("--squash --delete-branch") for call in calls)
-
-
-def test_daily_sync_closes_a_pr_bumping_a_package_phacc_pins_exactly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # _install_fake_gh's fixture list contains "pytest". Such a PR must be
-    # closed on sight: it cannot resolve at any version, so rebasing it and
-    # then waiting MAX_WAIT_SECONDS for checks that will certainly fail only
-    # spends the run budget that later, mergeable PRs need.
-    log = _install_fake_gh(tmp_path, monkeypatch)
-    monkeypatch.setenv("MAX_WAIT_SECONDS", "0")
-    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "0")
-
-    monkeypatch.setenv(
-        "GH_PRS",
-        json.dumps(
-            [
-                {
-                    "number": 1,
-                    "author": {"login": "app/dependabot"},
-                    "url": "https://example.test/pr/1",
-                    "title": "chore(deps-dev): bump pytest from 9.0.0 to 9.0.3",
-                    "body": "Bumps pytest from 9.0.0 to 9.0.3.",
-                    "createdAt": "2026-01-01T00:00:00Z",
-                    "autoMergeRequest": None,
-                    "isDraft": False,
-                },
-            ]
-        ),
-    )
-
-    subprocess.run([DAILY_SYNC], check=True)
-
-    calls = log.read_text().splitlines()
-    # Still rebased first: every open PR is, regardless of what happens next.
-    assert "pr update-branch 1 --repo owner/repo --rebase" in calls
-    assert any(call.startswith("pr close 1 ") for call in calls)
-    # Closed before the supersession check, which costs an extra API call and
-    # could only ever reach the same "do not merge" conclusion.
-    assert not any(call.startswith("pr diff 1 ") for call in calls)
-    assert not any(call.endswith("--squash --delete-branch") for call in calls)
-    # The close comment must name the real fix path, not just refuse.
-    close_call = next(call for call in calls if call.startswith("pr close 1 "))
-    assert "scripts/update_dependencies.py" in close_call
 
 
 def test_daily_sync_waits_for_the_rebase_to_land_before_reading_head_state(

@@ -90,7 +90,7 @@ jobs:
           # "current" tracks whatever HA version requirements_dev.lock.txt
           # was last compiled against; "min" pins the version declared in
           # hacs.json ("homeassistant": "2025.4.0"; see
-          # requirements_dev_min.txt for why every release between 2024.11
+          # requirements_test_min.txt for why every release between 2024.11
           # and 2025.4.0 is uninstallable or incompatible) so a change that
           # only works on newer HA gets caught here instead of by a user
           # still on the declared minimum.
@@ -104,7 +104,7 @@ jobs:
             lockfile: requirements_dev.lock.txt
             python-version: "3.14"
           - ha-version: min
-            lockfile: requirements_dev_min.lock.txt
+            lockfile: requirements_test_min.lock.txt
             python-version: "3.13"
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
@@ -407,7 +407,7 @@ jobs:
             lockfile: requirements_dev.lock.txt
             python-version: "3.14"
           - ha-version: min
-            lockfile: requirements_dev_min.lock.txt
+            lockfile: requirements_test_min.lock.txt
             python-version: "3.13"
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1

@@ -125,7 +125,7 @@ while IFS= read -r line; do
   fi
 
   # OR across files, not AND: a package pinned in more than one lockfile
-  # (e.g. requirements_dev.lock.txt and requirements_dev_min.lock.txt) can
+  # (e.g. requirements_dev.lock.txt and requirements_test_min.lock.txt) can
   # legitimately sit at different versions per leg, each moving
   # independently (see dependabot.yml's homeassistant/phacc `ignore:`
   # comment for why). Requiring every leg to already meet-or-exceed the

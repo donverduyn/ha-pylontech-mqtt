@@ -14,15 +14,10 @@ name: Review Stale Automation PRs
 #   opens a fresh PR from current dependency state instead. The pending
 #   maintainer decision isn't lost, just deferred to whichever instance is
 #   open when someone actually reviews it.
-# - Dependabot PRs against this repo are dominated by the homeassistant/phacc
-#   exact-pin structure (see dependabot.yml), which Dependabot cannot
-#   resolve correctly on its own — a stale one isn't a pending decision
-#   either, it was never going to be mergeable as opened. Closing it may
-#   mean Dependabot doesn't recreate that exact update; that's accepted
-#   here, since the real fix path for homeassistant/phacc version movement
-#   is scripts/update_dependencies.py (dependency-updates.yaml for current,
-#   min-ha-version-update.yaml for the floor) — once one of those lands, a
-#   still-relevant advisory surfaces again on its own.
+# - Dependabot exact-pin updates are suppressed in dependabot.yml before a PR
+#   opens. Any remaining stale non-major Dependabot PR is therefore an ordinary
+#   blocked or outdated automation result, not a release decision; recycling it
+#   lets Dependabot reassess the update from the current dependency state.
 #
 # The exemption: a *confirmed* major-version-bump Dependabot PR (per
 # .github/scripts/dependabot-bump-kind.sh, shared with

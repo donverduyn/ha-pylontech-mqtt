@@ -55,7 +55,7 @@ jobs:
             lockfile: requirements_dev.lock.txt
             python-version: "3.14"
           - ha-version: min
-            lockfile: requirements_dev_min.lock.txt
+            lockfile: requirements_test_min.lock.txt
             python-version: "3.13"
     steps:
       - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
