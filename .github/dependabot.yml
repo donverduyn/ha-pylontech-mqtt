@@ -65,6 +65,7 @@ updates:
       - dependency-name: "paho-mqtt"
       - dependency-name: "pillow"
       - dependency-name: "pipdeptree"
+      - dependency-name: "prek"
       - dependency-name: "propcache"
       - dependency-name: "psutil-home-assistant"
       - dependency-name: "pydantic"
