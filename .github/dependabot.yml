@@ -79,7 +79,6 @@ updates:
       - dependency-name: "pytest-github-actions-annotate-failures"
       - dependency-name: "pytest-picked"
       - dependency-name: "pytest-socket"
-      - dependency-name: "pytest-sugar"
       - dependency-name: "pytest-timeout"
       - dependency-name: "pytest-unordered"
       - dependency-name: "pytest-xdist"
